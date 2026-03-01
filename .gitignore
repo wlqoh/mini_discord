@@ -1,0 +1,17 @@
+# Секреты и конфиги с credentials
+config/local.yaml
+*.env
+
+# Бинарники
+bin/
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
