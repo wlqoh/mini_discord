@@ -3,9 +3,10 @@ package user
 import (
 	"context"
 	"database/sql"
-	"discord_go/types"
 	"errors"
 	"fmt"
+
+	"github.com/wlqoh/mini_discord.git/types"
 )
 
 type Store struct {

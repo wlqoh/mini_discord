@@ -1,12 +1,13 @@
 package user
 
 import (
-	"discord_go/internal/config"
-	"discord_go/internal/service/auth"
-	"discord_go/types"
-	"discord_go/utils"
 	"fmt"
 	"net/http"
+
+	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/service/auth"
+	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"

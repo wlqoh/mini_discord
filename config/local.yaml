@@ -1,0 +1,10 @@
+env: "local"
+storage_path: "postgres://murad:123@localhost:5432/postgres?sslmode=disable"
+http_server:
+    host: "localhost:8080"
+    timeout: 4s
+    idle_timeout: 60s
+    user: "myuser"
+    password: "mypass"
+jwt_secret: "not-secret-secret-anymore?"
+jwt_expiration_in_seconds: 604800

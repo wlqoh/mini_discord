@@ -1,12 +1,13 @@
 package main
 
 import (
-	"discord_go/internal/config"
-	"discord_go/internal/lib/api"
-	"discord_go/internal/lib/logger/sl"
-	"discord_go/internal/storage/postgresql"
 	"log/slog"
 	"os"
+
+	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/api"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
+	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
 )
 
 const (

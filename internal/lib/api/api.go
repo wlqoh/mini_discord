@@ -3,15 +3,16 @@ package api
 import (
 	"context"
 	"database/sql"
-	"discord_go/internal/config"
-	"discord_go/internal/lib/logger/sl"
-	"discord_go/internal/service/user"
 	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
+	"github.com/wlqoh/mini_discord.git/internal/service/user"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"

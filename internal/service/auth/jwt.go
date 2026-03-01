@@ -2,14 +2,15 @@ package auth
 
 import (
 	"context"
-	"discord_go/internal/config"
-	"discord_go/internal/lib/logger/sl"
-	"discord_go/types"
-	"discord_go/utils"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
+	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 )
