@@ -12,24 +12,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
-	gws "github.com/gorilla/websocket"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
-	"github.com/wlqoh/mini_discord.git/internal/websocket"
+	"github.com/wlqoh/mini_discord.git/internal/ws"
 )
 
 type APIServer struct {
-	addr  string
-	db    *sql.DB
-	wsUpg *gws.Upgrader
+	addr string
+	db   *sql.DB
 }
 
 func NewAPIServer(addr string, db *sql.DB) *APIServer {
 	return &APIServer{
-		addr:  addr,
-		db:    db,
-		wsUpg: &gws.Upgrader{},
+		addr: addr,
+		db:   db,
 	}
 }
 
@@ -50,8 +47,8 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	userHandler := user.NewHandler(userStore, cfg)
 	userHandler.RegisterRoutes(v1Router)
 
-	websocketStore := websocket.NewWebsocket(s.db)
-	websocketHandler := websocket.NewHandler(websocketStore)
+	//websocketStore := ws.NewWebsocket(s.db)
+	websocketHandler := ws.NewHandler(log)
 	websocketHandler.RegisterRoutes(v1Router)
 
 	_ = websocketHandler
@@ -64,7 +61,10 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
 	}
 
-	//Graceful shutdown
+	gracefulShutdown(log, srv, cfg)
+}
+
+func gracefulShutdown(log *slog.Logger, srv *http.Server, cfg *config.Config) {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 
