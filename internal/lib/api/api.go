@@ -12,20 +12,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
+	gws "github.com/gorilla/websocket"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
+	"github.com/wlqoh/mini_discord.git/internal/websocket"
 )
 
 type APIServer struct {
-	addr string
-	db   *sql.DB
+	addr  string
+	db    *sql.DB
+	wsUpg *gws.Upgrader
 }
 
 func NewAPIServer(addr string, db *sql.DB) *APIServer {
 	return &APIServer{
-		addr: addr,
-		db:   db,
+		addr:  addr,
+		db:    db,
+		wsUpg: &gws.Upgrader{},
 	}
 }
 
@@ -45,6 +49,12 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	userStore := user.NewStore(s.db)
 	userHandler := user.NewHandler(userStore)
 	userHandler.RegisterRoutes(v1Router)
+
+	websocketStore := websocket.NewWebsocket(s.db)
+	websocketHandler := websocket.NewHandler(websocketStore)
+	websocketHandler.RegisterRoutes(v1Router)
+
+	_ = websocketHandler
 
 	srv := &http.Server{
 		Addr:         cfg.Address,
