@@ -10,12 +10,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/cors"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/cors"
 )
 
 type APIServer struct {
