@@ -1,0 +1,10 @@
+env: "prod"
+storage_path: "postgres://murad:123@db:5432/postgres?sslmode=disable"
+http_server:
+    host: "0.0.0.0:8080"
+    timeout: 4s
+    idle_timeout: 60s
+    user: "myuser"
+    password: "mypass"
+jwt_secret: "change-me-to-a-real-secret"
+jwt_expiration_in_seconds: 604800

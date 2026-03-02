@@ -18,7 +18,7 @@ coverage.*
 profile.cov
 
 # Dependency directories (remove the comment below to include it)
- bin/
+bin/
 
 # Go workspace file
 go.work
@@ -26,8 +26,16 @@ go.work.sum
 
 # env file
 .env
+local.env
 
 # Editor/IDE
 .idea/
 .vscode/
 vendor
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+docker-compose.override.yml
