@@ -19,10 +19,8 @@ type contextKey string
 
 const UserKey contextKey = "user_id"
 
-var cfg = config.MustLoad()
-
 func CreateJWT(secret []byte, userID int) (string, error) {
-
+	cfg := config.MustLoad()
 	expiration := time.Second * time.Duration(cfg.JWTExpirationInSeconds)
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -86,6 +84,7 @@ func getTokenFromRequest(r *http.Request) string {
 }
 
 func validateToken(tokenString string) (*jwt.Token, error) {
+	cfg := config.MustLoad()
 	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])

@@ -36,7 +36,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"ling"},
+		ExposedHeaders:   []string{"link"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -44,7 +44,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	router.Mount("/api/v1", v1Router)
 
 	userStore := user.NewStore(s.db)
-	userHandler := user.NewHandler(userStore)
+	userHandler := user.NewHandler(userStore, cfg)
 	userHandler.RegisterRoutes(v1Router)
 
 	srv := &http.Server{
