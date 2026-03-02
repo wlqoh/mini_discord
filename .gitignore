@@ -26,8 +26,16 @@ go.work.sum
 
 # env file
 .env
+local.env
 
 # Editor/IDE
 .idea/
 .vscode/
 vendor
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Docker
+docker-compose.override.yml
