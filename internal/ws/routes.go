@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -59,7 +60,11 @@ func (h *Handler) readFromClient(conn *websocket.Conn) {
 	for {
 		msg := new(types.WsMessage)
 		if err := conn.ReadJSON(msg); err != nil {
-			h.log.Error("Error reading from websocket", sl.Err(err))
+			var wsErr *websocket.CloseError
+			ok := errors.As(err, &wsErr)
+			if !ok || wsErr.Code != websocket.CloseGoingAway {
+				h.log.Error("Error reading from websocket", sl.Err(err))
+			}
 			break
 		}
 		host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
