@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/gofiber/fiber/v2"
 	"github.com/gorilla/websocket"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -32,9 +32,9 @@ func NewHandler(log *slog.Logger) *Handler {
 	}
 }
 
-func (h *Handler) RegisterRoutes(router *chi.Mux) {
-	router.HandleFunc("/ws", h.wsHandler)
-	router.HandleFunc("/test", h.handleTest)
+func (h *Handler) RegisterRoutes(router fiber.Router) {
+	//router.HandleFunc("/ws", h.wsHandler)
+	//router.HandleFunc("/test", h.handleTest)
 	go h.writeToClientBroadcast()
 }
 

@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-playground/validator/v10"
+	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/go-playground/validator/v10"
 )
 
 type Handler struct {
@@ -22,69 +21,68 @@ func NewHandler(store types.UserStore, cfg *config.Config) *Handler {
 	return &Handler{store: store, cfg: cfg}
 }
 
-func (h *Handler) RegisterRoutes(router *chi.Mux) {
+func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/login", h.handleLogin)
 	router.Post("/register", h.handleRegister)
 }
 
-func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	var payload types.LoginUserPayload
-	if err := utils.ParseJSON(r, &payload); err != nil {
-		utils.WriteError(w, http.StatusBadRequest, err)
-		return
+	err := c.BodyParser(&payload)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		errors := err.(validator.ValidationErrors)
-		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("invalid payload %v", errors))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	u, err := h.store.GetUserByEmail(payload.Email)
 	if err != nil {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("invalid email or password"))
-		return
+		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
 	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("invalid email or password"))
-		return
+		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
 	token, err := auth.CreateJWT(secret, u.ID)
 	if err != nil {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("auth error: %v", err))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	utils.WriteJSON(w, http.StatusOK, map[string]string{"token": token})
+	c.Status(http.StatusOK)
+	err = c.JSON(fiber.Map{"token": token})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("failed to write response: %v", err))
+	}
+
+	return nil
 }
 
-func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	var payload types.RegisterUserPayload
-	if err := utils.ParseJSON(r, &payload); err != nil {
-		utils.WriteError(w, http.StatusBadRequest, err)
-		return
+
+	err := c.BodyParser(&payload)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		errors := err.(validator.ValidationErrors)
-		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("invalid payload %v", errors))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid payload %v", errors))
 	}
 
-	_, err := h.store.GetUserByEmail(payload.Email)
+	_, err = h.store.GetUserByEmail(payload.Email)
 	if err == nil {
-		utils.WriteError(w, http.StatusBadRequest, fmt.Errorf("email already in use"))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString("email already in use")
 	}
 
 	hashedPassword, err := auth.HashPassword(payload.Password)
 
 	if err != nil {
-		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("failed to hash password: %v", err))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to hash password: %v", err))
 	}
 
 	err = h.store.CreateUser(types.User{
@@ -94,27 +92,29 @@ func (h *Handler) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Password:  hashedPassword,
 	})
 	if err != nil {
-		utils.WriteError(w, http.StatusInternalServerError, fmt.Errorf("failed to create user: %v", err))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to create user: %v", err))
 	}
 
 	u, err := h.store.GetUserByEmail(payload.Email)
 	if err != nil {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("invalid email or password"))
-		return
+		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
 	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("invalid email or password"))
-		return
+		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
 	token, err := auth.CreateJWT(secret, u.ID)
 	if err != nil {
-		utils.WriteError(w, http.StatusUnauthorized, fmt.Errorf("auth error: %v", err))
-		return
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	utils.WriteJSON(w, http.StatusOK, map[string]string{"token": token})
+	c.Status(http.StatusOK)
+	err = c.JSON(fiber.Map{"token": token})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("failed to write response: %v", err))
+	}
+
+	return nil
 }

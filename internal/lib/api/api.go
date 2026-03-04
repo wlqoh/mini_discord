@@ -1,19 +1,12 @@
 package api
 
 import (
-	"context"
 	"database/sql"
-	"errors"
+	"fmt"
 	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/cors"
+	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
-	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
 	"github.com/wlqoh/mini_discord.git/internal/ws"
 )
@@ -31,61 +24,29 @@ func NewAPIServer(addr string, db *sql.DB) *APIServer {
 }
 
 func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
-	router := chi.NewRouter()
-	router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"link"},
-		AllowCredentials: false,
-		MaxAge:           300,
-	}))
-	v1Router := chi.NewRouter()
-	router.Mount("/api/v1", v1Router)
-
-	userStore := user.NewStore(s.db)
-	userHandler := user.NewHandler(userStore, cfg)
-	userHandler.RegisterRoutes(v1Router)
-
-	//websocketStore := ws.NewWebsocket(s.db)
-	websocketHandler := ws.NewHandler(log)
-	websocketHandler.RegisterRoutes(v1Router)
-
-	_ = websocketHandler
-
-	srv := &http.Server{
-		Addr:         cfg.Address,
-		Handler:      router,
+	app := fiber.New(fiber.Config{
 		ReadTimeout:  cfg.HTTPServer.Timeout,
 		WriteTimeout: cfg.HTTPServer.Timeout,
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
-	}
+	})
 
-	gracefulShutdown(log, srv, cfg)
-}
+	api := app.Group("/api")
 
-func gracefulShutdown(log *slog.Logger, srv *http.Server, cfg *config.Config) {
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	v1 := api.Group("/v1")
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("failed to start server", sl.Err(err))
-		}
-	}()
+	userStore := user.NewStore(s.db)
+	userHandler := user.NewHandler(userStore, cfg)
+	userHandler.RegisterRoutes(v1)
 
-	log.Info("server started")
+	//websocketStore := ws.NewWebsocket(s.db)
+	websocketHandler := ws.NewHandler(log)
+	websocketHandler.RegisterRoutes(v1)
 
-	<-done
-	log.Info("stopping server...")
+	_ = websocketHandler
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.HTTPServer.Timeout)
-	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Error("failed to shutdown server", sl.Err(err))
+	err := app.Listen(cfg.Address)
+	if err != nil {
+		fmt.Println(err.Error())
 		return
 	}
-
-	log.Info("server stopped gracefully")
 }
