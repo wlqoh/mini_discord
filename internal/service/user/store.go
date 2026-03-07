@@ -17,8 +17,8 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-func (s *Store) GetUserByEmail(email string) (*types.User, error) {
-	row := s.db.QueryRowContext(context.Background(), "SELECT id, first_name, last_name, email, password, created_at, updated_at FROM users WHERE email = $1", email)
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, password, created_at, updated_at FROM users WHERE email = $1", email)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -50,8 +50,8 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 	return u, nil
 }
 
-func (s *Store) GetUserByID(id int) (*types.User, error) {
-	row := s.db.QueryRowContext(context.Background(), "SELECT * FROM users WHERE id = $1", id)
+func (s *Store) GetUserByID(ctx context.Context, id int) (*types.User, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT * FROM users WHERE id = $1", id)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -61,12 +61,12 @@ func (s *Store) GetUserByID(id int) (*types.User, error) {
 	return u, nil
 }
 
-func (s *Store) CreateUser(user types.User) error {
-	return s.db.QueryRowContext(context.Background(), "INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id",
+func (s *Store) CreateUser(ctx context.Context, user types.User) error {
+	return s.db.QueryRowContext(ctx, "INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id",
 		user.FirstName, user.LastName, user.Email, user.Password).Scan(&user.ID)
 }
 
-func (s *Store) DeleteUser(user types.User) error {
-	_, err := s.db.ExecContext(context.Background(), "DELETE FROM users WHERE id = $1", user.ID)
+func (s *Store) DeleteUser(ctx context.Context, user types.User) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
 	return err
 }

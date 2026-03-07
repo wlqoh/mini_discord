@@ -36,7 +36,7 @@ func CreateJWT(secret []byte, userID int) (string, error) {
 	return tokenString, nil
 }
 
-func WithJWTAuth(handleFunc http.HandlerFunc, store types.UserStore, log *slog.Logger) http.HandlerFunc {
+func WithJWTAuth(handleFunc http.HandlerFunc, store types.UserStore, log *slog.Logger, ctx context.Context) http.HandlerFunc {
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		// get the token from the user request
@@ -64,7 +64,7 @@ func WithJWTAuth(handleFunc http.HandlerFunc, store types.UserStore, log *slog.L
 
 		userID := int(str)
 
-		u, err := store.GetUserByID(userID)
+		u, err := store.GetUserByID(ctx, userID)
 		if err != nil {
 			log.Error("failed to get user by id", sl.Err(err))
 			permissionDenied(w)

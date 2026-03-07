@@ -1,12 +1,15 @@
 package types
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type UserStore interface {
-	CreateUser(User) error
-	DeleteUser(User) error
-	GetUserByEmail(email string) (*User, error)
-	GetUserByID(id int) (*User, error)
+	CreateUser(context.Context, User) error
+	DeleteUser(context.Context, User) error
+	GetUserByEmail(ctx context.Context, email string) (*User, error)
+	GetUserByID(ctx context.Context, id int) (*User, error)
 }
 
 type User struct {

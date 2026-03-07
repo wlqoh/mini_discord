@@ -2,6 +2,7 @@ package user
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-playground/validator/v10"
@@ -15,10 +16,11 @@ import (
 type Handler struct {
 	store types.UserStore
 	cfg   *config.Config
+	log   *slog.Logger
 }
 
-func NewHandler(store types.UserStore, cfg *config.Config) *Handler {
-	return &Handler{store: store, cfg: cfg}
+func NewHandler(store types.UserStore, cfg *config.Config, log *slog.Logger) *Handler {
+	return &Handler{store: store, cfg: cfg, log: log}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
@@ -27,18 +29,23 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 }
 
 func (h *Handler) handleLogin(c *fiber.Ctx) error {
+	const op = "service.user.handleLogin"
+
 	var payload types.LoginUserPayload
 	err := c.BodyParser(&payload)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
-	u, err := h.store.GetUserByEmail(payload.Email)
+	u, err := h.store.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
@@ -49,32 +56,31 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	secret := []byte(h.cfg.JWTSecret)
 	token, err := auth.CreateJWT(secret, u.ID)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	c.Status(http.StatusOK)
-	err = c.JSON(fiber.Map{"token": token})
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("failed to write response: %v", err))
-	}
-
-	return nil
+	return c.Status(http.StatusOK).JSON(fiber.Map{"token": token})
 }
 
 func (h *Handler) handleRegister(c *fiber.Ctx) error {
+	const op = "service.user.handleRegister"
+
 	var payload types.RegisterUserPayload
 
 	err := c.BodyParser(&payload)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		errors := err.(validator.ValidationErrors)
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid payload %v", errors))
 	}
 
-	_, err = h.store.GetUserByEmail(payload.Email)
+	_, err = h.store.GetUserByEmail(c.Context(), payload.Email)
 	if err == nil {
 		return c.Status(fiber.StatusBadRequest).SendString("email already in use")
 	}
@@ -85,18 +91,21 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to hash password: %v", err))
 	}
 
-	err = h.store.CreateUser(types.User{
-		FirstName: payload.FirstName,
-		LastName:  payload.LastName,
-		Email:     payload.Email,
-		Password:  hashedPassword,
-	})
+	err = h.store.CreateUser(
+		c.Context(), types.User{
+			FirstName: payload.FirstName,
+			LastName:  payload.LastName,
+			Email:     payload.Email,
+			Password:  hashedPassword,
+		})
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to create user: %v", err))
 	}
 
-	u, err := h.store.GetUserByEmail(payload.Email)
+	u, err := h.store.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
@@ -107,14 +116,9 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	secret := []byte(h.cfg.JWTSecret)
 	token, err := auth.CreateJWT(secret, u.ID)
 	if err != nil {
+		h.log.Error(op, err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	c.Status(http.StatusOK)
-	err = c.JSON(fiber.Map{"token": token})
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("failed to write response: %v", err))
-	}
-
-	return nil
+	return c.Status(http.StatusOK).JSON(fiber.Map{"token": token})
 }

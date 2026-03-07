@@ -6,6 +6,8 @@ import (
 	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
 	"github.com/wlqoh/mini_discord.git/internal/ws"
@@ -29,20 +31,21 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		WriteTimeout: cfg.HTTPServer.Timeout,
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
 	})
+	app.Use(logger.New())
+	app.Use(cors.New())
 
 	api := app.Group("/api")
 
 	v1 := api.Group("/v1")
 
 	userStore := user.NewStore(s.db)
-	userHandler := user.NewHandler(userStore, cfg)
+	userHandler := user.NewHandler(userStore, cfg, log)
 	userHandler.RegisterRoutes(v1)
 
-	//websocketStore := ws.NewWebsocket(s.db)
-	websocketHandler := ws.NewHandler(log)
-	websocketHandler.RegisterRoutes(v1)
-
-	_ = websocketHandler
+	hub := ws.NewHub()
+	wsHandler := ws.NewHandler(hub)
+	wsHandler.RegisterRoutes(v1)
+	go hub.Run()
 
 	err := app.Listen(cfg.Address)
 	if err != nil {
