@@ -9,8 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
-	"github.com/wlqoh/mini_discord.git/internal/ws"
 )
 
 type APIServer struct {
@@ -38,12 +38,13 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	v1 := api.Group("/v1")
 
-	userStore := user.NewStore(s.db)
-	userHandler := user.NewHandler(userStore, cfg, log)
+	userStorage := user.NewStorage(s.db)
+	userHandler := user.NewHandler(userStorage, cfg, log)
 	userHandler.RegisterRoutes(v1)
 
-	hub := ws.NewHub()
-	wsHandler := ws.NewHandler(hub)
+	hub := server.NewHub()
+	//serverStorage := server.NewStorage(s.db)
+	wsHandler := server.NewHandler(hub)
 	wsHandler.RegisterRoutes(v1)
 	go hub.Run()
 

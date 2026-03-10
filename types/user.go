@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-type UserStore interface {
+type UserStorage interface {
 	CreateUser(context.Context, User) error
 	DeleteUser(context.Context, User) error
 	GetUserByEmail(ctx context.Context, email string) (*User, error)

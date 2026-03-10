@@ -1,8 +1,6 @@
-package ws
+package server
 
 import (
-	"net/http"
-
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -19,11 +17,11 @@ func NewHandler(h *Hub) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
-	router.Post("/ws/createRoom", h.CreateRoom)
-	router.Use("/ws/joinRoom/:room_id", isWebsocketUpgraded)
-	router.Get("/ws/joinRoom/:room_id", websocket.New(h.JoinRoom))
-	router.Get("/ws/getRooms", h.GetRooms)
-	router.Get("/ws/getClients/:room_id", h.GetClients)
+	router.Post("/server/createRoom", h.CreateRoom)
+	router.Use("/server/joinRoom/:room_id", isWebsocketUpgraded)
+	router.Get("/server/joinRoom/:room_id", websocket.New(h.JoinRoom))
+	router.Get("/server/getRooms", h.GetRooms)
+	router.Get("/server/getClients/:room_id", h.GetClients)
 }
 
 func (h *Handler) CreateRoom(c *fiber.Ctx) error {
@@ -33,6 +31,11 @@ func (h *Handler) CreateRoom(c *fiber.Ctx) error {
 	}
 
 	h.hub.mu.Lock()
+	_, ok := h.hub.Rooms[request.ID]
+	if ok {
+		h.hub.mu.Unlock()
+		return c.Status(fiber.StatusBadRequest).SendString("room already exists")
+	}
 	h.hub.Rooms[request.ID] = &Room{
 		ID:      request.ID,
 		Name:    request.Name,
@@ -40,7 +43,7 @@ func (h *Handler) CreateRoom(c *fiber.Ctx) error {
 	}
 	h.hub.mu.Unlock()
 
-	return c.Status(http.StatusOK).JSON(request)
+	return c.Status(fiber.StatusOK).JSON(request)
 
 }
 
@@ -82,7 +85,7 @@ func (h *Handler) GetRooms(c *fiber.Ctx) error {
 	}
 	h.hub.mu.RUnlock()
 
-	return c.Status(http.StatusOK).JSON(rooms)
+	return c.Status(fiber.StatusOK).JSON(rooms)
 }
 
 func (h *Handler) GetClients(c *fiber.Ctx) error {
@@ -95,7 +98,7 @@ func (h *Handler) GetClients(c *fiber.Ctx) error {
 		h.hub.mu.RUnlock()
 		clients = make([]types.ClientResponse, 0)
 
-		return c.Status(http.StatusOK).JSON(clients)
+		return c.Status(fiber.StatusOK).JSON(clients)
 	}
 
 	for _, c := range room.Clients {
@@ -106,7 +109,7 @@ func (h *Handler) GetClients(c *fiber.Ctx) error {
 	}
 	h.hub.mu.RUnlock()
 
-	return c.Status(http.StatusOK).JSON(clients)
+	return c.Status(fiber.StatusOK).JSON(clients)
 }
 
 func isWebsocketUpgraded(c *fiber.Ctx) error {
