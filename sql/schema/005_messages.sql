@@ -8,6 +8,6 @@ CREATE TABLE messages (
     edited_at TIMESTAMP
 );
 
-CREATE INDEX idx_messages_channel_created ON messages(channel_id, created_at DESC);
+CREATE INDEX idx_messages_channel_created ON messages(channel_id, created_at DESC, id DESC);
 -- +goose Down
 DROP TABLE IF EXISTS messages;

@@ -1,4 +1,4 @@
-package user
+package postgresql
 
 import (
 	"context"
@@ -8,14 +8,6 @@ import (
 
 	"github.com/wlqoh/mini_discord.git/types"
 )
-
-type Storage struct {
-	db *sql.DB
-}
-
-func NewStorage(db *sql.DB) *Storage {
-	return &Storage{db: db}
-}
 
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, password, created_at, updated_at FROM users WHERE email = $1", email)
@@ -66,7 +58,7 @@ func (s *Storage) CreateUser(ctx context.Context, user types.User) error {
 		user.FirstName, user.LastName, user.Email, user.Password).Scan(&user.ID)
 }
 
-func (s *Storage) DeleteUser(ctx context.Context, user types.User) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+func (s *Storage) DeleteUser(ctx context.Context, userID int) error {
+	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
 	return err
 }

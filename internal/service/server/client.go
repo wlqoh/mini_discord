@@ -9,35 +9,36 @@ import (
 
 type Client struct {
 	Conn     *websocket.Conn
-	Message  chan *types.WsMessage
-	ID       string `json:"id"`
-	RoomID   string `json:"room_id"`
-	Username string `json:"username"`
+	Outbound chan *types.WsEvent
+	UserID   int `json:"user_id"`
 }
 
 func (c *Client) writeMessage() {
 	defer func() {
-		c.Conn.Close()
+		_ = c.Conn.Close()
 	}()
 
 	for {
-		message, ok := <-c.Message
+		event, ok := <-c.Outbound
 		if !ok {
 			return
 		}
 
-		c.Conn.WriteJSON(message)
+		if err := c.Conn.WriteJSON(event); err != nil {
+			return
+		}
 	}
 }
 
 func (c *Client) readMessage(hub *Hub) {
 	defer func() {
 		hub.Unregister <- c
-		c.Conn.Close()
+		_ = c.Conn.Close()
 	}()
 
 	for {
-		_, m, err := c.Conn.ReadMessage()
+		var cmd types.WsCommand
+		err := c.Conn.ReadJSON(&cmd)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: %v", err)
@@ -45,13 +46,11 @@ func (c *Client) readMessage(hub *Hub) {
 			break
 		}
 
-		msg := &types.WsMessage{
-			Content:  string(m),
-			RoomID:   c.RoomID,
-			Username: c.Username,
-			SenderID: c.ID,
+		if cmd.Action == "" {
+			hub.pushError(c, "action is required")
+			continue
 		}
 
-		hub.Broadcast <- msg
+		hub.Commands <- wsCommandRequest{client: c, command: cmd}
 	}
 }

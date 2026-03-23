@@ -10,11 +10,12 @@ import (
 )
 
 type Config struct {
-	Env                    string `yaml:"env" env-default:"local"`
-	StoragePath            string `yaml:"storage_path" env-required:"true"`
-	HTTPServer             `yaml:"http_server"`
-	JWTSecret              string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
-	JWTExpirationInSeconds int    `yaml:"jwt_expiration_in_seconds" env-default:"604800"` // 7 days
+	Env                           string `yaml:"env" env-default:"local"`
+	StoragePath                   string `yaml:"storage_path" env-required:"true"`
+	HTTPServer                    `yaml:"http_server"`
+	JWTSecret                     string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
+	JWTAccessExpirationInMinutes  int    `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
+	JWTRefreshExpirationInMinutes int    `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
 }
 
 type HTTPServer struct {

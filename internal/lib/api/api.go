@@ -1,7 +1,6 @@
 package api
 
 import (
-	"database/sql"
 	"fmt"
 	"log/slog"
 
@@ -11,14 +10,15 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
+	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
 )
 
 type APIServer struct {
 	addr string
-	db   *sql.DB
+	db   *postgresql.Storage
 }
 
-func NewAPIServer(addr string, db *sql.DB) *APIServer {
+func NewAPIServer(addr string, db *postgresql.Storage) *APIServer {
 	return &APIServer{
 		addr: addr,
 		db:   db,
@@ -38,12 +38,10 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	v1 := api.Group("/v1")
 
-	userStorage := user.NewStorage(s.db)
-	userHandler := user.NewHandler(userStorage, cfg, log)
+	userHandler := user.NewHandler(s.db, cfg, log)
 	userHandler.RegisterRoutes(v1)
 
-	hub := server.NewHub()
-	//serverStorage := server.NewStorage(s.db)
+	hub := server.NewHub(s.db, log)
 	wsHandler := server.NewHandler(hub)
 	wsHandler.RegisterRoutes(v1)
 	go hub.Run()

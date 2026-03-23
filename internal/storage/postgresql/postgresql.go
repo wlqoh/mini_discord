@@ -7,7 +7,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func New(storagePath string) (*sql.DB, error) {
+type Storage struct {
+	db *sql.DB
+}
+
+func New(storagePath string) (*Storage, error) {
 	const op = "storage.postgresql.New"
 
 	db, err := sql.Open("postgres", storagePath)
@@ -19,5 +23,5 @@ func New(storagePath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("%s: failed to connect %w", op, err)
 	}
 
-	return db, nil
+	return &Storage{db: db}, nil
 }

@@ -7,4 +7,5 @@ http_server:
     user: "myuser"
     password: "mypass"
 jwt_secret: "not-secret-secret-anymore?"
-jwt_expiration_in_seconds: 604800
+jwt_access_expiration_in_minutes: 10080
+jwt_refresh_expiration_in_minutes: 43200

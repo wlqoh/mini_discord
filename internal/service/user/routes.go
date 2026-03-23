@@ -3,6 +3,7 @@ package user
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -25,26 +26,32 @@ func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger)
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/login", h.handleLogin)
 	router.Post("/register", h.handleRegister)
+
+	router.Route("/tokens", func(router fiber.Router) {
+		router.Route("/renew", func(router fiber.Router) {
+			router.Post("/", h.handleRenewAccessToken)
+		})
+	})
 }
 
 func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	const op = "service.user.handleLogin"
 
-	var payload types.LoginUserPayload
+	var payload types.LoginUserRequest
 	err := c.BodyParser(&payload)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
@@ -53,29 +60,57 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
-	token, err := auth.CreateJWT(secret, u.ID)
+	accessToken, accessClaims, err := auth.CreateJWT(
+		secret,
+		u.ID,
+		u.Email,
+		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
+	)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"token": token})
+	refreshToken, refreshClaims, err := auth.CreateJWT(
+		secret,
+		u.ID,
+		u.Email,
+		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
+	)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+	}
+
+	res := types.LoginUserResponse{
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		AccessTokenExpiresAt:  accessClaims.RegisteredClaims.ExpiresAt.Time,
+		RefreshTokenExpiresAt: refreshClaims.RegisteredClaims.ExpiresAt.Time,
+		User: types.UserResponse{
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Email:     u.Email,
+		},
+	}
+
+	return c.Status(fiber.StatusOK).JSON(res)
 }
 
 func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	const op = "service.user.handleRegister"
 
-	var payload types.RegisterUserPayload
+	var payload types.RegisterUserRequest
 
 	err := c.BodyParser(&payload)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		errors := err.(validator.ValidationErrors)
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid payload %v", errors))
 	}
 
@@ -98,13 +133,13 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 			Password:  hashedPassword,
 		})
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to create user: %v", err))
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
 	}
 
@@ -113,11 +148,71 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
-	token, err := auth.CreateJWT(secret, u.ID)
+	accessToken, accessClaims, err := auth.CreateJWT(
+		secret,
+		u.ID,
+		u.Email,
+		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
+	)
 	if err != nil {
-		h.log.Error(op, err.Error())
+		h.log.Error(op, "error", err.Error())
 		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
 	}
 
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{"token": token})
+	refreshToken, refreshClaims, err := auth.CreateJWT(
+		secret,
+		u.ID,
+		u.Email,
+		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
+	)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+	}
+
+	res := types.LoginUserResponse{
+		AccessToken:           accessToken,
+		RefreshToken:          refreshToken,
+		AccessTokenExpiresAt:  accessClaims.RegisteredClaims.ExpiresAt.Time,
+		RefreshTokenExpiresAt: refreshClaims.RegisteredClaims.ExpiresAt.Time,
+		User: types.UserResponse{
+			FirstName: u.FirstName,
+			LastName:  u.LastName,
+			Email:     u.Email,
+		},
+	}
+
+	return c.Status(fiber.StatusOK).JSON(res)
+}
+
+func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
+	var req types.RenewAccessTokenRequest
+	if err := c.BodyParser(&req); err != nil {
+		h.log.Error(err.Error())
+		return c.Status(fiber.StatusBadRequest).SendString("error decoding request body")
+	}
+
+	refreshClaims, err := auth.ValidateToken(req.RefreshToken)
+	if err != nil {
+		h.log.Error(err.Error())
+		return c.Status(fiber.StatusUnauthorized).SendString("error verifying token")
+	}
+
+	accessToken, accessClaims, err := auth.CreateJWT(
+		[]byte(h.cfg.JWTSecret),
+		refreshClaims.UserID,
+		refreshClaims.Email,
+		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
+	)
+	if err != nil {
+		h.log.Error(err.Error())
+		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("error creating token: %v", err))
+	}
+
+	res := types.RenewAccessTokenResponse{
+		AccessToken:          accessToken,
+		AccessTokenExpiresAt: accessClaims.RegisteredClaims.ExpiresAt.Time,
+	}
+
+	return c.Status(fiber.StatusOK).JSON(res)
 }

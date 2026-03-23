@@ -3,6 +3,7 @@ package server
 import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
+	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
@@ -17,99 +18,31 @@ func NewHandler(h *Hub) *Handler {
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
-	router.Post("/server/createRoom", h.CreateRoom)
-	router.Use("/server/joinRoom/:room_id", isWebsocketUpgraded)
-	router.Get("/server/joinRoom/:room_id", websocket.New(h.JoinRoom))
-	router.Get("/server/getRooms", h.GetRooms)
-	router.Get("/server/getClients/:room_id", h.GetClients)
+
+	router.Use("/server", auth.WithJWTAuth(h.hub.storage, h.hub.log, true))
+	router.Use("/server/ws", isWebsocketUpgraded)
+	router.Get("/server/ws", websocket.New(h.handleSocket))
 }
 
-func (h *Handler) CreateRoom(c *fiber.Ctx) error {
-	var request types.CreateRoomRequest
-	if err := c.BodyParser(&request); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("error: " + err.Error())
+func (h *Handler) handleSocket(c *websocket.Conn) {
+	clientID := c.Locals("user_id").(int)
+
+	if clientID <= 0 {
+		_ = c.WriteJSON(map[string]string{"error": "permission denied"})
+		_ = c.Close()
+		return
 	}
-
-	h.hub.mu.Lock()
-	_, ok := h.hub.Rooms[request.ID]
-	if ok {
-		h.hub.mu.Unlock()
-		return c.Status(fiber.StatusBadRequest).SendString("room already exists")
-	}
-	h.hub.Rooms[request.ID] = &Room{
-		ID:      request.ID,
-		Name:    request.Name,
-		Clients: make(map[string]*Client),
-	}
-	h.hub.mu.Unlock()
-
-	return c.Status(fiber.StatusOK).JSON(request)
-
-}
-
-func (h *Handler) JoinRoom(c *websocket.Conn) {
-	roomID := c.Params("room_id")
-	clientID := c.Query("user_id")
-	username := c.Query("username")
 
 	cl := &Client{
 		Conn:     c,
-		Message:  make(chan *types.WsMessage),
-		ID:       clientID,
-		RoomID:   roomID,
-		Username: username,
-	}
-
-	m := &types.WsMessage{
-		Content:  "A new user has joined the room",
-		RoomID:   roomID,
-		Username: username,
+		Outbound: make(chan *types.WsEvent, 32),
+		UserID:   clientID,
 	}
 
 	h.hub.Register <- cl
-	h.hub.Broadcast <- m
 
 	go cl.writeMessage()
 	cl.readMessage(h.hub)
-}
-
-func (h *Handler) GetRooms(c *fiber.Ctx) error {
-	rooms := make([]types.RoomResponse, 0)
-
-	h.hub.mu.RLock()
-	for _, r := range h.hub.Rooms {
-		rooms = append(rooms, types.RoomResponse{
-			ID:   r.ID,
-			Name: r.Name,
-		})
-	}
-	h.hub.mu.RUnlock()
-
-	return c.Status(fiber.StatusOK).JSON(rooms)
-}
-
-func (h *Handler) GetClients(c *fiber.Ctx) error {
-	var clients []types.ClientResponse
-	roomID := c.Params("room_id")
-
-	h.hub.mu.RLock()
-	room, ok := h.hub.Rooms[roomID]
-	if !ok {
-		h.hub.mu.RUnlock()
-		clients = make([]types.ClientResponse, 0)
-
-		return c.Status(fiber.StatusOK).JSON(clients)
-	}
-
-	for _, c := range room.Clients {
-		clients = append(clients, types.ClientResponse{
-			ID:       c.ID,
-			Username: c.Username,
-		})
-	}
-	h.hub.mu.RUnlock()
-
-	return c.Status(fiber.StatusOK).JSON(clients)
 }
 
 func isWebsocketUpgraded(c *fiber.Ctx) error {

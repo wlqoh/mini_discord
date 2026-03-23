@@ -4,96 +4,105 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
+	"strings"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
-	"github.com/wlqoh/mini_discord.git/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type contextKey string
-
-const UserKey contextKey = "user_id"
-
-func CreateJWT(secret []byte, userID int) (string, error) {
-	cfg := config.MustLoad()
-	expiration := time.Second * time.Duration(cfg.JWTExpirationInSeconds)
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": userID,
-		"exp":     time.Now().Add(expiration).Unix(),
-	})
-
-	tokenString, err := token.SignedString(secret)
-	if err != nil {
-		return "", err
-	}
-
-	return tokenString, nil
+type UserReader interface {
+	GetUserByID(ctx context.Context, id int) (*types.User, error)
 }
 
-func WithJWTAuth(handleFunc http.HandlerFunc, storage types.UserStorage, log *slog.Logger, ctx context.Context) http.HandlerFunc {
+func CreateJWT(secret []byte, userID int, email string, expiration time.Duration) (string, *UserClaims, error) {
+	claims, err := NewUserClaims(userID, email, expiration)
+	if err != nil {
+		return "", nil, err
+	}
 
-	return func(w http.ResponseWriter, r *http.Request) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signedString, err := token.SignedString(secret)
+	if err != nil {
+		return "", nil, fmt.Errorf("error signed token: %w", err)
+	}
+
+	return signedString, claims, nil
+}
+
+func WithJWTAuth(userReader UserReader, log *slog.Logger, isWebsocket bool) fiber.Handler {
+
+	return func(c *fiber.Ctx) error {
 		// get the token from the user request
-		tokenString := getTokenFromRequest(r)
-		// validate the token
-		token, err := validateToken(tokenString)
+		tokenString := getTokenFromRequest(c, isWebsocket)
+		if tokenString == "" {
+			return permissionDenied(c)
+		}
+
+		claims, err := ValidateToken(tokenString)
 		if err != nil {
 			log.Error("failed to validate token", sl.Err(err))
-			permissionDenied(w)
-			return
+			return permissionDenied(c)
 		}
 
-		if !token.Valid {
-			log.Info("invalid token")
-			permissionDenied(w)
-			return
+		if claims.UserID <= 0 {
+			log.Info("invalid token claims")
+			return permissionDenied(c)
 		}
 
-		claims := token.Claims.(jwt.MapClaims)
-		str, ok := claims["user_id"].(float64)
-		if !ok {
-			permissionDenied(w)
-			return
-		}
-
-		userID := int(str)
-
-		u, err := storage.GetUserByID(ctx, userID)
+		u, err := userReader.GetUserByID(c.Context(), claims.UserID)
 		if err != nil {
 			log.Error("failed to get user by id", sl.Err(err))
-			permissionDenied(w)
-			return
+			return permissionDenied(c)
 		}
 
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, UserKey, u.ID)
-		r = r.WithContext(ctx)
-
-		handleFunc(w, r)
+		c.Locals("user_id", u.ID)
+		return c.Next()
 	}
 }
 
-func getTokenFromRequest(r *http.Request) string {
-	return r.Header.Get("Authorization")
+func getTokenFromRequest(c *fiber.Ctx, isWebsocket bool) string {
+	if isWebsocket {
+		return c.Cookies("jwt")
+	}
+
+	authorization := strings.TrimSpace(c.Get("Authorization"))
+	if authorization == "" {
+		return ""
+	}
+
+	parts := strings.SplitN(authorization, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+
+	return strings.TrimSpace(parts[1])
 }
 
-func validateToken(tokenString string) (*jwt.Token, error) {
+func ValidateToken(tokenString string) (*UserClaims, error) {
 	cfg := config.MustLoad()
-	return jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &UserClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 
 		return []byte(cfg.JWTSecret), nil
 	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token: %w", err)
+	}
+
+	claims, ok := token.Claims.(*UserClaims)
+	if !ok {
+		return nil, fmt.Errorf("failed to parse token claims")
+	}
+	return claims, nil
 }
 
-func permissionDenied(w http.ResponseWriter) {
-	utils.WriteError(w, http.StatusForbidden, fmt.Errorf("permission denied"))
+func permissionDenied(c *fiber.Ctx) error {
+	return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "permission denied"})
 }
