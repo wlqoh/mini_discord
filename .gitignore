@@ -25,6 +25,7 @@ go.work
 go.work.sum
 
 # env file
+config/local.yaml
 .env
 local.env
 
