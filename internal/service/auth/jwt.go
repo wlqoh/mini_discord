@@ -19,8 +19,8 @@ type UserReader interface {
 	GetUserByID(ctx context.Context, id int) (*types.User, error)
 }
 
-func CreateJWT(secret []byte, userID int, email string, expiration time.Duration) (string, *UserClaims, error) {
-	claims, err := NewUserClaims(userID, email, expiration)
+func CreateJWT(secret []byte, userID int, email, firstName, lastName string, expiration time.Duration) (string, *UserClaims, error) {
+	claims, err := NewUserClaims(userID, email, firstName, lastName, expiration)
 	if err != nil {
 		return "", nil, err
 	}
