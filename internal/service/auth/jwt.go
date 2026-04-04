@@ -67,7 +67,15 @@ func WithJWTAuth(userReader UserReader, log *slog.Logger, isWebsocket bool) fibe
 
 func getTokenFromRequest(c *fiber.Ctx, isWebsocket bool) string {
 	if isWebsocket {
-		return c.Cookies("jwt")
+		if cookieToken := strings.TrimSpace(c.Cookies("jwt")); cookieToken != "" {
+			return cookieToken
+		}
+
+		if queryToken := strings.TrimSpace(c.Query("token")); queryToken != "" {
+			return queryToken
+		}
+
+		return ""
 	}
 
 	authorization := strings.TrimSpace(c.Get("Authorization"))

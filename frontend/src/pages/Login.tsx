@@ -10,6 +10,12 @@ interface LoginFormData {
   password: string;
 }
 
+interface LoginResponse {
+  access_token?: string;
+  refresh_token?: string;
+  token?: string;
+}
+
 export default function Login(): React.JSX.Element {
   const navigate = useNavigate();
 
@@ -54,19 +60,31 @@ export default function Login(): React.JSX.Element {
     setLoading(true);
 
     try {
-      const response = await API.post("/login", {
+      const response = await API.post<LoginResponse>("/login", {
         email: formData.email,
         password: formData.password,
       });
 
       if (response.status === 200) {
-        localStorage.setItem("token", response.data.token);
-        navigate("/");
+        const accessToken = response.data.access_token ?? response.data.token;
+        if (!accessToken) {
+          setError("Сервер не вернул токен доступа");
+          return;
+        }
+
+        localStorage.setItem("token", accessToken);
+        if (response.data.refresh_token) {
+          localStorage.setItem("refresh_token", response.data.refresh_token);
+        }
+
+        navigate("/chat", { replace: true });
       }
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } } };
+      const axiosErr = err as { response?: { data?: { detail?: string } | string } };
       const errorMessage =
-        axiosErr.response?.data?.detail || "Ошибка при входе. Попробуйте позже.";
+        typeof axiosErr.response?.data === "string"
+          ? axiosErr.response.data
+          : axiosErr.response?.data?.detail || "Ошибка при входе. Попробуйте позже.";
       setError(errorMessage);
       console.error("Login error:", err);
     } finally {
