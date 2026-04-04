@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import { ChatSocket } from "../services/chatSocket.ts";
+import { clearAuthStorage } from "../services/authToken.ts";
 import type { Channel, ChannelsByServer, Message, MessagesByChannel, Server } from "../types/chat.ts";
 import "../styles/chat.css";
 
@@ -29,6 +31,7 @@ function getNextNumericName(items: Array<{ name: string }>, fallback = 1): strin
 }
 
 export default function ChatPage() {
+  const navigate = useNavigate();
   const socketRef = useRef<ChatSocket | null>(null);
   const selectedServerIdRef = useRef(0);
 
@@ -40,6 +43,12 @@ export default function ChatPage() {
   const [loadedChannels, setLoadedChannels] = useState<Record<number, boolean>>({});
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState("");
+
+  function handleAuthFailure(message: string): void {
+    clearAuthStorage();
+    setError(message);
+    navigate("/login", { replace: true });
+  }
 
   useEffect(() => {
     const socket = new ChatSocket();
@@ -70,6 +79,10 @@ export default function ChatPage() {
     });
 
     const unsubscribeError = socket.onError((text) => {
+      if (text.toLowerCase().includes("permission denied")) {
+        handleAuthFailure("Сессия истекла, войдите снова");
+        return;
+      }
       setError(text);
     });
 
@@ -123,6 +136,10 @@ export default function ChatPage() {
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : "Не удалось подключиться к чату";
+        if (message.toLowerCase().includes("требуется повторный вход") || message.toLowerCase().includes("permission denied")) {
+          handleAuthFailure("Сессия истекла, войдите снова");
+          return;
+        }
         setError(message);
       }
     })();
@@ -134,7 +151,7 @@ export default function ChatPage() {
       socketRef.current = null;
       setIsConnected(false);
     };
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(servers));

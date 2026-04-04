@@ -1,4 +1,5 @@
 import type { Message } from "../types/chat";
+import { getValidAccessToken } from "./authToken";
 
 type WsEvent = {
   event: "ack" | "error" | "message" | "connected";
@@ -15,8 +16,15 @@ type MessageListener = (message: Message) => void;
 type ErrorListener = (message: string) => void;
 
 function resolveWsUrl(): string {
+  const token = getValidAccessToken();
+  if (!token) {
+    throw new Error("Требуется повторный вход в систему");
+  }
+
   if (import.meta.env.VITE_WS_URL) {
-    return import.meta.env.VITE_WS_URL;
+    const rawUrl = new URL(import.meta.env.VITE_WS_URL);
+    rawUrl.searchParams.set("token", token);
+    return rawUrl.toString();
   }
 
   const apiBase = import.meta.env.VITE_API_URL || "/api/v1";
@@ -24,20 +32,14 @@ function resolveWsUrl(): string {
     const apiUrl = new URL(apiBase);
     apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
     apiUrl.pathname = `${apiUrl.pathname.replace(/\/$/, "")}/server/ws`;
-    const token = localStorage.getItem("token");
-    if (token) {
-      apiUrl.searchParams.set("token", token);
-    }
+    apiUrl.searchParams.set("token", token);
     return apiUrl.toString();
   }
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const normalizedBase = apiBase.startsWith("/") ? apiBase : `/${apiBase}`;
   const wsUrl = new URL(`${protocol}://${window.location.host}${normalizedBase}/server/ws`);
-  const token = localStorage.getItem("token");
-  if (token) {
-    wsUrl.searchParams.set("token", token);
-  }
+  wsUrl.searchParams.set("token", token);
 
   return wsUrl.toString();
 }

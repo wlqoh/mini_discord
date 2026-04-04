@@ -3,9 +3,10 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Register from "./pages/Register";
 import Login from "./pages/Login";
 import ChatPage from "./pages/ChatPage";
+import { getValidAccessToken } from "./services/authToken";
 
 function App() {
-  const hasToken = Boolean(localStorage.getItem("token"));
+  const hasToken = Boolean(getValidAccessToken());
 
   return (
     <BrowserRouter>
