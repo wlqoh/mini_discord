@@ -10,6 +10,14 @@ type WsEvent = {
 type PendingCommand = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
+  timeoutId: number;
+};
+
+type QueuedCommand = {
+  action: string;
+  payload: Record<string, unknown>;
+  resolve: (data: unknown) => void;
+  reject: (error: Error) => void;
 };
 
 type MessageListener = (message: Message) => void;
@@ -72,24 +80,106 @@ export class ChatSocket {
 
   private pending: PendingCommand | null = null;
 
+  private queue: QueuedCommand[] = [];
+
+  private connectionPromise: Promise<void> | null = null;
+
+  private static readonly COMMAND_TIMEOUT_MS = 10000;
+
   private readonly messageListeners = new Set<MessageListener>();
 
   private readonly errorListeners = new Set<ErrorListener>();
+
+  private flushQueue(): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.pending || !this.queue.length) {
+      return;
+    }
+
+    const next = this.queue.shift();
+    if (!next) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (!this.pending) {
+        return;
+      }
+
+      const pending = this.pending;
+      this.pending = null;
+      pending.reject(new Error("Таймаут ответа от чата"));
+      this.errorListeners.forEach((listener) => listener("Таймаут ответа от чата"));
+      this.flushQueue();
+    }, ChatSocket.COMMAND_TIMEOUT_MS);
+
+    this.pending = {
+      resolve: (data) => {
+        window.clearTimeout(timeoutId);
+        next.resolve(data);
+      },
+      reject: (error) => {
+        window.clearTimeout(timeoutId);
+        next.reject(error);
+      },
+      timeoutId,
+    };
+
+    this.socket.send(
+      JSON.stringify({
+        action: next.action,
+        payload: next.payload,
+      }),
+    );
+  }
+
+  private rejectAllPending(reason: Error): void {
+    if (this.pending) {
+      window.clearTimeout(this.pending.timeoutId);
+      this.pending.reject(reason);
+      this.pending = null;
+    }
+
+    if (this.queue.length) {
+      const queued = [...this.queue];
+      this.queue = [];
+      queued.forEach((item) => item.reject(reason));
+    }
+  }
+
+  private handleSocketError(text: string): void {
+    if (this.pending) {
+      this.pending.reject(new Error(text));
+      this.pending = null;
+      this.flushQueue();
+    }
+    this.errorListeners.forEach((listener) => listener(text));
+  }
 
   connect(): Promise<void> {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
 
-    return new Promise((resolve, reject) => {
+    if (this.connectionPromise) {
+      return this.connectionPromise;
+    }
+
+    this.connectionPromise = new Promise((resolve, reject) => {
       const ws = new WebSocket(resolveWsUrl());
       this.socket = ws;
 
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject(new Error("Не удалось подключиться к чату"));
+      ws.onopen = () => {
+        this.connectionPromise = null;
+        this.flushQueue();
+        resolve();
+      };
+      ws.onerror = () => {
+        this.connectionPromise = null;
+        reject(new Error("Не удалось подключиться к чату"));
+      };
       ws.onclose = () => {
-        this.pending?.reject(new Error("Соединение WebSocket закрыто"));
-        this.pending = null;
+        this.connectionPromise = null;
+        this.rejectAllPending(new Error("Соединение WebSocket закрыто"));
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
@@ -112,24 +202,30 @@ export class ChatSocket {
 
         if (parsed.event === "error") {
           const text = parsed.error || "Ошибка чата";
-          if (this.pending) {
-            this.pending.reject(new Error(text));
-            this.pending = null;
-          }
-          this.errorListeners.forEach((listener) => listener(text));
+          this.handleSocketError(text);
           return;
         }
 
         if (parsed.event === "ack" && this.pending) {
           this.pending.resolve(parsed.data);
           this.pending = null;
+          this.flushQueue();
+          return;
+        }
+
+        // Some gateway/proxy responses may come without `event`, but with `error`.
+        if (typeof parsed.error === "string" && parsed.error.trim()) {
+          this.handleSocketError(parsed.error);
         }
       };
     });
+
+    return this.connectionPromise;
   }
 
   close(): void {
-    this.pending = null;
+    this.connectionPromise = null;
+    this.rejectAllPending(new Error("Соединение WebSocket закрыто"));
     this.socket?.close();
     this.socket = null;
   }
@@ -196,19 +292,10 @@ export class ChatSocket {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("WebSocket не подключен"));
     }
-    if (this.pending) {
-      return Promise.reject(new Error("Подождите завершения предыдущего запроса"));
-    }
 
     return new Promise((resolve, reject) => {
-      this.pending = { resolve, reject };
-
-      this.socket?.send(
-        JSON.stringify({
-          action,
-          payload,
-        }),
-      );
+      this.queue.push({ action, payload, resolve, reject });
+      this.flushQueue();
     });
   }
 }

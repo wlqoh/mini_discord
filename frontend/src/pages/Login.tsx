@@ -16,6 +16,12 @@ interface LoginResponse {
   token?: string;
 }
 
+const CHAT_STORAGE_KEYS = [
+  "chat_servers",
+  "chat_channels_by_server",
+  "chat_selected_server_id",
+];
+
 export default function Login(): React.JSX.Element {
   const navigate = useNavigate();
 
@@ -76,6 +82,8 @@ export default function Login(): React.JSX.Element {
         if (response.data.refresh_token) {
           localStorage.setItem("refresh_token", response.data.refresh_token);
         }
+
+        CHAT_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
 
         navigate("/chat", { replace: true });
       }
