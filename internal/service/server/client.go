@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/gofiber/contrib/websocket"
@@ -24,16 +25,29 @@ func (c *Client) writeMessage() {
 			return
 		}
 
-		if err := c.Conn.WriteJSON(event); err != nil {
+		if err := c.safeWriteJSON(event); err != nil {
 			return
 		}
 	}
 }
 
+func (c *Client) safeWriteJSON(event *types.WsEvent) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("websocket write panic: %v", r)
+		}
+	}()
+
+	if err := c.Conn.WriteJSON(event); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Client) readMessage(hub *Hub) {
 	defer func() {
 		hub.Unregister <- c
-		_ = c.Conn.Close()
 	}()
 
 	for {

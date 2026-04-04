@@ -1,26 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import { ChatSocket } from "../services/chatSocket.ts";
 import { clearAuthStorage } from "../services/authToken.ts";
-import type { Channel, ChannelsByServer, Message, MessagesByChannel, Server } from "../types/chat.ts";
+import type { ChannelsByServer, Message, MessagesByChannel, Server } from "../types/chat.ts";
 import "../styles/chat.css";
 
 const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
-
-function readJson<T>(key: string, fallback: T): T {
-  const raw = localStorage.getItem(key);
-  if (!raw) return fallback;
-
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
   const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
@@ -44,11 +33,78 @@ export default function ChatPage() {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState("");
 
-  function handleAuthFailure(message: string): void {
-    clearAuthStorage();
-    setError(message);
-    navigate("/login", { replace: true });
-  }
+  const handleAuthFailure = useCallback(
+    (message: string): void => {
+      clearAuthStorage();
+      setError(message);
+      navigate("/login", { replace: true });
+    },
+    [navigate],
+  );
+
+  const syncServersAndChannels = useCallback(
+    async (preferredServerId?: number) => {
+      if (!socketRef.current) {
+        return;
+      }
+
+      const remoteServers = await socketRef.current.getServers();
+      if (!remoteServers.length) {
+        setServers([]);
+        setChannelsByServer({});
+        setSelectedServerId(0);
+        setSelectedChannelId(0);
+        setMessagesByChannel({});
+        localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify([]));
+        localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify({}));
+        localStorage.removeItem(CHAT_SELECTED_SERVER_KEY);
+        return;
+      }
+
+      const channelsByServerEntries = await Promise.all(
+        remoteServers.map(async (server) => {
+          const channels = await socketRef.current!.getServerChannels(server.id);
+          return [server.id, channels] as const;
+        }),
+      );
+
+      const remoteChannelsByServer = Object.fromEntries(channelsByServerEntries) as ChannelsByServer;
+
+      const fromState = selectedServerIdRef.current;
+      const activeServerId =
+        (preferredServerId && remoteServers.some((server) => server.id === preferredServerId) && preferredServerId) ||
+        (fromState > 0 && remoteServers.some((server) => server.id === fromState) && fromState) ||
+        remoteServers[0].id;
+
+      const activeChannels = remoteChannelsByServer[activeServerId] ?? [];
+
+      setServers(remoteServers);
+      setChannelsByServer(remoteChannelsByServer);
+      setSelectedServerId(activeServerId);
+      setSelectedChannelId((prev) => {
+        if (activeChannels.some((channel) => channel.id === prev)) {
+          return prev;
+        }
+        return activeChannels[0]?.id ?? 0;
+      });
+      setMessagesByChannel((prev) => {
+        const next = { ...prev };
+        Object.values(remoteChannelsByServer)
+          .flat()
+          .forEach((channel) => {
+            if (!next[channel.id]) {
+              next[channel.id] = [];
+            }
+          });
+        return next;
+      });
+
+      localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(remoteServers));
+      localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify(remoteChannelsByServer));
+      localStorage.setItem(CHAT_SELECTED_SERVER_KEY, String(activeServerId));
+    },
+    [],
+  );
 
   useEffect(() => {
     const socket = new ChatSocket();
@@ -92,48 +148,8 @@ export default function ChatPage() {
         setIsConnected(true);
         setError("");
 
-        let persistedServers = readJson<Server[]>(CHAT_SERVERS_KEY, []);
-        let persistedChannels = readJson<ChannelsByServer>(CHAT_CHANNELS_BY_SERVER_KEY, {});
-        let persistedSelectedServer = Number(localStorage.getItem(CHAT_SELECTED_SERVER_KEY) ?? "0");
-
-        if (!persistedServers.length) {
-          const createdServer = await socket.createServer("1");
-          const createdChannel = await socket.createChannel(createdServer.server_id, "1");
-
-          persistedServers = [{ id: createdServer.server_id, name: createdServer.name }];
-          persistedChannels = {
-            [createdServer.server_id]: [
-              { id: createdChannel.channel_id, server_id: createdChannel.server_id, name: createdChannel.name },
-            ],
-          };
-          persistedSelectedServer = createdServer.server_id;
-
-          localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(persistedServers));
-          localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify(persistedChannels));
-          localStorage.setItem(CHAT_SELECTED_SERVER_KEY, String(persistedSelectedServer));
-        }
-
-        const activeServerId = persistedServers.some((server) => server.id === persistedSelectedServer)
-          ? persistedSelectedServer
-          : persistedServers[0].id;
-
-        const activeChannels = persistedChannels[activeServerId] ?? [];
-
-        setServers(persistedServers);
-        setChannelsByServer(persistedChannels);
-        setSelectedServerId(activeServerId);
-        setSelectedChannelId(activeChannels[0]?.id ?? 0);
-        setMessagesByChannel((prev) => {
-          const next = { ...prev };
-          Object.values(persistedChannels)
-            .flat()
-            .forEach((channel) => {
-              if (!next[channel.id]) {
-                next[channel.id] = [];
-              }
-            });
-          return next;
-        });
+        const persistedSelectedServer = Number(localStorage.getItem(CHAT_SELECTED_SERVER_KEY) ?? "0");
+        await syncServersAndChannels(persistedSelectedServer > 0 ? persistedSelectedServer : undefined);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Не удалось подключиться к чату";
         if (message.toLowerCase().includes("требуется повторный вход") || message.toLowerCase().includes("permission denied")) {
@@ -151,7 +167,19 @@ export default function ChatPage() {
       socketRef.current = null;
       setIsConnected(false);
     };
-  }, [navigate]);
+  }, [navigate, handleAuthFailure, syncServersAndChannels]);
+
+  useEffect(() => {
+    if (!isConnected || !socketRef.current) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void syncServersAndChannels();
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isConnected, syncServersAndChannels]);
 
   useEffect(() => {
     localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(servers));
@@ -197,20 +225,9 @@ export default function ChatPage() {
     try {
       const nextServerName = getNextNumericName(servers);
       const createdServer = await socketRef.current.createServer(nextServerName);
-      const createdFirstChannel = await socketRef.current.createChannel(createdServer.server_id, "1");
+      await socketRef.current.createChannel(createdServer.server_id, "1");
 
-      const nextServer: Server = { id: createdServer.server_id, name: createdServer.name };
-      const firstChannel: Channel = {
-        id: createdFirstChannel.channel_id,
-        server_id: createdFirstChannel.server_id,
-        name: createdFirstChannel.name,
-      };
-
-      setServers((prev) => [...prev, nextServer]);
-      setChannelsByServer((prev) => ({ ...prev, [nextServer.id]: [firstChannel] }));
-      setMessagesByChannel((prev) => ({ ...prev, [firstChannel.id]: [] }));
-      setSelectedServerId(nextServer.id);
-      setSelectedChannelId(firstChannel.id);
+      await syncServersAndChannels(createdServer.server_id);
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось создать сервер";
@@ -227,20 +244,9 @@ export default function ChatPage() {
     try {
       const currentChannels = channelsByServer[selectedServerId] ?? [];
       const nextName = getNextNumericName(currentChannels);
-      const createdChannel = await socketRef.current.createChannel(selectedServerId, nextName);
+      await socketRef.current.createChannel(selectedServerId, nextName);
 
-      const nextChannel: Channel = {
-        id: createdChannel.channel_id,
-        server_id: createdChannel.server_id,
-        name: createdChannel.name,
-      };
-
-      setChannelsByServer((prev) => ({
-        ...prev,
-        [selectedServerId]: [...(prev[selectedServerId] ?? []), nextChannel],
-      }));
-      setMessagesByChannel((prev) => ({ ...prev, [nextChannel.id]: [] }));
-      setSelectedChannelId(nextChannel.id);
+      await syncServersAndChannels(selectedServerId);
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось создать канал";
@@ -262,11 +268,22 @@ export default function ChatPage() {
     }
   }
 
-  function handleSelectServer(serverId: number) {
+  async function handleSelectServer(serverId: number) {
     setSelectedServerId(serverId);
-    const serverChannels = channelsByServer[serverId] ?? [];
-    setSelectedChannelId(serverChannels[0]?.id ?? 0);
     setError("");
+
+    if (!socketRef.current || !isConnected) {
+      const serverChannels = channelsByServer[serverId] ?? [];
+      setSelectedChannelId(serverChannels[0]?.id ?? 0);
+      return;
+    }
+
+    try {
+      await syncServersAndChannels(serverId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Не удалось загрузить каналы";
+      setError(message);
+    }
   }
 
   const activeChannels = channelsByServer[selectedServerId] ?? [];
@@ -286,7 +303,7 @@ export default function ChatPage() {
               <button
                 className={`server-dot ${selectedServerId === server.id ? "active" : ""}`}
                 onClick={() => handleSelectServer(server.id)}
-                title={`Сервер ${server.name}`}
+                title={`Сервер ${server.name} (ID ${server.id})`}
                 aria-label={`Сервер ${server.name}`}
               >
                 {server.name}

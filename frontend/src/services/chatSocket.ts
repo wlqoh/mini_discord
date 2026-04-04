@@ -57,7 +57,12 @@ function toMessage(raw: unknown): Message | null {
     return null;
   }
 
-  const candidate = raw as Partial<Message>;
+  type RawMessage = Partial<Message> & {
+    author_first_name?: unknown;
+    author_last_name?: unknown;
+  };
+
+  const candidate = raw as RawMessage;
   if (
     typeof candidate.channel_id !== "number" ||
     typeof candidate.author_id !== "number" ||
@@ -70,6 +75,8 @@ function toMessage(raw: unknown): Message | null {
     id: typeof candidate.id === "number" ? candidate.id : 0,
     channel_id: candidate.channel_id,
     author_id: candidate.author_id,
+    author_first_name: typeof candidate.author_first_name === "string" ? candidate.author_first_name : "",
+    author_last_name: typeof candidate.author_last_name === "string" ? candidate.author_last_name : "",
     content: candidate.content,
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
@@ -288,6 +295,41 @@ export class ChatSocket {
     return payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null);
   }
 
+  async getServers(): Promise<Array<{ id: number; name: string }>> {
+    const data = await this.sendCommand("get_servers", {});
+    const payload = data as { servers?: Array<{ id?: number; name?: string }> };
+
+    if (!Array.isArray(payload?.servers)) {
+      return [];
+    }
+
+    return payload.servers
+      .filter((server) => typeof server.id === "number" && typeof server.name === "string")
+      .map((server) => ({ id: server.id as number, name: server.name as string }));
+  }
+
+  async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string }>> {
+    const data = await this.sendCommand("get_server_channels", { server_id: serverId });
+    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string }> };
+
+    if (!Array.isArray(payload?.channels)) {
+      return [];
+    }
+
+    return payload.channels
+      .filter(
+        (channel) =>
+          typeof channel.id === "number" &&
+          typeof channel.server_id === "number" &&
+          typeof channel.name === "string",
+      )
+      .map((channel) => ({
+        id: channel.id as number,
+        server_id: channel.server_id as number,
+        name: channel.name as string,
+      }));
+  }
+
   private sendCommand(action: string, payload: Record<string, unknown>): Promise<unknown> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("WebSocket не подключен"));
@@ -299,5 +341,4 @@ export class ChatSocket {
     });
   }
 }
-
 

@@ -13,6 +13,8 @@ export interface Message {
     id: number;
     channel_id: number;
     author_id: number;
+    author_first_name?: string;
+    author_last_name?: string;
     content: string;
     created_at: string;
 }

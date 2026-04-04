@@ -251,11 +251,19 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	author, err := h.storage.GetUserByID(ctx, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve author")
+		return
+	}
+
 	msg := types.WsMessage{
-		ChannelID: payload.ChannelID,
-		AuthorID:  req.client.UserID,
-		Content:   payload.Content,
-		CreatedAt: time.Now().UTC(),
+		ChannelID:       payload.ChannelID,
+		AuthorID:        req.client.UserID,
+		AuthorFirstName: author.FirstName,
+		AuthorLastName:  author.LastName,
+		Content:         payload.Content,
+		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.storage.SaveMessage(ctx, msg); err != nil {
 		h.pushError(req.client, "failed to save message")
@@ -336,7 +344,10 @@ func getServers(h *Hub, req wsCommandRequest, ctx context.Context) {
 	servers, err := h.storage.GetServersByUserID(ctx, req.client.UserID)
 	if err != nil {
 		h.pushError(req.client, "failed to get servers")
+		return
 	}
+
+	h.log.Info("ws get_servers", "user_id", req.client.UserID, "servers_count", len(servers))
 
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,
@@ -349,16 +360,21 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid get_server_channels payload")
+		return
 	}
 
 	if payload.ServerID <= 0 {
 		h.pushError(req.client, "server_id is required")
+		return
 	}
 
 	channels, err := h.storage.GetServerChannels(ctx, payload.ServerID)
 	if err != nil {
 		h.pushError(req.client, "failed to get server_channels")
+		return
 	}
+
+	h.log.Info("ws get_server_channels", "user_id", req.client.UserID, "server_id", payload.ServerID, "channels_count", len(channels))
 
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,

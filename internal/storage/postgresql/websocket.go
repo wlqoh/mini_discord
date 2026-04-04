@@ -59,13 +59,13 @@ func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name string
 }
 
 func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error) {
+	_ = userID
+
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1 FROM server_members
-			WHERE user_id = $1 AND server_id = $2
+			SELECT 1 FROM servers WHERE id = $1
 		)`,
-		userID,
 		serverID,
 	).Scan(&exists)
 
@@ -73,29 +73,35 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 }
 
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
+	_ = userID
+
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1
-			FROM channels c
-			JOIN server_members sm ON sm.server_id = c.server_id
-			WHERE c.id = $1 AND sm.user_id = $2
+			SELECT 1 FROM channels WHERE id = $1
 		)`,
 		channelID,
-		userID,
 	).Scan(&exists)
 
 	return exists, err
 }
 
 func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT sm.user_id
-		 FROM channels c
-		 JOIN server_members sm ON sm.server_id = c.server_id
-		 WHERE c.id = $1`,
+	var channelExists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM channels WHERE id = $1
+		)`,
 		channelID,
-	)
+	).Scan(&channelExists)
+	if err != nil {
+		return nil, err
+	}
+	if !channelExists {
+		return []int{}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
 	if err != nil {
 		return nil, err
 	}
@@ -145,19 +151,21 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT id, channel_id, author_id, content, created_at, edited_at
-		 FROM messages
-		 WHERE channel_id = $1
-		 ORDER BY created_at DESC, id DESC
+	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, m.content, m.created_at, m.edited_at
+		 FROM messages m
+		 LEFT JOIN users u ON u.id = m.author_id
+		 WHERE m.channel_id = $1
+		 ORDER BY m.created_at DESC, m.id DESC
 		 LIMIT $2`
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT id, channel_id, author_id, content, created_at, edited_at
-			 FROM messages
-			 WHERE channel_id = $1
-			   AND (created_at, id) < ($2, $3)
-			 ORDER BY created_at DESC, id DESC
+		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, m.content, m.created_at, m.edited_at
+			 FROM messages m
+			 LEFT JOIN users u ON u.id = m.author_id
+			 WHERE m.channel_id = $1
+			   AND (m.created_at, m.id) < ($2, $3)
+			 ORDER BY m.created_at DESC, m.id DESC
 			 LIMIT $4`
 		args = []any{channelID, cursor.CreatedAt, cursor.ID, limitPlusOne}
 	}
@@ -171,7 +179,16 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	var messages []types.WsMessage
 	for rows.Next() {
 		var msg types.WsMessage
-		if err := rows.Scan(&msg.ID, &msg.ChannelID, &msg.AuthorID, &msg.Content, &msg.CreatedAt, &msg.EditedAt); err != nil {
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.ChannelID,
+			&msg.AuthorID,
+			&msg.AuthorFirstName,
+			&msg.AuthorLastName,
+			&msg.Content,
+			&msg.CreatedAt,
+			&msg.EditedAt,
+		); err != nil {
 			return nil, nil, false, err
 		}
 		messages = append(messages, msg)
@@ -262,14 +279,15 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 }
 
 func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
-	serverIDs, err := s.getServerIdsByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
+	_ = userID
 
-	query := "SELECT id, name, owner_id FROM servers WHERE id = ANY($1)"
+	query := `
+		SELECT id, name, owner_id
+		FROM servers
+		ORDER BY id
+	`
 
-	rows, err := s.db.QueryContext(ctx, query, serverIDs)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}

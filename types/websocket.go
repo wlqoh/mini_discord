@@ -124,12 +124,14 @@ type WsEvent struct {
 }
 
 type WsMessage struct {
-	ID        int64      `json:"id"`
-	ChannelID int64      `json:"channel_id"`
-	AuthorID  int        `json:"author_id"`
-	Content   string     `json:"content"`
-	CreatedAt time.Time  `json:"created_at"`
-	EditedAt  *time.Time `json:"edited_at,omitempty"`
+	ID              int64      `json:"id"`
+	ChannelID       int64      `json:"channel_id"`
+	AuthorID        int        `json:"author_id"`
+	AuthorFirstName string     `json:"author_first_name"`
+	AuthorLastName  string     `json:"author_last_name"`
+	Content         string     `json:"content"`
+	CreatedAt       time.Time  `json:"created_at"`
+	EditedAt        *time.Time `json:"edited_at,omitempty"`
 }
 
 type Server struct {
