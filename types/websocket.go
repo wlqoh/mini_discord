@@ -19,14 +19,18 @@ type ServerStorage interface {
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
 	SaveMessage(ctx context.Context, msg WsMessage) error
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor) ([]WsMessage, *WsMessageCursor, bool, error)
+	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
+	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 }
 
 const (
-	WsActionCreateServer  = "create_server"
-	WsActionJoinServer    = "join_server"
-	WsActionCreateChannel = "create_channel"
-	WsActionSendMessage   = "send_message"
-	WsActionGetMessages   = "get_messages"
+	WsActionCreateServer      = "create_server"
+	WsActionJoinServer        = "join_server"
+	WsActionCreateChannel     = "create_channel"
+	WsActionSendMessage       = "send_message"
+	WsActionGetMessages       = "get_messages"
+	WsActionGetServers        = "get_servers"
+	WsActionGetServerChannels = "get_server_channels"
 
 	WsEventAck       = "ack"
 	WsEventError     = "error"
@@ -61,6 +65,18 @@ type WsGetMessagesRequest struct {
 	ChannelID int64  `json:"channel_id"`
 	Limit     int    `json:"limit"`
 	Cursor    string `json:"cursor,omitempty"`
+}
+
+type WsGetServersResponse struct {
+	Servers []Server `json:"servers"`
+}
+
+type WsGetServerChannelsRequest struct {
+	ServerID int64 `json:"server_id"`
+}
+
+type WsGetChannelsResponse struct {
+	Channels []Channel `json:"channels"`
 }
 
 type WsMessageCursor struct {
@@ -120,5 +136,13 @@ type Server struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	OwnerID   int       `json:"owner_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type Channel struct {
+	ID        int64     `json:"id"`
+	ServerID  int64     `json:"server_id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
 	CreatedAt time.Time `json:"created_at"`
 }

@@ -212,3 +212,81 @@ func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID in
 	_, err := s.db.ExecContext(ctx, query, userID, serverID)
 	return err
 }
+
+func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64, error) {
+	query := "SELECT server_id FROM server_members WHERE user_id = $1"
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	serverIDs := make([]int64, 0)
+	for rows.Next() {
+		var serverID int64
+		if err := rows.Scan(&serverID); err != nil {
+			return nil, err
+		}
+		serverIDs = append(serverIDs, serverID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return serverIDs, nil
+}
+
+func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]types.Channel, error) {
+	query := "SELECT id, server_id, name, type FROM channels WHERE server_id = $1"
+	rows, err := s.db.QueryContext(ctx, query, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var channels []types.Channel
+	for rows.Next() {
+		var channel types.Channel
+		if err := rows.Scan(&channel.ID, &channel.ServerID, &channel.Name, &channel.Type); err != nil {
+			return nil, err
+		}
+		channels = append(channels, channel)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return channels, nil
+}
+
+func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
+	serverIDs, err := s.getServerIdsByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	query := "SELECT id, name, owner_id FROM servers WHERE id = ANY($1)"
+
+	rows, err := s.db.QueryContext(ctx, query, serverIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	defer rows.Close()
+
+	var servers []types.Server
+	for rows.Next() {
+		var server types.Server
+		if err := rows.Scan(&server.ID, &server.Name, &server.OwnerID); err != nil {
+			return nil, err
+		}
+		servers = append(servers, server)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return servers, nil
+}
