@@ -98,6 +98,32 @@ make run
 
 Сервер запустится на `localhost:8080`.
 
+### 2.5. Если запускаете через docker-compose
+
+Теперь в `docker-compose.yml` есть сервис `migrate`, который при каждом `docker compose up`
+применяет SQL-скрипты из `sql/init` (`01_users.sql` и `02_chat_schema.sql`).
+Это закрывает кейс с уже существующим volume, где стандартный `/docker-entrypoint-initdb.d`
+у Postgres больше не выполняется.
+
+Запуск:
+
+```bash
+docker compose up -d --build
+```
+
+Проверка, что таблицы созданы:
+
+```bash
+docker compose exec db psql -U murad -d postgres -c "\\dt"
+```
+
+Если после обновления compose-файла контейнеры уже были запущены, перезапустите стек:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
 ## API Эндпоинты
 
 Базовый путь: `/api/v1`
