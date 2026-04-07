@@ -24,6 +24,8 @@ export default function ChatPage() {
   const socketRef = useRef<ChatSocket | null>(null);
   const selectedServerIdRef = useRef(0);
   const chatContentRef = useRef<HTMLDivElement | null>(null);
+  const isCreatingServerRef = useRef(false);
+  const [isCreatingServer, setIsCreatingServer] = useState(false);
 
   const [servers, setServers] = useState<Server[]>([]);
   const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -33,6 +35,8 @@ export default function ChatPage() {
   const [loadedChannels, setLoadedChannels] = useState<Record<number, boolean>>({});
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState("");
+  const [isCreateServerModalOpen, setIsCreateServerModalOpen] = useState(false);
+  const [newServerName, setNewServerName] = useState("");
 
   const handleAuthFailure = useCallback(
     (message: string): void => {
@@ -217,22 +221,45 @@ export default function ChatPage() {
     })();
   }, [selectedChannelId, isConnected, loadedChannels]);
 
-  async function handleAddServer() {
+  function openCreateServerModal() {
+    setError("");
+    setNewServerName("");
+    setIsCreateServerModalOpen(true);
+  }
+
+  async function handleAddServerSubmit() {
     if (!socketRef.current || !isConnected) {
-      setError("Нет подключения к чату");
+      setError("No connection");
       return;
     }
 
+    const trimmedName = newServerName.trim();
+    if (!trimmedName) {
+      setError("Enter the server name");
+      return;
+    }
+
+    if (isCreatingServerRef.current) {
+      return;
+    }
+
+    isCreatingServerRef.current = true;
+    setIsCreatingServer(true);
+
     try {
-      const nextServerName = getNextNumericName(servers);
-      const createdServer = await socketRef.current.createServer(nextServerName);
+      const createdServer = await socketRef.current.createServer(trimmedName);
       await socketRef.current.createChannel(createdServer.server_id, "1");
 
       await syncServersAndChannels(createdServer.server_id);
       setError("");
+      setIsCreateServerModalOpen(false);
+      setNewServerName("");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось создать сервер";
+      const message = err instanceof Error ? err.message : "Failed to create server";
       setError(message);
+    } finally {
+      isCreatingServerRef.current = false;
+      setIsCreatingServer(false);
     }
   }
 
@@ -301,7 +328,12 @@ export default function ChatPage() {
   return (
     <div className="chat-layout">
       <aside className="servers-sidebar">
-        <button className="server-add-btn" onClick={handleAddServer} aria-label="Добавить сервер" title="Добавить сервер">
+        <button
+            className="server-add-btn"
+            onClick={openCreateServerModal}
+            disabled={!isConnected || isCreatingServer}
+            aria-label="Add server"
+            title="Add server">
           +
         </button>
         <ul className="servers-list">
@@ -310,8 +342,8 @@ export default function ChatPage() {
               <button
                 className={`server-dot ${selectedServerId === server.id ? "active" : ""}`}
                 onClick={() => handleSelectServer(server.id)}
-                title={`Сервер ${server.name} (ID ${server.id})`}
-                aria-label={`Сервер ${server.name}`}
+                title={`Server ${server.name} (ID ${server.id})`}
+                aria-label={`Server ${server.name}`}
               >
                 {server.name}
               </button>
@@ -347,6 +379,41 @@ export default function ChatPage() {
         </div>
         <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0} />
       </section>
+
+      {isCreateServerModalOpen && (
+          <div className="modal-overlay" onClick={() => setIsCreateServerModalOpen(false)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <h3 className="modal-title">Create server</h3>
+
+              <input
+                  className="modal-input"
+                  type="text"
+                  placeholder="Enter server name"
+                  value={newServerName}
+                  onChange={(e) => setNewServerName(e.target.value)}
+                  maxLength={64}
+                  autoFocus
+              />
+
+              <div className="modal-actions">
+                <button
+                  className="modal-btn modal-btn-secondary"
+                  onClick={() => setIsCreateServerModalOpen(false)}
+                  disabled={isCreatingServer}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn modal-btn-primary"
+                  onClick={handleAddServerSubmit}
+                  disabled={isCreatingServer}
+                >
+                  {isCreatingServer ? "Creating..." : "Create"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }
