@@ -258,7 +258,7 @@ export default function ChatPage() {
     setIsCreatingServer(true);
 
     try {
-      const createdServer = await socketRef.current.createServer(trimmedName);
+      const createdServer = await socketRef.current.createServer(trimmedName[0]);
       await socketRef.current.createChannel(createdServer.server_id, "Main");
 
       await syncServersAndChannels(createdServer.server_id);
