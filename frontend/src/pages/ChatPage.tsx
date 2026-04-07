@@ -26,6 +26,8 @@ export default function ChatPage() {
   const chatContentRef = useRef<HTMLDivElement | null>(null);
   const isCreatingServerRef = useRef(false);
   const [isCreatingServer, setIsCreatingServer] = useState(false);
+  const isCreatingChannelRef = useRef(false);
+  const [isCreatingChannel, setIsCreatingChannel] = useState(false);
 
   const [servers, setServers] = useState<Server[]>([]);
   const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -37,6 +39,9 @@ export default function ChatPage() {
   const [error, setError] = useState("");
   const [isCreateServerModalOpen, setIsCreateServerModalOpen] = useState(false);
   const [newServerName, setNewServerName] = useState("");
+  const [isCreateChannelModalOpen, setIsCreateChannelModalOpen] = useState(false);
+  const [newChannelName, setNewChannelName] = useState("");
+
 
   const handleAuthFailure = useCallback(
     (message: string): void => {
@@ -227,6 +232,12 @@ export default function ChatPage() {
     setIsCreateServerModalOpen(true);
   }
 
+  function openCreateChannelModal() {
+    setError("");
+    setNewChannelName("");
+    setIsCreateChannelModalOpen(true);
+  }
+
   async function handleAddServerSubmit() {
     if (!socketRef.current || !isConnected) {
       setError("No connection");
@@ -263,22 +274,39 @@ export default function ChatPage() {
     }
   }
 
-  async function handleAddChannel() {
+  async function handleAddChannelSubmit() {
     if (!socketRef.current || !isConnected || selectedServerId <= 0) {
       setError("No connection to chat");
       return;
     }
 
+    const trimmedName = newChannelName.trim();
+    if (!trimmedName) {
+      setError("Enter the channel name");
+      return;
+    }
+
+    if (isCreatingChannelRef.current) {
+      return;
+    }
+
+    isCreatingChannelRef.current = true;
+    setIsCreatingChannel(true);
+
     try {
-      const currentChannels = channelsByServer[selectedServerId] ?? [];
-      const nextName = getNextNumericName(currentChannels);
-      await socketRef.current.createChannel(selectedServerId, nextName);
+      // const currentChannels = channelsByServer[selectedServerId] ?? [];
+      await socketRef.current.createChannel(selectedServerId, trimmedName);
 
       await syncServersAndChannels(selectedServerId);
       setError("");
+      setIsCreateChannelModalOpen(false);
+      setNewChannelName("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create channel";
       setError(message);
+    } finally {
+      isCreatingChannelRef.current = false;
+      setIsCreatingChannel(false);
     }
   }
 
@@ -355,7 +383,12 @@ export default function ChatPage() {
       <aside className="channels-sidebar">
         <div className="channels-header">
           <span>Server {currentServer?.name ?? "-"}</span>
-          <button className="channels-add-btn" onClick={handleAddChannel} aria-label="Create channel" title="Create channel">
+          <button
+              className="channels-add-btn"
+              onClick={openCreateChannelModal}
+              disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
+              aria-label="Create channel"
+              title="Create channel">
             +
           </button>
         </div>
@@ -414,6 +447,41 @@ export default function ChatPage() {
             </div>
           </div>
         )}
+
+      {isCreateChannelModalOpen && (
+          <div className="modal-overlay" onClick={() => setIsCreateChannelModalOpen(false)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <h3 className="modal-title">Create channel</h3>
+
+              <input
+                  className="modal-input"
+                  type="text"
+                  placeholder="Enter channel name"
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  maxLength={64}
+                  autoFocus
+              />
+
+              <div className="modal-actions">
+                <button
+                    className="modal-btn modal-btn-secondary"
+                    onClick={() => setIsCreateChannelModalOpen(false)}
+                    disabled={isCreatingChannel}
+                >
+                  Cancel
+                </button>
+                <button
+                    className="modal-btn modal-btn-primary"
+                    onClick={handleAddChannelSubmit}
+                    disabled={isCreatingChannel}
+                >
+                  {isCreatingChannel ? "Creating..." : "Create"}
+                </button>
+              </div>
+            </div>
+          </div>
+      )}
     </div>
   );
 }
