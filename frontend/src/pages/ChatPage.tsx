@@ -258,7 +258,7 @@ export default function ChatPage() {
     setIsCreatingServer(true);
 
     try {
-      const createdServer = await socketRef.current.createServer(trimmedName[0]);
+      const createdServer = await socketRef.current.createServer(trimmedName);
       await socketRef.current.createChannel(createdServer.server_id, "Main");
 
       await syncServersAndChannels(createdServer.server_id);
@@ -373,7 +373,7 @@ export default function ChatPage() {
                 title={`Server ${server.name} (ID ${server.id})`}
                 aria-label={`Server ${server.name}`}
               >
-                {server.name}
+                {server.name?.[0]?.toUpperCase() ?? "?"}
               </button>
             </li>
           ))}
