@@ -23,6 +23,7 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const socketRef = useRef<ChatSocket | null>(null);
   const selectedServerIdRef = useRef(0);
+  const chatContentRef = useRef<HTMLDivElement | null>(null);
 
   const [servers, setServers] = useState<Server[]>([]);
   const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -291,6 +292,12 @@ export default function ChatPage() {
   const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
   const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
 
+  useEffect(() => {
+    const el = chatContentRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [activeMessages.length, selectedChannelId]);
+
   return (
     <div className="chat-layout">
       <aside className="servers-sidebar">
@@ -332,7 +339,7 @@ export default function ChatPage() {
       </aside>
 
       <section className="chat-main">
-        <div className="chat-content">
+        <div className="chat-content" ref={chatContentRef}>
           <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Сервер"}</div>
           <div className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Канал не выбран"}</div>
           {error ? <div className="messages-empty">{error}</div> : null}
