@@ -141,7 +141,7 @@ export default function ChatPage() {
 
     const unsubscribeError = socket.onError((text) => {
       if (text.toLowerCase().includes("permission denied")) {
-        handleAuthFailure("Сессия истекла, войдите снова");
+        handleAuthFailure("Timed out, try again later");
         return;
       }
       setError(text);
@@ -156,9 +156,9 @@ export default function ChatPage() {
         const persistedSelectedServer = Number(localStorage.getItem(CHAT_SELECTED_SERVER_KEY) ?? "0");
         await syncServersAndChannels(persistedSelectedServer > 0 ? persistedSelectedServer : undefined);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Не удалось подключиться к чату";
-        if (message.toLowerCase().includes("требуется повторный вход") || message.toLowerCase().includes("permission denied")) {
-          handleAuthFailure("Сессия истекла, войдите снова");
+        const message = err instanceof Error ? err.message : "Failed to connect to chat";
+        if (message.toLowerCase().includes("re-entry required") || message.toLowerCase().includes("permission denied")) {
+          handleAuthFailure("Session expired, please log in again");
           return;
         }
         setError(message);
@@ -215,7 +215,7 @@ export default function ChatPage() {
         }));
         setLoadedChannels((prev) => ({ ...prev, [selectedChannelId]: true }));
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Не удалось загрузить сообщения";
+        const message = err instanceof Error ? err.message : "Failed to load messages";
         setError(message);
       }
     })();
@@ -265,7 +265,7 @@ export default function ChatPage() {
 
   async function handleAddChannel() {
     if (!socketRef.current || !isConnected || selectedServerId <= 0) {
-      setError("Нет подключения к чату");
+      setError("No connection to chat");
       return;
     }
 
@@ -277,7 +277,7 @@ export default function ChatPage() {
       await syncServersAndChannels(selectedServerId);
       setError("");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось создать канал";
+      const message = err instanceof Error ? err.message : "Failed to create channel";
       setError(message);
     }
   }
@@ -291,7 +291,7 @@ export default function ChatPage() {
       setError("");
       await socketRef.current.sendMessage(selectedChannelId, text);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось отправить сообщение";
+      const message = err instanceof Error ? err.message : "Failed to send message";
       setError(message);
     }
   }
@@ -309,7 +309,7 @@ export default function ChatPage() {
     try {
       await syncServersAndChannels(serverId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось загрузить каналы";
+      const message = err instanceof Error ? err.message : "Failed to load channels";
       setError(message);
     }
   }
@@ -355,7 +355,7 @@ export default function ChatPage() {
       <aside className="channels-sidebar">
         <div className="channels-header">
           <span>Сервер {currentServer?.name ?? "-"}</span>
-          <button className="channels-add-btn" onClick={handleAddChannel} aria-label="Добавить канал" title="Добавить канал">
+          <button className="channels-add-btn" onClick={handleAddChannel} aria-label="Create channel" title="Create channel">
             +
           </button>
         </div>
@@ -372,8 +372,8 @@ export default function ChatPage() {
 
       <section className="chat-main">
         <div className="chat-content" ref={chatContentRef}>
-          <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Сервер"}</div>
-          <div className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Канал не выбран"}</div>
+          <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</div>
+          <div className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}</div>
           {error ? <div className="messages-empty">{error}</div> : null}
           <MessageList messages={activeMessages} />
         </div>

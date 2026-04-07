@@ -44,12 +44,12 @@ export default function Login(): React.JSX.Element {
 
   const validateForm = (): boolean => {
     if (!formData.email || !formData.password) {
-      setError("Пожалуйста, заполните все поля");
+      setError("Please gap all fields.");
       return false;
     }
 
     if (formData.email.length < 5 || !formData.email.includes("@")) {
-      setError("Введите корректный email адрес");
+      setError("Please enter a valid email address.");
       return false;
     }
 
@@ -74,7 +74,7 @@ export default function Login(): React.JSX.Element {
       if (response.status === 200) {
         const accessToken = response.data.access_token ?? response.data.token;
         if (!accessToken) {
-          setError("Сервер не вернул токен доступа");
+          setError("The server did not return an access token.");
           return;
         }
 
@@ -92,7 +92,7 @@ export default function Login(): React.JSX.Element {
       const errorMessage =
         typeof axiosErr.response?.data === "string"
           ? axiosErr.response.data
-          : axiosErr.response?.data?.detail || "Ошибка при входе. Попробуйте позже.";
+          : axiosErr.response?.data?.detail || "Error logging in. Try again later.";
       setError(errorMessage);
       console.error("Login error:", err);
     } finally {
@@ -122,20 +122,20 @@ export default function Login(): React.JSX.Element {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Пароль</label>
+            <label htmlFor="password">Password</label>
             <input
               type="password"
               id="password"
               name="password"
               value={formData.password}
               onChange={handleChange}
-              placeholder="Введите пароль"
+              placeholder="Enter password"
               disabled={loading}
             />
           </div>
 
           <button type="submit" className="submit-button" disabled={loading}>
-            {loading ? "Вход..." : "Войти"}
+            {loading ? "Entering..." : "Login"}
           </button>
         </form>
 

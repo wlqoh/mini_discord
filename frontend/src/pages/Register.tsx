@@ -44,22 +44,22 @@ export default function Register(): React.JSX.Element {
       !formData.password ||
       !formData.confirmPassword
     ) {
-      setError("Пожалуйста, заполните все поля");
+      setError("Please gap all fields");
       return false;
     }
 
     if (formData.email.length < 5 || !formData.email.includes("@")) {
-      setError("Введите корректный email адрес");
+      setError("Please enter a valid email address.");
       return false;
     }
 
     if (formData.password.length < 6) {
-      setError("Пароль должен быть не менее 6 символов");
+      setError("The password must be at least 6 characters long.");
       return false;
     }
 
     if (formData.password !== formData.confirmPassword) {
-      setError("Пароли не совпадают");
+      setError("The passwords don't match");
       return false;
     }
 
@@ -84,13 +84,13 @@ export default function Register(): React.JSX.Element {
       });
 
       if (response.status === 200 || response.status === 201) {
-        alert("Регистрация успешна! Перенаправление на страницу входа...");
+        alert("Registration successful! Redirecting to login page...");
         navigate("/login");
       }
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } };
       const errorMessage =
-        axiosErr.response?.data?.detail || "Ошибка при регистрации. Попробуйте позже.";
+        axiosErr.response?.data?.detail || "Registration error. Try again later.";
       setError(errorMessage);
       console.error("Registration error:", err);
     } finally {
@@ -107,27 +107,27 @@ export default function Register(): React.JSX.Element {
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="firstName">Имя</label>
+            <label htmlFor="firstName">Firstname</label>
             <input
               type="text"
               id="firstName"
               name="firstName"
               value={formData.firstName}
               onChange={handleChange}
-              placeholder="Иван"
+              placeholder="Whalter"
               disabled={loading}
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="lastName">Фамилия</label>
+            <label htmlFor="lastName">Lastname</label>
             <input
               type="text"
               id="lastName"
               name="lastName"
               value={formData.lastName}
               onChange={handleChange}
-              placeholder="Иванов"
+              placeholder="White"
               disabled={loading}
             />
           </div>
@@ -146,38 +146,38 @@ export default function Register(): React.JSX.Element {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Пароль</label>
+            <label htmlFor="password">Password</label>
             <input
               type="password"
               id="password"
               name="password"
               value={formData.password}
               onChange={handleChange}
-              placeholder="Минимум 6 символов"
+              placeholder="Minimum 6 characters long."
               disabled={loading}
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="confirmPassword">Подтвердите пароль</label>
+            <label htmlFor="confirmPassword">Confirm your password</label>
             <input
               type="password"
               id="confirmPassword"
               name="confirmPassword"
               value={formData.confirmPassword}
               onChange={handleChange}
-              placeholder="Повторите пароль"
+              placeholder="Re-enter password"
               disabled={loading}
             />
           </div>
 
           <button type="submit" className="submit-button" disabled={loading}>
-            {loading ? "Регистрация..." : "Зарегистрироваться"}
+            {loading ? "Registration..." : "Sign Up"}
           </button>
         </form>
 
         <p className="auth-link">
-          Уже есть аккаунт? <Link to="/login">Войти</Link>
+          Already have an account? <Link to="/login">Enter</Link>
         </p>
       </div>
     </div>

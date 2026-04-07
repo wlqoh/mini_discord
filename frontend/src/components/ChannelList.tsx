@@ -11,7 +11,7 @@ export default function ChannelList({ channels, selectedChannelId, onSelect, onA
   return (
     <aside className="channel-sidebar">
       <div className="channel-divider" />
-      <button className="channel-add-btn" onClick={onAddChannel} aria-label="Добавить канал" title="Добавить канал">
+      <button className="channel-add-btn" onClick={onAddChannel} aria-label="Create channel" title="Create channel">
         +
       </button>
       <ul className="channel-list">

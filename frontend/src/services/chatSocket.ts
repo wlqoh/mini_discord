@@ -26,7 +26,7 @@ type ErrorListener = (message: string) => void;
 function resolveWsUrl(): string {
   const token = getValidAccessToken();
   if (!token) {
-    throw new Error("Требуется повторный вход в систему");
+    throw new Error("Re-login required");
   }
 
   if (import.meta.env.VITE_WS_URL) {
@@ -114,8 +114,8 @@ export class ChatSocket {
 
       const pending = this.pending;
       this.pending = null;
-      pending.reject(new Error("Таймаут ответа от чата"));
-      this.errorListeners.forEach((listener) => listener("Таймаут ответа от чата"));
+      pending.reject(new Error("Chat response timeout"));
+      this.errorListeners.forEach((listener) => listener("Chat response timeout"));
       this.flushQueue();
     }, ChatSocket.COMMAND_TIMEOUT_MS);
 
@@ -182,11 +182,11 @@ export class ChatSocket {
       };
       ws.onerror = () => {
         this.connectionPromise = null;
-        reject(new Error("Не удалось подключиться к чату"));
+        reject(new Error("Failed to connect to chat"));
       };
       ws.onclose = () => {
         this.connectionPromise = null;
-        this.rejectAllPending(new Error("Соединение WebSocket закрыто"));
+        this.rejectAllPending(new Error("The WebSocket connection was closed."));
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
@@ -208,7 +208,7 @@ export class ChatSocket {
         }
 
         if (parsed.event === "error") {
-          const text = parsed.error || "Ошибка чата";
+          const text = parsed.error || "Chat error";
           this.handleSocketError(text);
           return;
         }
@@ -232,7 +232,7 @@ export class ChatSocket {
 
   close(): void {
     this.connectionPromise = null;
-    this.rejectAllPending(new Error("Соединение WebSocket закрыто"));
+    this.rejectAllPending(new Error("The WebSocket connection was closed."));
     this.socket?.close();
     this.socket = null;
   }
@@ -252,7 +252,7 @@ export class ChatSocket {
     const payload = data as { channel_id?: number; server_id?: number; name?: string };
 
     if (typeof payload?.channel_id !== "number" || typeof payload?.server_id !== "number" || typeof payload?.name !== "string") {
-      throw new Error("Сервер вернул некорректный ответ при создании канала");
+      throw new Error("The server returned an invalid response when creating a channel.");
     }
 
     return {
@@ -267,7 +267,7 @@ export class ChatSocket {
     const payload = data as { server_id?: number; name?: string };
 
     if (typeof payload?.server_id !== "number" || typeof payload?.name !== "string") {
-      throw new Error("Сервер вернул некорректный ответ при создании сервера");
+      throw new Error("The server returned an invalid response while creating the server.");
     }
 
     return {
@@ -332,7 +332,7 @@ export class ChatSocket {
 
   private sendCommand(action: string, payload: Record<string, unknown>): Promise<unknown> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("WebSocket не подключен"));
+      return Promise.reject(new Error("WebSocket not connected"));
     }
 
     return new Promise((resolve, reject) => {
