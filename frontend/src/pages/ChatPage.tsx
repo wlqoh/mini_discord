@@ -11,13 +11,13 @@ const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
 
-function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
-  const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
-
-  if (!numericNames.length) return String(fallback);
-
-  return String(Math.max(...numericNames) + 1);
-}
+// function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
+//   const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
+//
+//   if (!numericNames.length) return String(fallback);
+//
+//   return String(Math.max(...numericNames) + 1);
+// }
 
 export default function ChatPage() {
   const navigate = useNavigate();
