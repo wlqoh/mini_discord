@@ -140,7 +140,7 @@ export default function Login(): React.JSX.Element {
         </form>
 
         <p className="auth-link">
-          Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
+          Don't have an account? <Link to="/register">Sign Up</Link>
         </p>
       </div>
     </div>

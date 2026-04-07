@@ -177,7 +177,7 @@ export default function Register(): React.JSX.Element {
         </form>
 
         <p className="auth-link">
-          Already have an account? <Link to="/login">Enter</Link>
+          Already have an account? <Link to="/login">Log In</Link>
         </p>
       </div>
     </div>

@@ -354,7 +354,7 @@ export default function ChatPage() {
 
       <aside className="channels-sidebar">
         <div className="channels-header">
-          <span>Сервер {currentServer?.name ?? "-"}</span>
+          <span>Server {currentServer?.name ?? "-"}</span>
           <button className="channels-add-btn" onClick={handleAddChannel} aria-label="Create channel" title="Create channel">
             +
           </button>
