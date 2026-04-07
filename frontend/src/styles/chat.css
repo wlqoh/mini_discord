@@ -9,9 +9,9 @@
     --text-muted: #8b93a4;
 
     --message-bg: #313338;
-    --message-author: #7dd3fc;
+    --message-author: #a61c12;
     --input-bg: #383a40;
-    --button-bg: #5865f2;
+    --button-bg: #b80606;
     --button-text: #ffffff;
 }
 
@@ -62,7 +62,7 @@
 }
 
 .server-dot.active {
-    outline: 3px solid #5865f2;
+    outline: 3px solid #b80606;
 }
 
 .channels-sidebar {
