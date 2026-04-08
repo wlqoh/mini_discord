@@ -138,6 +138,29 @@
     color: var(--text-primary);
 }
 
+.chat-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.profile-open-btn {
+    border: none;
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    background: #3a3c43;
+    color: var(--text-primary);
+    font-weight: 700;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.profile-open-btn:hover {
+    background: #4a4d55;
+}
+
 .chat-subheader {
     font-size: 14px;
     color: var(--text-secondary);
@@ -252,4 +275,30 @@
     background: var(--button-bg);
     color: var(--button-text);
     border-color: var(--button-bg);
+}
+
+.profile-modal-card {
+    width: min(460px, 94vw);
+}
+
+.profile-modal-list {
+    display: grid;
+    gap: 10px;
+}
+
+.profile-modal-row {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 10px;
+    align-items: baseline;
+}
+
+.profile-modal-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.profile-modal-value {
+    color: var(--text-primary);
+    word-break: break-word;
 }

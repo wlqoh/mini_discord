@@ -14,6 +14,11 @@ interface LoginResponse {
   access_token?: string;
   refresh_token?: string;
   token?: string;
+  user?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+  };
 }
 
 const CHAT_STORAGE_KEYS = [
@@ -79,6 +84,9 @@ export default function Login(): React.JSX.Element {
         }
 
         localStorage.setItem("token", accessToken);
+        if (response.data.user) {
+          localStorage.setItem("current_user", JSON.stringify(response.data.user));
+        }
         if (response.data.refresh_token) {
           localStorage.setItem("refresh_token", response.data.refresh_token);
         }
