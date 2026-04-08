@@ -43,8 +43,8 @@ export default function ChatPage() {
     const [isCreateChannelModalOpen, setIsCreateChannelModalOpen] = useState(false);
     const [newChannelName, setNewChannelName] = useState("");
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-    const [currentUserProfile] = useState<CurrentUserProfile | null>(() => getCurrentUserProfile());
-    const [currentUserId] = useState<number | null>(() => getCurrentUserId())
+    const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
+    const currentUserId: number | null = getCurrentUserId();
 
 
     const handleAuthFailure = useCallback(

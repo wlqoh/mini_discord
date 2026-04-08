@@ -126,6 +126,17 @@ func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
 	h.mu.RUnlock()
 }
 
+func (h *Hub) pushToAllUsers(event *types.WsEvent) {
+	h.mu.RLock()
+	for _, cl := range h.clientsByUser {
+		select {
+		case cl.Outbound <- event:
+		default:
+		}
+	}
+	h.mu.RUnlock()
+}
+
 func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 	h.mu.RLock()
 	current, ok := h.clientsByUser[cl.UserID]
@@ -270,16 +281,6 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-	if err != nil {
-		h.pushError(req.client, "failed to check channel access")
-		return
-	}
-	if !canAccess {
-		h.pushError(req.client, "access denied")
-		return
-	}
-
 	author, err := h.storage.GetUserByID(ctx, req.client.UserID)
 	if err != nil {
 		h.pushError(req.client, "failed to resolve author")
@@ -299,14 +300,8 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	memberIDs, err := h.storage.ListChannelMemberUserIDs(ctx, payload.ChannelID)
-	if err != nil {
-		h.pushError(req.client, "failed to resolve recipients")
-		return
-	}
-
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
-	h.pushToUsers(memberIDs, event)
+	h.pushToAllUsers(event)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
@@ -320,16 +315,6 @@ func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
 	}
 	if payload.ChannelID <= 0 {
 		h.pushError(req.client, "channel_id is required")
-		return
-	}
-
-	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-	if err != nil {
-		h.pushError(req.client, "failed to check channel access")
-		return
-	}
-	if !canAccess {
-		h.pushError(req.client, "access denied")
 		return
 	}
 
@@ -394,16 +379,6 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 
 	if payload.ServerID <= 0 {
 		h.pushError(req.client, "server_id is required")
-		return
-	}
-
-	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
-	if err != nil {
-		h.pushError(req.client, "failed to check server membership")
-		return
-	}
-	if !isMember {
-		h.pushError(req.client, "access denied")
 		return
 	}
 

@@ -276,12 +276,10 @@ func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.S
 	query := `
 		SELECT s.id, s.name, s.owner_id
 		FROM servers s
-		JOIN server_members sm ON sm.server_id = s.id
-		WHERE sm.user_id = $1
 		ORDER BY s.id
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, userID)
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}

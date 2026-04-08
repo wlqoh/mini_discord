@@ -136,7 +136,7 @@ export function getCurrentUserProfile(): CurrentUserProfile | null {
 export function getCurrentUserId(): number | null {
   const token = getValidAccessToken();
   if (!token || !isJwtLike(token)) {
-    return null
+    return null;
   }
 
   try {
@@ -147,8 +147,16 @@ export function getCurrentUserId(): number | null {
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
     const decoded = window.atob(padded);
     const parsed = JSON.parse(decoded) as { user_id?: unknown };
+    if (typeof parsed.user_id === "number") {
+      return parsed.user_id;
+    }
 
-    return typeof parsed.user_id === "number" ? parsed.user_id : null;
+    if (typeof parsed.user_id === "string") {
+      const asNumber = Number(parsed.user_id);
+      return Number.isInteger(asNumber) && asNumber > 0 ? asNumber : null;
+    }
+
+    return null;
   } catch {
     return null;
   }
