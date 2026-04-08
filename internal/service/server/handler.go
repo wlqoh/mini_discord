@@ -25,9 +25,10 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 }
 
 func (h *Handler) handleSocket(c *websocket.Conn) {
-	clientID := c.Locals("user_id").(int)
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
 
-	if clientID <= 0 {
+	if !ok || clientID <= 0 {
 		_ = c.WriteJSON(map[string]string{"error": "permission denied"})
 		_ = c.Close()
 		return

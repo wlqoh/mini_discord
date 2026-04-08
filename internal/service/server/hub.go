@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
 type Hub struct {
-	storage       types.ServerStorage
-	mu            sync.RWMutex
-	clientsByUser map[int]*Client
+	storage              types.ServerStorage
+	mu                   sync.RWMutex
+	clientsByUser        map[int]*Client
+	createServerLimiter  *ratelimit.TokenBucket
+	createChannelLimiter *ratelimit.TokenBucket
+	sendMessageLimiter   *ratelimit.TokenBucket
 
 	log *slog.Logger
 
@@ -30,13 +35,22 @@ type wsCommandRequest struct {
 
 func NewHub(storage types.ServerStorage, log *slog.Logger) *Hub {
 	return &Hub{
-		storage:       storage,
-		clientsByUser: make(map[int]*Client),
-		log:           log,
-		Register:      make(chan *Client),
-		Unregister:    make(chan *Client),
-		Commands:      make(chan wsCommandRequest, 64),
+		storage:              storage,
+		clientsByUser:        make(map[int]*Client),
+		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
+		createChannelLimiter: ratelimit.NewTokenBucket(5.0/60.0, 5.0),
+		sendMessageLimiter:   ratelimit.NewTokenBucket(1.0, 1.0),
+		log:                  log,
+		Register:             make(chan *Client),
+		Unregister:           make(chan *Client),
+		Commands:             make(chan wsCommandRequest, 64),
 	}
+}
+
+func (h *Hub) Close() {
+	h.createServerLimiter.Close()
+	h.createChannelLimiter.Close()
+	h.sendMessageLimiter.Close()
 }
 
 func (h *Hub) Run() {
@@ -131,6 +145,11 @@ func (h *Hub) pushError(cl *Client, message string) {
 }
 
 func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.createServerLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for create_server")
+		return
+	}
+
 	var payload types.WsCreateServerRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid create_server payload")
@@ -192,6 +211,11 @@ func joinServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 }
 
 func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.createChannelLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for send_message")
+		return
+	}
+
 	var payload types.WsCreateChannelRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid create_channel payload")
@@ -230,6 +254,11 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 }
 
 func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for create_channel")
+		return
+	}
+
 	var payload types.WsSendMessageRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid send_message payload")
@@ -365,6 +394,16 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 
 	if payload.ServerID <= 0 {
 		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to check server membership")
+		return
+	}
+	if !isMember {
+		h.pushError(req.client, "access denied")
 		return
 	}
 
