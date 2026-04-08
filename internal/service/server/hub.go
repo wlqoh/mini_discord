@@ -397,16 +397,6 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
-	if err != nil {
-		h.pushError(req.client, "failed to check server membership")
-		return
-	}
-	if !isMember {
-		h.pushError(req.client, "access denied")
-		return
-	}
-
 	channels, err := h.storage.GetServerChannels(ctx, payload.ServerID)
 	if err != nil {
 		h.pushError(req.client, "failed to get server_channels")
