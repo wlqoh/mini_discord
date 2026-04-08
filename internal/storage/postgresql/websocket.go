@@ -59,14 +59,13 @@ func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name string
 }
 
 func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error) {
+	_ = userID
+
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1
-			FROM server_members sm
-			WHERE sm.user_id = $1 AND sm.server_id = $2
+			SELECT 1 FROM servers WHERE id = $1
 		)`,
-		userID,
 		serverID,
 	).Scan(&exists)
 
@@ -74,28 +73,35 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 }
 
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
+	_ = userID
+
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1
-			FROM channels c
-			JOIN server_members sm ON sm.server_id = c.server_id
-			WHERE c.id = $1 AND sm.user_id = $2
+			SELECT 1 FROM channels WHERE id = $1
 		)`,
 		channelID,
-		userID,
 	).Scan(&exists)
 
 	return exists, err
 }
 
 func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT sm.user_id
-		FROM channels c
-		JOIN server_members sm ON sm.server_id = c.server_id
-		WHERE c.id = $1
-	`, channelID)
+	var channelExists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM channels WHERE id = $1
+		)`,
+		channelID,
+	).Scan(&channelExists)
+	if err != nil {
+		return nil, err
+	}
+	if !channelExists {
+		return []int{}, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
 	if err != nil {
 		return nil, err
 	}
@@ -273,10 +279,12 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 }
 
 func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
+	_ = userID
+
 	query := `
-		SELECT s.id, s.name, s.owner_id
-		FROM servers s
-		ORDER BY s.id
+		SELECT id, name, owner_id
+		FROM servers
+		ORDER BY id
 	`
 
 	rows, err := s.db.QueryContext(ctx, query)
