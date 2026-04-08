@@ -3,7 +3,7 @@ import {useNavigate} from "react-router-dom";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
-import {clearAuthStorage, getCurrentUserProfile} from "../services/authToken.ts";
+import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
 import type {ChannelsByServer, Message, MessagesByChannel, Server} from "../types/chat.ts";
 import "../styles/chat.css";
@@ -44,6 +44,7 @@ export default function ChatPage() {
     const [newChannelName, setNewChannelName] = useState("");
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
     const [currentUserProfile] = useState<CurrentUserProfile | null>(() => getCurrentUserProfile());
+    const [currentUserId] = useState<number | null>(() => getCurrentUserId())
 
 
     const handleAuthFailure = useCallback(
@@ -449,7 +450,7 @@ export default function ChatPage() {
                     <div
                         className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}</div>
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList messages={activeMessages}/>
+                    <MessageList messages={activeMessages} currentUserId={currentUserId} />
                 </div>
                 <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0}/>
             </section>

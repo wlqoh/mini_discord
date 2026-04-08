@@ -133,3 +133,24 @@ export function getCurrentUserProfile(): CurrentUserProfile | null {
   return fromToken;
 }
 
+export function getCurrentUserId(): number | null {
+  const token = getValidAccessToken();
+  if (!token || !isJwtLike(token)) {
+    return null
+  }
+
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = window.atob(padded);
+    const parsed = JSON.parse(decoded) as { user_id?: unknown };
+
+    return typeof parsed.user_id === "number" ? parsed.user_id : null;
+  } catch {
+    return null;
+  }
+}
+
