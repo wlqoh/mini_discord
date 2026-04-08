@@ -168,12 +168,37 @@
     margin-bottom: 14px;
 }
 
-.messages-list { display: grid; gap: 10px; }
+.messages-list {
+    display: grid;
+    flex-direction: column;
+    gap: 10px; }
+
+.message-row {
+    display: flex;
+    width: 100%;
+}
+
+.message-row.own {
+    justify-content: flex-end;
+}
+
+.message-row.other {
+    justify-content: flex-start;
+}
 
 .message-item {
     background: var(--message-bg);
     border-radius: 10px;
     padding: 10px 12px;
+    max-width: min(72%, 760px);
+}
+
+.message-item.own {
+    background: #3a3c43;
+}
+
+.message-item.other {
+    background: var(--message-bg);
 }
 
 .message-author { font-size: 12px; opacity: 0.85; color: var(--message-author); }
