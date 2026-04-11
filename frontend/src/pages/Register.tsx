@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { extractApiError } from "../services/apiError";
 
 import API from "../api";
 import "../index.css";
@@ -88,10 +89,7 @@ export default function Register(): React.JSX.Element {
         navigate("/login");
       }
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } } };
-      const errorMessage =
-        axiosErr.response?.data?.detail || "Registration error. Try again later.";
-      setError(errorMessage);
+      setError(extractApiError(err, "Registration error. Try again later"));
       console.error("Registration error:", err);
     } finally {
       setLoading(false);

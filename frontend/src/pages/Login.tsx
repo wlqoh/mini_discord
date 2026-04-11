@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { extractApiError } from "../services/apiError";
 
 import API from "../api";
 import "../index.css";
@@ -96,12 +97,7 @@ export default function Login(): React.JSX.Element {
         navigate("/chat", { replace: true });
       }
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } | string } };
-      const errorMessage =
-        typeof axiosErr.response?.data === "string"
-          ? axiosErr.response.data
-          : axiosErr.response?.data?.detail || "Error logging in. Try again later.";
-      setError(errorMessage);
+      setError(extractApiError(err, "Error logging in. Try again later."));
       console.error("Login error:", err);
     } finally {
       setLoading(false);
