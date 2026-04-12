@@ -124,13 +124,6 @@ docker compose down
 docker compose up -d --build
 ```
 
-### Production routing notes
-
-- Frontend container is published only to localhost: `127.0.0.1:8081:80`.
-- Public traffic should go through host Nginx.
-- API requests are expected under `/api/*`.
-- For backward compatibility, `/api/v1/auth/*` is rewritten to `/api/v1/*` in `frontend/nginx.conf`.
-
 ## Voice/Video channels (WebRTC)
 
 - Calls use the same websocket endpoint: `/api/v1/server/ws`.
@@ -147,6 +140,10 @@ docker compose up -d --build
 ```bash
 VITE_API_URL=/api/v1
 VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
+# Recommended for production NAT traversal
+VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478,turns:turn.your-domain.com:5349
+VITE_WEBRTC_TURN_USERNAME=your-turn-username
+VITE_WEBRTC_TURN_CREDENTIAL=your-turn-password
 ```
 
 Optional websocket override:

@@ -16,6 +16,7 @@ type PeerState = {
   pc: RTCPeerConnection;
   stream: MediaStream;
   user: VoiceParticipant;
+  pendingCandidates: RTCIceCandidateInit[];
 };
 
 function formatMediaError(err: unknown): string {
@@ -39,22 +40,47 @@ function formatMediaError(err: unknown): string {
   }
 }
 
-function buildIceServers(): RTCIceServer[] {
-  const raw = (import.meta.env.VITE_WEBRTC_STUN_URLS as string | undefined)?.trim();
-  if (!raw) {
-    return [{ urls: ["stun:stun.l.google.com:19302"] }];
-  }
+function envVar(name: string): string {
+  const meta = import.meta as ImportMeta & {
+    env?: Record<string, string | undefined>;
+  };
 
-  const urls = raw
+  return (meta.env?.[name] || "").trim();
+}
+
+function buildIceServers(): RTCIceServer[] {
+  const rawStun = envVar("VITE_WEBRTC_STUN_URLS");
+  const stunUrls = (rawStun || "stun:stun.l.google.com:19302")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 
-  if (!urls.length) {
-    return [{ urls: ["stun:stun.l.google.com:19302"] }];
+  const iceServers: RTCIceServer[] = [];
+
+  if (stunUrls.length) {
+    iceServers.push({ urls: stunUrls });
   }
 
-  return [{ urls }];
+  const rawTurn = envVar("VITE_WEBRTC_TURN_URLS");
+  const turnUsername = envVar("VITE_WEBRTC_TURN_USERNAME");
+  const turnCredential = envVar("VITE_WEBRTC_TURN_CREDENTIAL");
+
+  if (rawTurn && turnUsername && turnCredential) {
+    const turnUrls = rawTurn
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (turnUrls.length) {
+      iceServers.push({
+        urls: turnUrls,
+        username: turnUsername,
+        credential: turnCredential,
+      });
+    }
+  }
+
+  return iceServers.length ? iceServers : [{ urls: ["stun:stun.l.google.com:19302"] }];
 }
 
 export class CallClient {
@@ -229,7 +255,7 @@ export class CallClient {
       pc.addTrack(track, this.localStream as MediaStream);
     });
 
-    this.peers.set(user.user_id, { pc, stream: remoteStream, user });
+    this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
 
     if (initiateOffer) {
       await this.createAndSendOffer(user.user_id);
@@ -295,6 +321,10 @@ export class CallClient {
     this.participants.set(event.from_user_id, participant);
 
     const pc = await this.ensurePeer(participant, false);
+    const peer = this.peers.get(event.from_user_id);
+    if (!peer) {
+      return;
+    }
 
     try {
       if (event.signal_type === "offer") {
@@ -302,6 +332,7 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
+        await this.flushPendingCandidates(peer);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -319,6 +350,7 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
+        await this.flushPendingCandidates(peer);
         return;
       }
 
@@ -326,13 +358,33 @@ export class CallClient {
         return;
       }
 
-      await pc.addIceCandidate({
+      const candidate: RTCIceCandidateInit = {
         candidate: event.candidate,
         sdpMid: event.sdp_mid,
         sdpMLineIndex: event.sdp_mline_index,
-      });
+      };
+
+      if (!pc.remoteDescription) {
+        peer.pendingCandidates.push(candidate);
+        return;
+      }
+
+      await pc.addIceCandidate(candidate);
     } catch {
       this.onError("Failed to handle WebRTC signal");
+    }
+  }
+
+  private async flushPendingCandidates(peer: PeerState): Promise<void> {
+    if (!peer.pendingCandidates.length) {
+      return;
+    }
+
+    const pending = [...peer.pendingCandidates];
+    peer.pendingCandidates.length = 0;
+
+    for (const candidate of pending) {
+      await peer.pc.addIceCandidate(candidate);
     }
   }
 }
