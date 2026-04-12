@@ -51,6 +51,12 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_WEBRTC_STUN_URLS: ${VITE_WEBRTC_STUN_URLS:-stun:stun.l.google.com:19302}
+        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-}
+        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-}
+        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-}
+        VITE_WEBRTC_FORCE_RELAY: ${VITE_WEBRTC_FORCE_RELAY:-false}
     restart: unless-stopped
     depends_on:
       - backend

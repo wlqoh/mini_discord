@@ -147,7 +147,20 @@ docker compose up -d --build
 ```bash
 VITE_API_URL=/api/v1
 VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
+VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478?transport=udp,turns:turn.your-domain.com:5349?transport=tcp
+VITE_WEBRTC_TURN_USERNAME=mini_discord
+VITE_WEBRTC_TURN_CREDENTIAL=change-me
+# optional debug switch (forces TURN relay only)
+VITE_WEBRTC_FORCE_RELAY=false
 ```
+
+For docker-compose production build, export the same `VITE_*` variables in shell (or `.env`) before running:
+
+```bash
+docker compose up -d --build
+```
+
+Example file: `frontend/.env.production.example`.
 
 Optional websocket override:
 

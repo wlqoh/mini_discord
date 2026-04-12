@@ -39,22 +39,48 @@ function formatMediaError(err: unknown): string {
   }
 }
 
-function buildIceServers(): RTCIceServer[] {
-  const raw = (import.meta.env.VITE_WEBRTC_STUN_URLS as string | undefined)?.trim();
-  if (!raw) {
-    return [{ urls: ["stun:stun.l.google.com:19302"] }];
-  }
-
-  const urls = raw
+function parseUrls(raw: string | undefined): string[] {
+  return (raw ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
 
-  if (!urls.length) {
-    return [{ urls: ["stun:stun.l.google.com:19302"] }];
+function isTruthy(raw: string | undefined): boolean {
+  const normalized = (raw ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function buildIceServers(): RTCIceServer[] {
+  const stunUrls = parseUrls(import.meta.env.VITE_WEBRTC_STUN_URLS as string | undefined);
+  const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
+
+  const servers: RTCIceServer[] = [];
+
+  if (stunUrls.length) {
+    servers.push({ urls: stunUrls });
+  } else {
+    servers.push({ urls: ["stun:stun.l.google.com:19302"] });
   }
 
-  return [{ urls }];
+  if (turnUrls.length) {
+    const username = (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
+    const credential = (import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL as string | undefined)?.trim();
+
+    if (username && credential) {
+      servers.push({
+        urls: turnUrls,
+        username,
+        credential,
+      });
+    }
+  }
+
+  return servers;
+}
+
+function buildIceTransportPolicy(): RTCIceTransportPolicy {
+  return isTruthy(import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined) ? "relay" : "all";
 }
 
 export class CallClient {
@@ -202,7 +228,10 @@ export class CallClient {
     }
 
     const remoteStream = new MediaStream();
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      iceTransportPolicy: buildIceTransportPolicy(),
+    });
 
     pc.ontrack = (event) => {
       event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
