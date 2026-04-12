@@ -17,6 +17,21 @@ services:
       timeout: 3s
       retries: 5
 
+  migrate:
+    image: postgres:17-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: "123"
+    volumes:
+      - ./sql/init:/migrations:ro
+    command: >
+      sh -c "
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/01_users.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/02_chat_schema.sql
+      "
+
   backend:
     build:
       context: .
@@ -27,6 +42,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8080:8080"
 

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { extractApiError } from "../services/apiError";
 
 import API from "../api";
 import "../index.css";
@@ -9,6 +10,23 @@ interface LoginFormData {
   email: string;
   password: string;
 }
+
+interface LoginResponse {
+  access_token?: string;
+  refresh_token?: string;
+  token?: string;
+  user?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+  };
+}
+
+const CHAT_STORAGE_KEYS = [
+  "chat_servers",
+  "chat_channels_by_server",
+  "chat_selected_server_id",
+];
 
 export default function Login(): React.JSX.Element {
   const navigate = useNavigate();
@@ -32,12 +50,12 @@ export default function Login(): React.JSX.Element {
 
   const validateForm = (): boolean => {
     if (!formData.email || !formData.password) {
-      setError("Пожалуйста, заполните все поля");
+      setError("Please gap all fields.");
       return false;
     }
 
     if (formData.email.length < 5 || !formData.email.includes("@")) {
-      setError("Введите корректный email адрес");
+      setError("Please enter a valid email address.");
       return false;
     }
 
@@ -54,20 +72,32 @@ export default function Login(): React.JSX.Element {
     setLoading(true);
 
     try {
-      const response = await API.post("/login", {
+      const response = await API.post<LoginResponse>("/login", {
         email: formData.email,
         password: formData.password,
       });
 
       if (response.status === 200) {
-        localStorage.setItem("token", response.data.token);
-        navigate("/");
+        const accessToken = response.data.access_token ?? response.data.token;
+        if (!accessToken) {
+          setError("The server did not return an access token.");
+          return;
+        }
+
+        localStorage.setItem("token", accessToken);
+        if (response.data.user) {
+          localStorage.setItem("current_user", JSON.stringify(response.data.user));
+        }
+        if (response.data.refresh_token) {
+          localStorage.setItem("refresh_token", response.data.refresh_token);
+        }
+
+        CHAT_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+
+        navigate("/chat", { replace: true });
       }
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { detail?: string } } };
-      const errorMessage =
-        axiosErr.response?.data?.detail || "Ошибка при входе. Попробуйте позже.";
-      setError(errorMessage);
+      setError(extractApiError(err, "Error logging in. Try again later."));
       console.error("Login error:", err);
     } finally {
       setLoading(false);
@@ -96,25 +126,25 @@ export default function Login(): React.JSX.Element {
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Пароль</label>
+            <label htmlFor="password">Password</label>
             <input
               type="password"
               id="password"
               name="password"
               value={formData.password}
               onChange={handleChange}
-              placeholder="Введите пароль"
+              placeholder="Enter password"
               disabled={loading}
             />
           </div>
 
           <button type="submit" className="submit-button" disabled={loading}>
-            {loading ? "Вход..." : "Войти"}
+            {loading ? "Entering..." : "Login"}
           </button>
         </form>
 
         <p className="auth-link">
-          Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
+          Don't have an account? <Link to="/register">Sign Up</Link>
         </p>
       </div>
     </div>

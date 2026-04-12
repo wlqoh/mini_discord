@@ -4,17 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
 type Hub struct {
-	storage       types.ServerStorage
-	mu            sync.RWMutex
-	clientsByUser map[int]*Client
+	storage              types.ServerStorage
+	mu                   sync.RWMutex
+	clientsByUser        map[int]*Client
+	createServerLimiter  *ratelimit.TokenBucket
+	createChannelLimiter *ratelimit.TokenBucket
+	sendMessageLimiter   *ratelimit.TokenBucket
 
 	log *slog.Logger
 
@@ -30,13 +35,22 @@ type wsCommandRequest struct {
 
 func NewHub(storage types.ServerStorage, log *slog.Logger) *Hub {
 	return &Hub{
-		storage:       storage,
-		clientsByUser: make(map[int]*Client),
-		log:           log,
-		Register:      make(chan *Client),
-		Unregister:    make(chan *Client),
-		Commands:      make(chan wsCommandRequest, 64),
+		storage:              storage,
+		clientsByUser:        make(map[int]*Client),
+		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
+		createChannelLimiter: ratelimit.NewTokenBucket(5.0/60.0, 5.0),
+		sendMessageLimiter:   ratelimit.NewTokenBucket(1.0, 1.0),
+		log:                  log,
+		Register:             make(chan *Client),
+		Unregister:           make(chan *Client),
+		Commands:             make(chan wsCommandRequest, 64),
 	}
+}
+
+func (h *Hub) Close() {
+	h.createServerLimiter.Close()
+	h.createChannelLimiter.Close()
+	h.sendMessageLimiter.Close()
 }
 
 func (h *Hub) Run() {
@@ -79,197 +93,20 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 
 	switch req.command.Action {
 	case types.WsActionCreateServer:
-		var payload types.WsCreateServerRequest
-		if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-			h.pushError(req.client, "invalid create_server payload")
-			return
-		}
-		payload.Name = strings.TrimSpace(payload.Name)
-		if payload.Name == "" {
-			h.pushError(req.client, "server name is required")
-			return
-		}
-
-		serverID, err := h.storage.CreateServer(ctx, types.Server{Name: payload.Name, OwnerID: req.client.UserID})
-		if err != nil {
-			h.pushError(req.client, "failed to create server")
-			return
-		}
-
-		h.pushEvent(req.client, &types.WsEvent{
-			Event: types.WsEventAck,
-			Data: map[string]any{
-				"server_id": serverID,
-				"name":      payload.Name,
-			},
-		})
+		createServer(h, req, ctx)
 	case types.WsActionJoinServer:
-		var payload types.WsJoinServerRequest
-		if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-			h.pushError(req.client, "invalid join_server payload")
-			return
-		}
-		if payload.ServerID <= 0 {
-			h.pushError(req.client, "server_id is required")
-			return
-		}
-
-		isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
-		if err != nil {
-			h.pushError(req.client, "failed to check server membership")
-			return
-		}
-		if isMember {
-			h.pushError(req.client, "already a member")
-			return
-		}
-
-		if err := h.storage.AddMemberToServer(ctx, req.client.UserID, payload.ServerID); err != nil {
-			h.pushError(req.client, "failed to join server")
-			return
-		}
-
-		h.pushEvent(req.client, &types.WsEvent{
-			Event: types.WsEventAck,
-			Data: map[string]any{
-				"server_id": payload.ServerID,
-			},
-		})
+		joinServer(h, req, ctx)
 	case types.WsActionCreateChannel:
-		var payload types.WsCreateChannelRequest
-		if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-			h.pushError(req.client, "invalid create_channel payload")
-			return
-		}
-		payload.Name = strings.TrimSpace(payload.Name)
-		if payload.ServerID <= 0 || payload.Name == "" {
-			h.pushError(req.client, "server_id and name are required")
-			return
-		}
-
-		isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
-		if err != nil {
-			h.pushError(req.client, "failed to check server membership")
-			return
-		}
-		if !isMember {
-			h.pushError(req.client, "access denied")
-			return
-		}
-
-		channelID, err := h.storage.CreateChannel(ctx, payload.ServerID, payload.Name)
-		if err != nil {
-			h.pushError(req.client, "failed to create channel")
-			return
-		}
-
-		h.pushEvent(req.client, &types.WsEvent{
-			Event: types.WsEventAck,
-			Data: map[string]any{
-				"channel_id": channelID,
-				"server_id":  payload.ServerID,
-				"name":       payload.Name,
-			},
-		})
+		createChannel(h, req, ctx)
 	case types.WsActionSendMessage:
-		var payload types.WsSendMessageRequest
-		if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-			h.pushError(req.client, "invalid send_message payload")
-			return
-		}
-		payload.Content = strings.TrimSpace(payload.Content)
-		if payload.ChannelID <= 0 || payload.Content == "" {
-			h.pushError(req.client, "channel_id and content are required")
-			return
-		}
-
-		canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-		if err != nil {
-			h.pushError(req.client, "failed to check channel access")
-			return
-		}
-		if !canAccess {
-			h.pushError(req.client, "access denied")
-			return
-		}
-
-		msg := types.WsMessage{
-			ChannelID: payload.ChannelID,
-			AuthorID:  req.client.UserID,
-			Content:   payload.Content,
-			CreatedAt: time.Now().UTC(),
-		}
-		if err := h.storage.SaveMessage(ctx, msg); err != nil {
-			h.pushError(req.client, "failed to save message")
-			return
-		}
-
-		memberIDs, err := h.storage.ListChannelMemberUserIDs(ctx, payload.ChannelID)
-		if err != nil {
-			h.pushError(req.client, "failed to resolve recipients")
-			return
-		}
-
-		event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
-		h.pushToUsers(memberIDs, event)
-
-		h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+		sendMessage(h, req, ctx)
 	case types.WsActionGetMessages:
-		var payload types.WsGetMessagesRequest
+		getMessages(h, req, ctx)
+	case types.WsActionGetServers:
+		getServers(h, req, ctx)
+	case types.WsActionGetServerChannels:
+		getServerChannels(h, req, ctx)
 
-		if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-			h.pushError(req.client, "invalid get_messages payload")
-			return
-		}
-		if payload.ChannelID <= 0 {
-			h.pushError(req.client, "channel_id is required")
-			return
-		}
-
-		canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-		if err != nil {
-			h.pushError(req.client, "failed to check channel access")
-			return
-		}
-		if !canAccess {
-			h.pushError(req.client, "access denied")
-			return
-		}
-
-		cursor, err := types.DecodeWsMessageCursor(payload.Cursor)
-		if err != nil {
-			h.pushError(req.client, "invalid cursor")
-			return
-		}
-		if cursor != nil && cursor.ChannelID != payload.ChannelID {
-			h.pushError(req.client, "cursor channel mismatch")
-			return
-		}
-
-		messages, nextCursor, hasMore, err := h.storage.GetMessages(ctx, payload.ChannelID, payload.Limit, cursor)
-		if err != nil {
-			h.pushError(req.client, "failed to get messages")
-			return
-		}
-
-		var nextCursorRaw string
-		if nextCursor != nil {
-			nextCursorRaw, err = types.EncodeWsMessageCursor(*nextCursor)
-			if err != nil {
-				h.pushError(req.client, "failed to encode cursor")
-				return
-			}
-		}
-
-		h.pushEvent(req.client, &types.WsEvent{
-			Event: types.WsEventAck,
-			Data: map[string]any{
-				"channel_id":  payload.ChannelID,
-				"messages":    messages,
-				"next_cursor": nextCursorRaw,
-				"has_more":    hasMore,
-			},
-		})
 	default:
 		h.pushError(req.client, "unknown action")
 	}
@@ -285,6 +122,17 @@ func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
 			}
 		}
 
+	}
+	h.mu.RUnlock()
+}
+
+func (h *Hub) pushToAllUsers(event *types.WsEvent) {
+	h.mu.RLock()
+	for _, cl := range h.clientsByUser {
+		select {
+		case cl.Outbound <- event:
+		default:
+		}
 	}
 	h.mu.RUnlock()
 }
@@ -305,4 +153,245 @@ func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 
 func (h *Hub) pushError(cl *Client, message string) {
 	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventError, Error: message})
+}
+
+func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.createServerLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for create_server")
+		return
+	}
+
+	var payload types.WsCreateServerRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid create_server payload")
+		return
+	}
+	payload.Name = strings.TrimSpace(payload.Name)
+	if payload.Name == "" {
+		h.pushError(req.client, "server name is required")
+		return
+	}
+
+	serverID, err := h.storage.CreateServer(ctx, types.Server{Name: payload.Name, OwnerID: req.client.UserID})
+	if err != nil {
+		h.pushError(req.client, "failed to create server")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"server_id": serverID,
+			"name":      payload.Name,
+		},
+	})
+}
+
+func joinServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsJoinServerRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid join_server payload")
+		return
+	}
+	if payload.ServerID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to check server membership")
+		return
+	}
+	if isMember {
+		h.pushError(req.client, "already a member")
+		return
+	}
+
+	if err := h.storage.AddMemberToServer(ctx, req.client.UserID, payload.ServerID); err != nil {
+		h.pushError(req.client, "failed to join server")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"server_id": payload.ServerID,
+		},
+	})
+}
+
+func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.createChannelLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for send_message")
+		return
+	}
+
+	var payload types.WsCreateChannelRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid create_channel payload")
+		return
+	}
+	payload.Name = strings.TrimSpace(payload.Name)
+	if payload.ServerID <= 0 || payload.Name == "" {
+		h.pushError(req.client, "server_id and name are required")
+		return
+	}
+
+	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to check server membership")
+		return
+	}
+	if !isMember {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	channelID, err := h.storage.CreateChannel(ctx, payload.ServerID, payload.Name)
+	if err != nil {
+		h.pushError(req.client, "failed to create channel")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"channel_id": channelID,
+			"server_id":  payload.ServerID,
+			"name":       payload.Name,
+		},
+	})
+}
+
+func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
+	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for create_channel")
+		return
+	}
+
+	var payload types.WsSendMessageRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid send_message payload")
+		return
+	}
+	payload.Content = strings.TrimSpace(payload.Content)
+	if payload.ChannelID <= 0 || payload.Content == "" {
+		h.pushError(req.client, "channel_id and content are required")
+		return
+	}
+
+	author, err := h.storage.GetUserByID(ctx, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve author")
+		return
+	}
+
+	msg := types.WsMessage{
+		ChannelID:       payload.ChannelID,
+		AuthorID:        req.client.UserID,
+		AuthorFirstName: author.FirstName,
+		AuthorLastName:  author.LastName,
+		Content:         payload.Content,
+		CreatedAt:       time.Now().UTC(),
+	}
+	if err := h.storage.SaveMessage(ctx, msg); err != nil {
+		h.pushError(req.client, "failed to save message")
+		return
+	}
+
+	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
+	h.pushToAllUsers(event)
+
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsGetMessagesRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid get_messages payload")
+		return
+	}
+	if payload.ChannelID <= 0 {
+		h.pushError(req.client, "channel_id is required")
+		return
+	}
+
+	cursor, err := types.DecodeWsMessageCursor(payload.Cursor)
+	if err != nil {
+		h.pushError(req.client, "invalid cursor")
+		return
+	}
+	if cursor != nil && cursor.ChannelID != payload.ChannelID {
+		h.pushError(req.client, "cursor channel mismatch")
+		return
+	}
+
+	messages, nextCursor, hasMore, err := h.storage.GetMessages(ctx, payload.ChannelID, payload.Limit, cursor)
+	if err != nil {
+		h.pushError(req.client, "failed to get messages")
+		return
+	}
+
+	var nextCursorRaw string
+	if nextCursor != nil {
+		nextCursorRaw, err = types.EncodeWsMessageCursor(*nextCursor)
+		if err != nil {
+			h.pushError(req.client, "failed to encode cursor")
+			return
+		}
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"channel_id":  payload.ChannelID,
+			"messages":    messages,
+			"next_cursor": nextCursorRaw,
+			"has_more":    hasMore,
+		},
+	})
+}
+
+func getServers(h *Hub, req wsCommandRequest, ctx context.Context) {
+	servers, err := h.storage.GetServersByUserID(ctx, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, "failed to get servers")
+		return
+	}
+
+	h.log.Info("ws get_servers", "user_id", req.client.UserID, "servers_count", len(servers))
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  types.WsGetServersResponse{Servers: servers},
+	})
+}
+
+func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsGetServerChannelsRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid get_server_channels payload")
+		return
+	}
+
+	if payload.ServerID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	channels, err := h.storage.GetServerChannels(ctx, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to get server_channels")
+		return
+	}
+
+	h.log.Info("ws get_server_channels", "user_id", req.client.UserID, "server_id", payload.ServerID, "channels_count", len(channels))
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  types.WsGetChannelsResponse{Channels: channels},
+	})
 }

@@ -19,6 +19,14 @@ type Handler struct {
 	log     *slog.Logger
 }
 
+type ErrorResponse struct {
+    Error string `json:"error"`
+}
+
+func writeError(c *fiber.Ctx, status int, msg string) error {
+    return c.Status(status).JSON(ErrorResponse{Error: msg})
+}
+
 func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger) *Handler {
 	return &Handler{storage: storage, cfg: cfg, log: log}
 }
@@ -41,22 +49,22 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	err := c.BodyParser(&payload)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return writeError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return writeError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
+		return writeError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
 	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
-		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
+		return writeError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
@@ -64,22 +72,26 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 		secret,
 		u.ID,
 		u.Email,
+		u.FirstName,
+		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
 	)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "auth error")
 	}
 
 	refreshToken, refreshClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
 		u.Email,
+		u.FirstName,
+		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "auth error")
 	}
 
 	res := types.LoginUserResponse{
@@ -105,24 +117,24 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	err := c.BodyParser(&payload)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
+		return writeError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		errors := err.(validator.ValidationErrors)
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("invalid payload %v", errors))
+		return writeError(c, fiber.StatusBadRequest, fmt.Sprintf("invalid payload: %v", errors))
 	}
 
 	_, err = h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err == nil {
-		return c.Status(fiber.StatusBadRequest).SendString("email already in use")
+		return writeError(c, fiber.StatusBadRequest, "email already in use")
 	}
 
 	hashedPassword, err := auth.HashPassword(payload.Password)
 
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to hash password: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "failed to hash password")
 	}
 
 	err = h.storage.CreateUser(
@@ -134,17 +146,17 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 		})
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("failed to create user: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "failed to create user")
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
+		return writeError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
 	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
-		return c.Status(fiber.StatusUnauthorized).SendString("invalid email or password")
+		return writeError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
@@ -152,22 +164,26 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 		secret,
 		u.ID,
 		u.Email,
+		u.FirstName,
+		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
 	)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "auth error")
 	}
 
 	refreshToken, refreshClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
 		u.Email,
+		u.FirstName,
+		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString(fmt.Sprintf("auth error: %v", err))
+		return writeError(c, fiber.StatusBadRequest, "auth error")
 	}
 
 	res := types.LoginUserResponse{
@@ -189,24 +205,26 @@ func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
 	var req types.RenewAccessTokenRequest
 	if err := c.BodyParser(&req); err != nil {
 		h.log.Error(err.Error())
-		return c.Status(fiber.StatusBadRequest).SendString("error decoding request body")
+		 return writeError(c, fiber.StatusBadRequest, "error decoding request body")
 	}
 
 	refreshClaims, err := auth.ValidateToken(req.RefreshToken)
 	if err != nil {
 		h.log.Error(err.Error())
-		return c.Status(fiber.StatusUnauthorized).SendString("error verifying token")
+		return writeError(c, fiber.StatusUnauthorized, "error verifying token")
 	}
 
 	accessToken, accessClaims, err := auth.CreateJWT(
 		[]byte(h.cfg.JWTSecret),
 		refreshClaims.UserID,
 		refreshClaims.Email,
+		refreshClaims.FirstName,
+		refreshClaims.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
 		h.log.Error(err.Error())
-		return c.Status(fiber.StatusInternalServerError).SendString(fmt.Sprintf("error creating token: %v", err))
+		return writeError(c, fiber.StatusInternalServerError, "error creating token")
 	}
 
 	res := types.RenewAccessTokenResponse{
