@@ -1,11 +1,13 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {useNavigate} from "react-router-dom";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
+import VideoTile from "../components/VideoTile.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
+import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
-import type {ChannelsByServer, Message, MessagesByChannel, Server} from "../types/chat.ts";
+import type {ChannelsByServer, Message, MessagesByChannel, Server, VoiceParticipant} from "../types/chat.ts";
 import "../styles/chat.css";
 
 const CHAT_SERVERS_KEY = "chat_servers";
@@ -23,6 +25,7 @@ const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
 export default function ChatPage() {
     const navigate = useNavigate();
     const socketRef = useRef<ChatSocket | null>(null);
+    const callClientRef = useRef<CallClient | null>(null);
     const selectedServerIdRef = useRef(0);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const isCreatingServerRef = useRef(false);
@@ -42,9 +45,23 @@ export default function ChatPage() {
     const [newServerName, setNewServerName] = useState("");
     const [isCreateChannelModalOpen, setIsCreateChannelModalOpen] = useState(false);
     const [newChannelName, setNewChannelName] = useState("");
+    const [newChannelType, setNewChannelType] = useState<"text" | "voice">("text");
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+    const [voiceChannelId, setVoiceChannelId] = useState(0);
+    const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+    const [remoteStreams, setRemoteStreams] = useState<Array<{ userId: number; label: string; stream: MediaStream }>>([]);
+    const [isMicEnabled, setIsMicEnabled] = useState(true);
+    const [isCameraEnabled, setIsCameraEnabled] = useState(true);
     const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
     const currentUserId: number | null = getCurrentUserId();
+    const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
+        const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
+        if (fullName) {
+            return fullName;
+        }
+        return `User ${participant.user_id}`;
+    }, []);
+
 
 
     const handleAuthFailure = useCallback(
@@ -124,6 +141,31 @@ export default function ChatPage() {
         const socket = new ChatSocket();
         socketRef.current = socket;
 
+        if (currentUserId && currentUserId > 0) {
+            callClientRef.current = new CallClient(
+                socket,
+                currentUserId,
+                (participant, stream) => {
+                    const label = toParticipantLabel(participant);
+                    setRemoteStreams((prev) => {
+                        const next = prev.filter((item) => item.userId !== participant.user_id);
+                        next.push({userId: participant.user_id, label, stream});
+                        return next;
+                    });
+                },
+                (userId) => {
+                    setRemoteStreams((prev) => prev.filter((item) => item.userId !== userId));
+                },
+                (stream) => {
+                    setLocalStream(stream);
+                    if (!stream) {
+                        setRemoteStreams([]);
+                    }
+                },
+                (message) => setError(message),
+            );
+        }
+
         const unsubscribeMessage = socket.onMessage((incoming) => {
             setMessagesByChannel((prev) => ({
                 ...prev,
@@ -145,7 +187,8 @@ export default function ChatPage() {
                         {
                             id: incoming.channel_id,
                             server_id: selectedServerIdRef.current,
-                            name: String(incoming.channel_id)
+                            name: String(incoming.channel_id),
+                            type: "text",
                         },
                     ],
                 };
@@ -181,11 +224,13 @@ export default function ChatPage() {
         return () => {
             unsubscribeMessage();
             unsubscribeError();
+            callClientRef.current?.dispose();
+            callClientRef.current = null;
             socketRef.current?.close();
             socketRef.current = null;
             setIsConnected(false);
         };
-    }, [navigate, handleAuthFailure, syncServersAndChannels]);
+    }, [navigate, handleAuthFailure, syncServersAndChannels, currentUserId, toParticipantLabel]);
 
     useEffect(() => {
         if (!isConnected || !socketRef.current) {
@@ -243,6 +288,7 @@ export default function ChatPage() {
     function openCreateChannelModal() {
         setError("");
         setNewChannelName("");
+        setNewChannelType("text");
         setIsCreateChannelModalOpen(true);
     }
 
@@ -267,7 +313,8 @@ export default function ChatPage() {
 
         try {
             const createdServer = await socketRef.current.createServer(trimmedName);
-            await socketRef.current.createChannel(createdServer.server_id, "Main");
+            await socketRef.current.createChannel(createdServer.server_id, "Main", "text");
+            await socketRef.current.createChannel(createdServer.server_id, "Voice", "voice");
 
             await syncServersAndChannels(createdServer.server_id);
             setError("");
@@ -303,7 +350,7 @@ export default function ChatPage() {
 
         try {
             // const currentChannels = channelsByServer[selectedServerId] ?? [];
-            await socketRef.current.createChannel(selectedServerId, trimmedName);
+            await socketRef.current.createChannel(selectedServerId, trimmedName, newChannelType);
 
             await syncServersAndChannels(selectedServerId);
             setError("");
@@ -351,6 +398,8 @@ export default function ChatPage() {
     }
 
     function handleLogout() {
+        callClientRef.current?.dispose();
+        callClientRef.current = null;
         socketRef.current?.close();
         socketRef.current = null;
 
@@ -365,10 +414,53 @@ export default function ChatPage() {
         navigate("/login", {replace: true});
     }
 
+    async function handleJoinVoice(): Promise<void> {
+        if (!callClientRef.current || selectedChannelId <= 0) {
+            setError("Voice call is unavailable");
+            return;
+        }
+
+        try {
+            await callClientRef.current.join(selectedChannelId);
+            setVoiceChannelId(selectedChannelId);
+            setIsMicEnabled(true);
+            setIsCameraEnabled(true);
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to join voice channel";
+            setError(message);
+        }
+    }
+
+    async function handleLeaveVoice(): Promise<void> {
+        try {
+            await callClientRef.current?.leave();
+        } finally {
+            setVoiceChannelId(0);
+            setRemoteStreams([]);
+            setIsMicEnabled(true);
+            setIsCameraEnabled(true);
+        }
+    }
+
+    function toggleMicrophone(): void {
+        const next = !isMicEnabled;
+        setIsMicEnabled(next);
+        callClientRef.current?.setMicrophoneEnabled(next);
+    }
+
+    function toggleCamera(): void {
+        const next = !isCameraEnabled;
+        setIsCameraEnabled(next);
+        callClientRef.current?.setCameraEnabled(next);
+    }
+
 
     const activeChannels = channelsByServer[selectedServerId] ?? [];
     const currentServer = servers.find((server) => server.id === selectedServerId);
     const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
+    const isVoiceChannel = currentChannel?.type === "voice";
+    const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
     const userDisplayName = [currentUserProfile?.first_name, currentUserProfile?.last_name].filter(Boolean).join(" ").trim();
     const userInitial =
@@ -426,7 +518,7 @@ export default function ChatPage() {
                         <li key={channel.id}>
                             <button className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
                                     onClick={() => setSelectedChannelId(channel.id)}>
-                                # {channel.name}
+                                {channel.type === "voice" ? "🔊" : "#"} {channel.name}
                             </button>
                         </li>
                     ))}
@@ -449,10 +541,39 @@ export default function ChatPage() {
                     </div>
                     <div
                         className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}</div>
+                    {isVoiceChannel && (
+                        <div className="voice-panel">
+                            <div className="voice-controls">
+                                {!isInSelectedVoiceChannel ? (
+                                    <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
+                                        Join voice
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button className="message-send-btn" onClick={() => void handleLeaveVoice()}>
+                                            Leave voice
+                                        </button>
+                                        <button className="channels-add-btn" onClick={toggleMicrophone}>
+                                            {isMicEnabled ? "Mic on" : "Mic off"}
+                                        </button>
+                                        <button className="channels-add-btn" onClick={toggleCamera}>
+                                            {isCameraEnabled ? "Cam on" : "Cam off"}
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                            <div className="video-grid">
+                                {localStream && <VideoTile stream={localStream} label="You" muted />}
+                                {remoteStreams.map((item) => (
+                                    <VideoTile key={item.userId} stream={item.stream} label={item.label} />
+                                ))}
+                            </div>
+                        </div>
+                    )}
                     {error ? <div className="messages-empty">{error}</div> : null}
                     <MessageList messages={activeMessages} currentUserId={currentUserId} />
                 </div>
-                <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0}/>
+                <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0 || isVoiceChannel}/>
             </section>
 
             {isProfileModalOpen && (
@@ -547,6 +668,14 @@ export default function ChatPage() {
                             maxLength={64}
                             autoFocus
                         />
+                        <select
+                            className="modal-input"
+                            value={newChannelType}
+                            onChange={(e) => setNewChannelType(e.target.value === "voice" ? "voice" : "text")}
+                        >
+                            <option value="text">Text</option>
+                            <option value="voice">Voice</option>
+                        </select>
 
                         <div className="modal-actions">
                             <button

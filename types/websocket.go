@@ -13,7 +13,7 @@ type ServerStorage interface {
 	CreateServer(ctx context.Context, server Server) (int64, error)
 	DeleteServer(ctx context.Context, server Server) error
 	AddMemberToServer(ctx context.Context, userID int, serverID int64) error
-	CreateChannel(ctx context.Context, serverID int64, name string) (int64, error)
+	CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error)
 	IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error)
 	CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error)
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
@@ -21,6 +21,7 @@ type ServerStorage interface {
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
+	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
 }
 
 const (
@@ -31,11 +32,21 @@ const (
 	WsActionGetMessages       = "get_messages"
 	WsActionGetServers        = "get_servers"
 	WsActionGetServerChannels = "get_server_channels"
+	WsActionJoinVoiceChannel  = "join_voice_channel"
+	WsActionLeaveVoiceChannel = "leave_voice_channel"
+	WsActionRTCSignal         = "rtc_signal"
 
-	WsEventAck       = "ack"
-	WsEventError     = "error"
-	WsEventMessage   = "message"
-	WsEventConnected = "connected"
+	WsEventAck               = "ack"
+	WsEventError             = "error"
+	WsEventMessage           = "message"
+	WsEventConnected         = "connected"
+	WsEventVoiceParticipants = "voice_participants"
+	WsEventVoiceUserJoined   = "voice_user_joined"
+	WsEventVoiceUserLeft     = "voice_user_left"
+	WsEventRTCSignal         = "rtc_signal"
+
+	ChannelTypeText  = "text"
+	ChannelTypeVoice = "voice"
 )
 
 type WsCommand struct {
@@ -54,6 +65,7 @@ type WsJoinServerRequest struct {
 type WsCreateChannelRequest struct {
 	ServerID int64  `json:"server_id"`
 	Name     string `json:"name"`
+	Type     string `json:"type,omitempty"`
 }
 
 type WsSendMessageRequest struct {
@@ -77,6 +89,46 @@ type WsGetServerChannelsRequest struct {
 
 type WsGetChannelsResponse struct {
 	Channels []Channel `json:"channels"`
+}
+
+type WsJoinVoiceChannelRequest struct {
+	ChannelID int64 `json:"channel_id"`
+}
+
+type WsVoiceParticipant struct {
+	UserID    int    `json:"user_id"`
+	FirstName string `json:"first_name,omitempty"`
+	LastName  string `json:"last_name,omitempty"`
+}
+
+type WsJoinVoiceChannelResponse struct {
+	ChannelID    int64                `json:"channel_id"`
+	Participants []WsVoiceParticipant `json:"participants"`
+}
+
+type WsVoiceUserEvent struct {
+	ChannelID int64              `json:"channel_id"`
+	User      WsVoiceParticipant `json:"user"`
+}
+
+type WsRTCSignalRequest struct {
+	ChannelID     int64   `json:"channel_id"`
+	ToUserID      int     `json:"to_user_id"`
+	SignalType    string  `json:"signal_type"`
+	SDP           string  `json:"sdp,omitempty"`
+	Candidate     string  `json:"candidate,omitempty"`
+	SDPMid        *string `json:"sdp_mid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
+}
+
+type WsRTCSignalEvent struct {
+	ChannelID     int64   `json:"channel_id"`
+	FromUserID    int     `json:"from_user_id"`
+	SignalType    string  `json:"signal_type"`
+	SDP           string  `json:"sdp,omitempty"`
+	Candidate     string  `json:"candidate,omitempty"`
+	SDPMid        *string `json:"sdp_mid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
 }
 
 type WsMessageCursor struct {

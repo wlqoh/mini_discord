@@ -131,6 +131,37 @@ docker compose up -d --build
 - API requests are expected under `/api/*`.
 - For backward compatibility, `/api/v1/auth/*` is rewritten to `/api/v1/*` in `frontend/nginx.conf`.
 
+## Voice/Video channels (WebRTC)
+
+- Calls use the same websocket endpoint: `/api/v1/server/ws`.
+- Channel types:
+  - `text` for chat
+  - `voice` for voice/video rooms
+- Signaling actions over websocket:
+  - `join_voice_channel`
+  - `leave_voice_channel`
+  - `rtc_signal` (`offer`, `answer`, `candidate`)
+
+### Frontend env for WebRTC
+
+```bash
+VITE_API_URL=/api/v1
+VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
+```
+
+Optional websocket override:
+
+```bash
+VITE_WS_URL=wss://your-domain.com/api/v1/server/ws
+```
+
+### Origin allow-lists
+
+Configure allowed browser origins in backend config:
+
+- `http_server.cors_allowed_origins`
+- `http_server.ws_allowed_origins`
+
 ## API Эндпоинты
 
 Базовый путь: `/api/v1`

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -33,7 +34,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
 	})
 	app.Use(logger.New())
-	app.Use(cors.New())
+	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
 
 	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
 	defer limiter.Close()
@@ -47,7 +48,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	hub := server.NewHub(s.db, log)
 	defer hub.Close()
-	wsHandler := server.NewHandler(hub)
+	wsHandler := server.NewHandler(hub, cfg.HTTPServer.WSAllowedOrigins)
 	wsHandler.RegisterRoutes(v1)
 	go hub.Run()
 

@@ -1,8 +1,23 @@
-import type { Message } from "../types/chat";
+import type {
+  JoinVoiceResponse,
+  Message,
+  RTCSignalEvent,
+  RTCSignalPayload,
+  VoiceParticipant,
+  VoiceUserEvent,
+} from "../types/chat";
 import { getValidAccessToken } from "./authToken";
 
 type WsEvent = {
-  event: "ack" | "error" | "message" | "connected";
+  event:
+    | "ack"
+    | "error"
+    | "message"
+    | "connected"
+    | "voice_participants"
+    | "voice_user_joined"
+    | "voice_user_left"
+    | "rtc_signal";
   error?: string;
   data?: unknown;
 };
@@ -22,6 +37,9 @@ type QueuedCommand = {
 
 type MessageListener = (message: Message) => void;
 type ErrorListener = (message: string) => void;
+type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
+type VoiceUserListener = (event: VoiceUserEvent) => void;
+type RTCSignalListener = (event: RTCSignalEvent) => void;
 
 function resolveWsUrl(): string {
   const token = getValidAccessToken();
@@ -96,6 +114,14 @@ export class ChatSocket {
   private readonly messageListeners = new Set<MessageListener>();
 
   private readonly errorListeners = new Set<ErrorListener>();
+
+  private readonly voiceParticipantsListeners = new Set<VoiceParticipantsListener>();
+
+  private readonly voiceUserJoinedListeners = new Set<VoiceUserListener>();
+
+  private readonly voiceUserLeftListeners = new Set<VoiceUserListener>();
+
+  private readonly rtcSignalListeners = new Set<RTCSignalListener>();
 
   private flushQueue(): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.pending || !this.queue.length) {
@@ -207,6 +233,43 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "voice_participants") {
+          const payload = parsed.data as { participants?: VoiceParticipant[] };
+          if (Array.isArray(payload?.participants)) {
+            this.voiceParticipantsListeners.forEach((listener) => listener(payload.participants as VoiceParticipant[]));
+          }
+          return;
+        }
+
+        if (parsed.event === "voice_user_joined") {
+          const payload = parsed.data as VoiceUserEvent;
+          if (payload && typeof payload.channel_id === "number" && payload.user && typeof payload.user.user_id === "number") {
+            this.voiceUserJoinedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "voice_user_left") {
+          const payload = parsed.data as VoiceUserEvent;
+          if (payload && typeof payload.channel_id === "number" && payload.user && typeof payload.user.user_id === "number") {
+            this.voiceUserLeftListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "rtc_signal") {
+          const payload = parsed.data as RTCSignalEvent;
+          if (
+            payload &&
+            typeof payload.channel_id === "number" &&
+            typeof payload.from_user_id === "number" &&
+            (payload.signal_type === "offer" || payload.signal_type === "answer" || payload.signal_type === "candidate")
+          ) {
+            this.rtcSignalListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
         if (parsed.event === "error") {
           const text = parsed.error || "Chat error";
           this.handleSocketError(text);
@@ -247,11 +310,40 @@ export class ChatSocket {
     return () => this.errorListeners.delete(listener);
   }
 
-  async createChannel(serverId: number, name: string): Promise<{ channel_id: number; server_id: number; name: string }> {
-    const data = await this.sendCommand("create_channel", { server_id: serverId, name });
-    const payload = data as { channel_id?: number; server_id?: number; name?: string };
+  onVoiceParticipants(listener: VoiceParticipantsListener): () => void {
+    this.voiceParticipantsListeners.add(listener);
+    return () => this.voiceParticipantsListeners.delete(listener);
+  }
 
-    if (typeof payload?.channel_id !== "number" || typeof payload?.server_id !== "number" || typeof payload?.name !== "string") {
+  onVoiceUserJoined(listener: VoiceUserListener): () => void {
+    this.voiceUserJoinedListeners.add(listener);
+    return () => this.voiceUserJoinedListeners.delete(listener);
+  }
+
+  onVoiceUserLeft(listener: VoiceUserListener): () => void {
+    this.voiceUserLeftListeners.add(listener);
+    return () => this.voiceUserLeftListeners.delete(listener);
+  }
+
+  onRTCSignal(listener: RTCSignalListener): () => void {
+    this.rtcSignalListeners.add(listener);
+    return () => this.rtcSignalListeners.delete(listener);
+  }
+
+  async createChannel(
+    serverId: number,
+    name: string,
+    type: "text" | "voice" = "text",
+  ): Promise<{ channel_id: number; server_id: number; name: string; type: "text" | "voice" }> {
+    const data = await this.sendCommand("create_channel", { server_id: serverId, name, type });
+    const payload = data as { channel_id?: number; server_id?: number; name?: string; type?: "text" | "voice" };
+
+    if (
+      typeof payload?.channel_id !== "number" ||
+      typeof payload?.server_id !== "number" ||
+      typeof payload?.name !== "string" ||
+      (payload?.type !== "text" && payload?.type !== "voice")
+    ) {
       throw new Error("The server returned an invalid response when creating a channel.");
     }
 
@@ -259,6 +351,7 @@ export class ChatSocket {
       channel_id: payload.channel_id,
       server_id: payload.server_id,
       name: payload.name,
+      type: payload.type,
     };
   }
 
@@ -308,9 +401,9 @@ export class ChatSocket {
       .map((server) => ({ id: server.id as number, name: server.name as string }));
   }
 
-  async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string }>> {
+  async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {
     const data = await this.sendCommand("get_server_channels", { server_id: serverId });
-    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string }> };
+    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string; type?: "text" | "voice" }> };
 
     if (!Array.isArray(payload?.channels)) {
       return [];
@@ -321,13 +414,32 @@ export class ChatSocket {
         (channel) =>
           typeof channel.id === "number" &&
           typeof channel.server_id === "number" &&
-          typeof channel.name === "string",
+          typeof channel.name === "string" &&
+          (channel.type === "text" || channel.type === "voice"),
       )
       .map((channel) => ({
         id: channel.id as number,
         server_id: channel.server_id as number,
         name: channel.name as string,
+        type: channel.type as "text" | "voice",
       }));
+  }
+
+  async joinVoiceChannel(channelId: number): Promise<JoinVoiceResponse> {
+    const data = await this.sendCommand("join_voice_channel", { channel_id: channelId });
+    const payload = data as JoinVoiceResponse;
+    if (!payload || typeof payload.channel_id !== "number" || !Array.isArray(payload.participants)) {
+      throw new Error("Invalid join voice response");
+    }
+    return payload;
+  }
+
+  async leaveVoiceChannel(): Promise<void> {
+    await this.sendCommand("leave_voice_channel", {});
+  }
+
+  async sendRTCSignal(payload: RTCSignalPayload): Promise<void> {
+    await this.sendCommand("rtc_signal", payload as unknown as Record<string, unknown>);
   }
 
   private sendCommand(action: string, payload: Record<string, unknown>): Promise<unknown> {

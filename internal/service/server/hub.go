@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -20,6 +22,8 @@ type Hub struct {
 	createServerLimiter  *ratelimit.TokenBucket
 	createChannelLimiter *ratelimit.TokenBucket
 	sendMessageLimiter   *ratelimit.TokenBucket
+	voiceParticipants    map[int64]map[int]struct{}
+	userVoiceChannel     map[int]int64
 
 	log *slog.Logger
 
@@ -40,6 +44,8 @@ func NewHub(storage types.ServerStorage, log *slog.Logger) *Hub {
 		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
 		createChannelLimiter: ratelimit.NewTokenBucket(5.0/60.0, 5.0),
 		sendMessageLimiter:   ratelimit.NewTokenBucket(1.0, 1.0),
+		voiceParticipants:    make(map[int64]map[int]struct{}),
+		userVoiceChannel:     make(map[int]int64),
 		log:                  log,
 		Register:             make(chan *Client),
 		Unregister:           make(chan *Client),
@@ -80,12 +86,19 @@ func (h *Hub) registerClient(cl *Client) {
 }
 
 func (h *Hub) unregisterClient(cl *Client) {
+	removed := false
+
 	h.mu.Lock()
 	if current, ok := h.clientsByUser[cl.UserID]; ok && current == cl {
 		delete(h.clientsByUser, cl.UserID)
 		close(cl.Outbound)
+		removed = true
 	}
 	h.mu.Unlock()
+
+	if removed {
+		h.leaveVoiceChannelInternal(cl, false)
+	}
 }
 
 func (h *Hub) handleCommand(req wsCommandRequest) {
@@ -106,6 +119,12 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		getServers(h, req, ctx)
 	case types.WsActionGetServerChannels:
 		getServerChannels(h, req, ctx)
+	case types.WsActionJoinVoiceChannel:
+		joinVoiceChannel(h, req, ctx)
+	case types.WsActionLeaveVoiceChannel:
+		leaveVoiceChannel(h, req)
+	case types.WsActionRTCSignal:
+		relayRTCSignal(h, req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -223,7 +242,7 @@ func joinServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 
 func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	if !h.createChannelLimiter.Allow(strconv.Itoa(req.client.UserID)) {
-		h.pushError(req.client, "rate limit exceeded for send_message")
+		h.pushError(req.client, "rate limit exceeded for create_channel")
 		return
 	}
 
@@ -233,8 +252,14 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 	payload.Name = strings.TrimSpace(payload.Name)
+	payload.Type = strings.TrimSpace(strings.ToLower(payload.Type))
+	payloadType := normalizeChannelType(payload.Type)
 	if payload.ServerID <= 0 || payload.Name == "" {
 		h.pushError(req.client, "server_id and name are required")
+		return
+	}
+	if payloadType == "" {
+		h.pushError(req.client, "invalid channel type")
 		return
 	}
 
@@ -248,7 +273,7 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	channelID, err := h.storage.CreateChannel(ctx, payload.ServerID, payload.Name)
+	channelID, err := h.storage.CreateChannel(ctx, payload.ServerID, payload.Name, payloadType)
 	if err != nil {
 		h.pushError(req.client, "failed to create channel")
 		return
@@ -260,13 +285,14 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 			"channel_id": channelID,
 			"server_id":  payload.ServerID,
 			"name":       payload.Name,
+			"type":       payloadType,
 		},
 	})
 }
 
 func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
-		h.pushError(req.client, "rate limit exceeded for create_channel")
+		h.pushError(req.client, "rate limit exceeded for send_message")
 		return
 	}
 
@@ -394,4 +420,209 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 		Event: types.WsEventAck,
 		Data:  types.WsGetChannelsResponse{Channels: channels},
 	})
+}
+
+func joinVoiceChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsJoinVoiceChannelRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid join_voice_channel payload")
+		return
+	}
+	if payload.ChannelID <= 0 {
+		h.pushError(req.client, "channel_id is required")
+		return
+	}
+
+	channel, err := h.storage.GetChannelByID(ctx, payload.ChannelID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			h.pushError(req.client, "channel not found")
+			return
+		}
+		h.pushError(req.client, "failed to resolve channel")
+		return
+	}
+	if channel.Type != types.ChannelTypeVoice {
+		h.pushError(req.client, "selected channel is not voice")
+		return
+	}
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.pushError(req.client, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	h.leaveVoiceChannelInternal(req.client, false)
+
+	h.mu.Lock()
+	participants := h.voiceParticipants[payload.ChannelID]
+	if participants == nil {
+		participants = make(map[int]struct{})
+		h.voiceParticipants[payload.ChannelID] = participants
+	}
+	participants[req.client.UserID] = struct{}{}
+	h.userVoiceChannel[req.client.UserID] = payload.ChannelID
+
+	otherUserIDs := make([]int, 0, len(participants))
+	for userID := range participants {
+		if userID == req.client.UserID {
+			continue
+		}
+		otherUserIDs = append(otherUserIDs, userID)
+	}
+	h.mu.Unlock()
+
+	peers := make([]types.WsVoiceParticipant, 0, len(otherUserIDs))
+	for _, userID := range otherUserIDs {
+		peers = append(peers, h.resolveVoiceParticipant(ctx, userID))
+	}
+
+	selfParticipant := h.resolveVoiceParticipant(ctx, req.client.UserID)
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: types.WsJoinVoiceChannelResponse{
+			ChannelID:    payload.ChannelID,
+			Participants: peers,
+		},
+	})
+
+	h.pushToUsers(otherUserIDs, &types.WsEvent{
+		Event: types.WsEventVoiceUserJoined,
+		Data: types.WsVoiceUserEvent{
+			ChannelID: payload.ChannelID,
+			User:      selfParticipant,
+		},
+	})
+}
+
+func leaveVoiceChannel(h *Hub, req wsCommandRequest) {
+	h.leaveVoiceChannelInternal(req.client, true)
+}
+
+func relayRTCSignal(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsRTCSignalRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid rtc_signal payload")
+		return
+	}
+
+	payload.SignalType = strings.TrimSpace(strings.ToLower(payload.SignalType))
+	if payload.ChannelID <= 0 || payload.ToUserID <= 0 || payload.SignalType == "" {
+		h.pushError(req.client, "channel_id, to_user_id and signal_type are required")
+		return
+	}
+	if payload.SignalType != "offer" && payload.SignalType != "answer" && payload.SignalType != "candidate" {
+		h.pushError(req.client, "unsupported signal_type")
+		return
+	}
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.pushError(req.client, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	h.mu.RLock()
+	senderChannelID, senderInVoice := h.userVoiceChannel[req.client.UserID]
+	targetChannelID, targetInVoice := h.userVoiceChannel[payload.ToUserID]
+	targetClient, targetConnected := h.clientsByUser[payload.ToUserID]
+	h.mu.RUnlock()
+
+	if !senderInVoice || senderChannelID != payload.ChannelID {
+		h.pushError(req.client, "join voice channel before signaling")
+		return
+	}
+	if !targetInVoice || targetChannelID != payload.ChannelID || !targetConnected {
+		h.pushError(req.client, "recipient not in channel")
+		return
+	}
+
+	h.pushEvent(targetClient, &types.WsEvent{
+		Event: types.WsEventRTCSignal,
+		Data: types.WsRTCSignalEvent{
+			ChannelID:     payload.ChannelID,
+			FromUserID:    req.client.UserID,
+			SignalType:    payload.SignalType,
+			SDP:           payload.SDP,
+			Candidate:     payload.Candidate,
+			SDPMid:        payload.SDPMid,
+			SDPMLineIndex: payload.SDPMLineIndex,
+		},
+	})
+
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
+	h.mu.Lock()
+	channelID, ok := h.userVoiceChannel[cl.UserID]
+	if !ok {
+		h.mu.Unlock()
+		if ack {
+			h.pushEvent(cl, &types.WsEvent{Event: types.WsEventAck})
+		}
+		return
+	}
+
+	delete(h.userVoiceChannel, cl.UserID)
+	participants := h.voiceParticipants[channelID]
+	if participants != nil {
+		delete(participants, cl.UserID)
+		if len(participants) == 0 {
+			delete(h.voiceParticipants, channelID)
+		}
+	}
+
+	notifyUsers := make([]int, 0, len(participants))
+	for userID := range participants {
+		notifyUsers = append(notifyUsers, userID)
+	}
+	h.mu.Unlock()
+
+	h.pushToUsers(notifyUsers, &types.WsEvent{
+		Event: types.WsEventVoiceUserLeft,
+		Data: types.WsVoiceUserEvent{
+			ChannelID: channelID,
+			User:      types.WsVoiceParticipant{UserID: cl.UserID},
+		},
+	})
+
+	if ack {
+		h.pushEvent(cl, &types.WsEvent{
+			Event: types.WsEventAck,
+			Data:  map[string]any{"channel_id": channelID},
+		})
+	}
+}
+
+func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsVoiceParticipant {
+	participant := types.WsVoiceParticipant{UserID: userID}
+	user, err := h.storage.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return participant
+	}
+
+	participant.FirstName = user.FirstName
+	participant.LastName = user.LastName
+	return participant
+}
+
+func normalizeChannelType(raw string) string {
+	switch raw {
+	case "", types.ChannelTypeText:
+		return types.ChannelTypeText
+	case types.ChannelTypeVoice:
+		return types.ChannelTypeVoice
+	default:
+		return ""
+	}
 }
