@@ -7,15 +7,9 @@ http_server:
     user: "myuser"
     password: "mypass"
     cors_allowed_origins:
-      - "https://hyorward.tech"
-      - "https://www.hyorward.tech"
-      - "http://hyorward.tech"
-      - "http://www.hyorward.tech"
+      - "https://mini-discord.example.com"
     ws_allowed_origins:
-      - "https://hyorward.tech"
-      - "https://www.hyorward.tech"
-      - "http://hyorward.tech"
-      - "http://www.hyorward.tech"
+      - "https://mini-discord.example.com"
 jwt_secret: "change-me-to-a-real-secret"
 jwt_access_expiration_in_minutes: 10080
 jwt_refresh_expiration_in_minutes: 43200
