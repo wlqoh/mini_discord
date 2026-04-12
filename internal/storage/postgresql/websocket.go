@@ -42,14 +42,19 @@ func (s *Storage) DeleteServer(ctx context.Context, server types.Server) error {
 	return err
 }
 
-func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name string) (int64, error) {
+func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error) {
+	if channelType == "" {
+		channelType = types.ChannelTypeText
+	}
+
 	var channelID int64
 	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO channels (server_id, name)
-		 VALUES ($1, $2)
+		`INSERT INTO channels (server_id, name, type)
+		 VALUES ($1, $2, $3)
 		 RETURNING id`,
 		serverID,
 		name,
+		channelType,
 	).Scan(&channelID)
 	if err != nil {
 		return 0, err
@@ -257,7 +262,7 @@ func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64
 }
 
 func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]types.Channel, error) {
-	query := "SELECT id, server_id, name, type FROM channels WHERE server_id = $1"
+	query := "SELECT id, server_id, name, type FROM channels WHERE server_id = $1 ORDER BY id"
 	rows, err := s.db.QueryContext(ctx, query, serverID)
 	if err != nil {
 		return nil, err
@@ -307,4 +312,25 @@ func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.S
 	}
 
 	return servers, nil
+}
+
+func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.Channel, error) {
+	query := `
+		SELECT id, server_id, name, type, created_at
+		FROM channels
+		WHERE id = $1
+	`
+
+	var channel types.Channel
+	if err := s.db.QueryRowContext(ctx, query, channelID).Scan(
+		&channel.ID,
+		&channel.ServerID,
+		&channel.Name,
+		&channel.Type,
+		&channel.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	return &channel, nil
 }

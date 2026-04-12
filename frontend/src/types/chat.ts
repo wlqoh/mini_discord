@@ -2,6 +2,7 @@ export interface Channel {
     id: number;
     server_id: number;
     name: string;
+    type: "text" | "voice";
 }
 
 export interface Server {
@@ -17,6 +18,42 @@ export interface Message {
     author_last_name?: string;
     content: string;
     created_at: string;
+}
+
+export interface VoiceParticipant {
+    user_id: number;
+    first_name?: string;
+    last_name?: string;
+}
+
+export interface JoinVoiceResponse {
+    channel_id: number;
+    participants: VoiceParticipant[];
+}
+
+export interface VoiceUserEvent {
+    channel_id: number;
+    user: VoiceParticipant;
+}
+
+export interface RTCSignalPayload {
+    channel_id: number;
+    to_user_id: number;
+    signal_type: "offer" | "answer" | "candidate";
+    sdp?: string;
+    candidate?: string;
+    sdp_mid?: string;
+    sdp_mline_index?: number;
+}
+
+export interface RTCSignalEvent {
+    channel_id: number;
+    from_user_id: number;
+    signal_type: "offer" | "answer" | "candidate";
+    sdp?: string;
+    candidate?: string;
+    sdp_mid?: string;
+    sdp_mline_index?: number;
 }
 
 export type MessagesByChannel = Record<number, Message[]>;

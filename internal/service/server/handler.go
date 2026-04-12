@@ -1,6 +1,9 @@
 package server
 
 import (
+	"net/url"
+	"strings"
+
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
@@ -8,19 +11,30 @@ import (
 )
 
 type Handler struct {
-	hub *Hub
+	hub            *Hub
+	allowedOrigins map[string]struct{}
 }
 
-func NewHandler(h *Hub) *Handler {
+func NewHandler(h *Hub, allowedOrigins []string) *Handler {
+	origins := make(map[string]struct{}, len(allowedOrigins))
+	for _, raw := range allowedOrigins {
+		normalized := normalizeOrigin(raw)
+		if normalized == "" {
+			continue
+		}
+		origins[normalized] = struct{}{}
+	}
+
 	return &Handler{
-		hub: h,
+		hub:            h,
+		allowedOrigins: origins,
 	}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 
 	router.Use("/server", auth.WithJWTAuth(h.hub.storage, h.hub.log, true))
-	router.Use("/server/ws", isWebsocketUpgraded)
+	router.Use("/server/ws", h.isWebsocketUpgraded)
 	router.Get("/server/ws", websocket.New(h.handleSocket))
 }
 
@@ -46,11 +60,34 @@ func (h *Handler) handleSocket(c *websocket.Conn) {
 	cl.readMessage(h.hub)
 }
 
-func isWebsocketUpgraded(c *fiber.Ctx) error {
+func (h *Handler) isWebsocketUpgraded(c *fiber.Ctx) error {
 	if websocket.IsWebSocketUpgrade(c) {
+		if len(h.allowedOrigins) > 0 {
+			origin := normalizeOrigin(c.Get("Origin"))
+			if origin != "" {
+				if _, ok := h.allowedOrigins[origin]; !ok {
+					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "origin is not allowed"})
+				}
+			}
+		}
+
 		c.Locals("allowed", true)
 		return c.Next()
 	}
 
 	return c.SendStatus(fiber.StatusUpgradeRequired)
+}
+
+func normalizeOrigin(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
 }

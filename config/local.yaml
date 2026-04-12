@@ -6,6 +6,12 @@ http_server:
     idle_timeout: 60s
     user: "myuser"
     password: "mypass"
+    cors_allowed_origins:
+      - "http://localhost:5173"
+      - "http://127.0.0.1:5173"
+    ws_allowed_origins:
+      - "http://localhost:5173"
+      - "http://127.0.0.1:5173"
 jwt_secret: "not-secret-secret-anymore?"
 jwt_access_expiration_in_minutes: 10080
 jwt_refresh_expiration_in_minutes: 43200

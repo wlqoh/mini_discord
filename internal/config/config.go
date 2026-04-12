@@ -19,11 +19,13 @@ type Config struct {
 }
 
 type HTTPServer struct {
-	Address     string        `yaml:"host" env-default:"localhost:8080"`
-	Timeout     time.Duration `yaml:"timeout" env-default:"4s"`
-	IdleTimeout time.Duration `yaml:"idle_timeout" env-default:"60s"`
-	User        string        `yaml:"user" env-required:"true"`
-	Password    string        `yaml:"password" env-required:"true" env:"HTTP_SERVER_PASSWORD"`
+	Address          string        `yaml:"host" env-default:"localhost:8080"`
+	Timeout          time.Duration `yaml:"timeout" env-default:"4s"`
+	IdleTimeout      time.Duration `yaml:"idle_timeout" env-default:"60s"`
+	User             string        `yaml:"user" env-required:"true"`
+	Password         string        `yaml:"password" env-required:"true" env:"HTTP_SERVER_PASSWORD"`
+	CORSOrigins      []string      `yaml:"cors_allowed_origins" env-default:"*" env-separator:","`
+	WSAllowedOrigins []string      `yaml:"ws_allowed_origins" env-separator:","`
 }
 
 var (
