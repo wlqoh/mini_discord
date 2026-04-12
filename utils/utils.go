@@ -2,11 +2,11 @@ package utils
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/gofiber/fiber/v2"
 )
 
 var Validate = validator.New()
@@ -18,11 +18,12 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
-func WriteError(w http.ResponseWriter, status int, err error) {
-	er := WriteJSON(w, status, map[string]string{"detail": err.Error()})
-	if er != nil {
-		fmt.Println(er)
-	}
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+func WriteError(c *fiber.Ctx, status int, msg string) error {
+	return c.Status(status).JSON(ErrorResponse{Error: msg})
 }
 
 func Int64(s string) int64 {

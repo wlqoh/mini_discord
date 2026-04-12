@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/wlqoh/mini_discord.git/utils"
 )
 
 type TokenBucket struct {
@@ -82,7 +83,7 @@ func (tb *TokenBucket) Allow(clientID string) bool {
 func (tb *TokenBucket) FiberRateLimitMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if !tb.Allow(c.IP()) {
-			return c.Status(fiber.StatusTooManyRequests).SendString("Rate limit exceeded")
+			return utils.WriteError(c, fiber.StatusTooManyRequests, "rate limit exceeded")
 		}
 		return c.Next()
 	}
