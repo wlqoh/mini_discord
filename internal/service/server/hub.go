@@ -135,10 +135,7 @@ func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
 	h.mu.RLock()
 	for _, userID := range userIDs {
 		if cl, ok := h.clientsByUser[userID]; ok {
-			select {
-			case cl.Outbound <- event:
-			default:
-			}
+			h.enqueueEvent(cl, event)
 		}
 
 	}
@@ -148,10 +145,7 @@ func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
 func (h *Hub) pushToAllUsers(event *types.WsEvent) {
 	h.mu.RLock()
 	for _, cl := range h.clientsByUser {
-		select {
-		case cl.Outbound <- event:
-		default:
-		}
+		h.enqueueEvent(cl, event)
 	}
 	h.mu.RUnlock()
 }
@@ -163,11 +157,25 @@ func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 		h.mu.RUnlock()
 		return
 	}
+	h.enqueueEvent(cl, event)
+	h.mu.RUnlock()
+}
+
+func (h *Hub) enqueueEvent(cl *Client, event *types.WsEvent) {
+	if event != nil && event.Event == types.WsEventRTCSignal {
+		select {
+		case cl.Outbound <- event:
+		case <-time.After(300 * time.Millisecond):
+			h.log.Warn("drop rtc_signal event: outbound queue timeout", "user_id", cl.UserID)
+		}
+		return
+	}
+
 	select {
 	case cl.Outbound <- event:
 	default:
+		h.log.Debug("drop websocket event: outbound queue full", "event", event.Event, "user_id", cl.UserID)
 	}
-	h.mu.RUnlock()
 }
 
 func (h *Hub) pushError(cl *Client, message string) {

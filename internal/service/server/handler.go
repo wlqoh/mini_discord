@@ -50,7 +50,7 @@ func (h *Handler) handleSocket(c *websocket.Conn) {
 
 	cl := &Client{
 		Conn:     c,
-		Outbound: make(chan *types.WsEvent, 32),
+		Outbound: make(chan *types.WsEvent, 256),
 		UserID:   clientID,
 	}
 

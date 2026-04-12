@@ -136,6 +136,10 @@ export class CallClient {
     await this.leave();
 
     this.localStream = await this.acquireLocalStream();
+    // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
+    this.localStream.getVideoTracks().forEach((track) => {
+      track.enabled = false;
+    });
     this.onLocalStream(this.localStream);
 
     let response: JoinVoiceResponse;

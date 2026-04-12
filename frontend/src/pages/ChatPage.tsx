@@ -424,7 +424,7 @@ export default function ChatPage() {
             await callClientRef.current.join(selectedChannelId);
             setVoiceChannelId(selectedChannelId);
             setIsMicEnabled(true);
-            setIsCameraEnabled(true);
+            setIsCameraEnabled(false);
             setError("");
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to join voice channel";
@@ -439,7 +439,7 @@ export default function ChatPage() {
             setVoiceChannelId(0);
             setRemoteStreams([]);
             setIsMicEnabled(true);
-            setIsCameraEnabled(true);
+            setIsCameraEnabled(false);
         }
     }
 
