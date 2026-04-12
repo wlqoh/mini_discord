@@ -124,6 +124,13 @@ docker compose down
 docker compose up -d --build
 ```
 
+### Production routing notes
+
+- Frontend container is published only to localhost: `127.0.0.1:8081:80`.
+- Public traffic should go through host Nginx.
+- API requests are expected under `/api/*`.
+- For backward compatibility, `/api/v1/auth/*` is rewritten to `/api/v1/*` in `frontend/nginx.conf`.
+
 ## API Эндпоинты
 
 Базовый путь: `/api/v1`

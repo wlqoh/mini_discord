@@ -54,8 +54,8 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-    expose:
-      - "80"   # 👈 ВАЖНО: только внутри сети, без проброса наружу
+    ports:
+      - "127.0.0.1:8081:80"
 
 volumes:
   pgdata:
