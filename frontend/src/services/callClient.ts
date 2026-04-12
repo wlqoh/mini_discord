@@ -16,7 +16,6 @@ type PeerState = {
   pc: RTCPeerConnection;
   stream: MediaStream;
   user: VoiceParticipant;
-  pendingCandidates: RTCIceCandidateInit[];
 };
 
 function formatMediaError(err: unknown): string {
@@ -40,47 +39,48 @@ function formatMediaError(err: unknown): string {
   }
 }
 
-function envVar(name: string): string {
-  const meta = import.meta as ImportMeta & {
-    env?: Record<string, string | undefined>;
-  };
-
-  return (meta.env?.[name] || "").trim();
-}
-
-function buildIceServers(): RTCIceServer[] {
-  const rawStun = envVar("VITE_WEBRTC_STUN_URLS");
-  const stunUrls = (rawStun || "stun:stun.l.google.com:19302")
+function parseUrls(raw: string | undefined): string[] {
+  return (raw ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
 
-  const iceServers: RTCIceServer[] = [];
+function isTruthy(raw: string | undefined): boolean {
+  const normalized = (raw ?? "").trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function buildIceServers(): RTCIceServer[] {
+  const stunUrls = parseUrls(import.meta.env.VITE_WEBRTC_STUN_URLS as string | undefined);
+  const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
+
+  const servers: RTCIceServer[] = [];
 
   if (stunUrls.length) {
-    iceServers.push({ urls: stunUrls });
+    servers.push({ urls: stunUrls });
+  } else {
+    servers.push({ urls: ["stun:stun.l.google.com:19302"] });
   }
 
-  const rawTurn = envVar("VITE_WEBRTC_TURN_URLS");
-  const turnUsername = envVar("VITE_WEBRTC_TURN_USERNAME");
-  const turnCredential = envVar("VITE_WEBRTC_TURN_CREDENTIAL");
+  if (turnUrls.length) {
+    const username = (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
+    const credential = (import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL as string | undefined)?.trim();
 
-  if (rawTurn && turnUsername && turnCredential) {
-    const turnUrls = rawTurn
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-
-    if (turnUrls.length) {
-      iceServers.push({
+    if (username && credential) {
+      servers.push({
         urls: turnUrls,
-        username: turnUsername,
-        credential: turnCredential,
+        username,
+        credential,
       });
     }
   }
 
-  return iceServers.length ? iceServers : [{ urls: ["stun:stun.l.google.com:19302"] }];
+  return servers;
+}
+
+function buildIceTransportPolicy(): RTCIceTransportPolicy {
+  return isTruthy(import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined) ? "relay" : "all";
 }
 
 export class CallClient {
@@ -232,7 +232,10 @@ export class CallClient {
     }
 
     const remoteStream = new MediaStream();
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      iceTransportPolicy: buildIceTransportPolicy(),
+    });
 
     pc.ontrack = (event) => {
       event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
@@ -259,7 +262,7 @@ export class CallClient {
       pc.addTrack(track, this.localStream as MediaStream);
     });
 
-    this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
+    this.peers.set(user.user_id, { pc, stream: remoteStream, user });
 
     if (initiateOffer) {
       await this.createAndSendOffer(user.user_id);
@@ -325,10 +328,6 @@ export class CallClient {
     this.participants.set(event.from_user_id, participant);
 
     const pc = await this.ensurePeer(participant, false);
-    const peer = this.peers.get(event.from_user_id);
-    if (!peer) {
-      return;
-    }
 
     try {
       if (event.signal_type === "offer") {
@@ -336,7 +335,6 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
-        await this.flushPendingCandidates(peer);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -354,7 +352,6 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
-        await this.flushPendingCandidates(peer);
         return;
       }
 
@@ -362,33 +359,13 @@ export class CallClient {
         return;
       }
 
-      const candidate: RTCIceCandidateInit = {
+      await pc.addIceCandidate({
         candidate: event.candidate,
         sdpMid: event.sdp_mid,
         sdpMLineIndex: event.sdp_mline_index,
-      };
-
-      if (!pc.remoteDescription) {
-        peer.pendingCandidates.push(candidate);
-        return;
-      }
-
-      await pc.addIceCandidate(candidate);
+      });
     } catch {
       this.onError("Failed to handle WebRTC signal");
-    }
-  }
-
-  private async flushPendingCandidates(peer: PeerState): Promise<void> {
-    if (!peer.pendingCandidates.length) {
-      return;
-    }
-
-    const pending = [...peer.pendingCandidates];
-    peer.pendingCandidates.length = 0;
-
-    for (const candidate of pending) {
-      await peer.pc.addIceCandidate(candidate);
     }
   }
 }
