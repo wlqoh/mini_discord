@@ -26,6 +26,7 @@ func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger)
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/login", h.handleLogin)
 	router.Post("/register", h.handleRegister)
+	router.Delete("/deleteUser", auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {
 		router.Route("/renew", func(router fiber.Router) {
@@ -99,6 +100,25 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(res)
+}
+
+func (h *Handler) handleDeleteUser(c *fiber.Ctx) error {
+	const op = "service.user.handleDeleteUser"
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	err := h.storage.DeleteUser(c.Context(), clientID)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete user")
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{})
 }
 
 func (h *Handler) handleRegister(c *fiber.Ctx) error {

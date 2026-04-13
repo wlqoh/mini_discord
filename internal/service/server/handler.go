@@ -8,6 +8,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 )
 
 type Handler struct {
@@ -66,7 +67,7 @@ func (h *Handler) isWebsocketUpgraded(c *fiber.Ctx) error {
 			origin := normalizeOrigin(c.Get("Origin"))
 			if origin != "" {
 				if _, ok := h.allowedOrigins[origin]; !ok {
-					return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "origin is not allowed"})
+					return utils.WriteError(c, fiber.StatusForbidden, "origin is not allowed")
 				}
 			}
 		}

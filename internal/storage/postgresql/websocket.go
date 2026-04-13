@@ -2,6 +2,8 @@ package postgresql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 
 	"github.com/wlqoh/mini_discord.git/types"
 )
@@ -37,8 +39,51 @@ func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64,
 	return serverID, tx.Commit()
 }
 
-func (s *Storage) DeleteServer(ctx context.Context, server types.Server) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM servers WHERE id = $1", server.ID)
+func (s *Storage) DeleteChannel(ctx context.Context, channelID int64, userID int) error {
+	var ownerID int
+	err := s.db.QueryRowContext(
+		ctx,
+		`SELECT s.owner_id
+				FROM channels c
+				JOIN servers s ON s.id = c.server_id
+				WHERE c.id = $1
+				`,
+		channelID,
+	).Scan(&ownerID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("channel not found")
+		}
+		return err
+	}
+
+	if ownerID != userID {
+		return errors.New("user is not server owner")
+	}
+
+	_, err = s.db.ExecContext(ctx, "DELETE FROM channels WHERE id = $1", channelID)
+	return err
+}
+
+func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) error {
+	var ownerID int
+	err := s.db.QueryRowContext(
+		ctx,
+		"SELECT owner_id FROM servers WHERE id = $1",
+		serverID,
+	).Scan(&ownerID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("server not found")
+		}
+		return err
+	}
+
+	if ownerID != userID {
+		return errors.New("user is not server owner")
+	}
+
+	_, err = s.db.ExecContext(ctx, "DELETE FROM servers WHERE id = $1", serverID)
 	return err
 }
 
@@ -64,13 +109,14 @@ func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, chann
 }
 
 func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error) {
-	_ = userID
-
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1 FROM servers WHERE id = $1
-		)`,
+  SELECT 1
+  FROM server_members
+  WHERE user_id = $1 AND server_id = $2
+)`,
+		userID,
 		serverID,
 	).Scan(&exists)
 
@@ -78,14 +124,16 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 }
 
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
-	_ = userID
-
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
-			SELECT 1 FROM channels WHERE id = $1
+			SELECT 1
+			FROM channels c
+			JOIN server_members sm ON sm.server_id = c.server_id
+			WHERE c.id = $1 AND sm.user_id = $2
 		)`,
 		channelID,
+		userID,
 	).Scan(&exists)
 
 	return exists, err

@@ -11,6 +11,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -40,24 +41,24 @@ func WithJWTAuth(userReader UserReader, log *slog.Logger, isWebsocket bool) fibe
 		// get the token from the user request
 		tokenString := getTokenFromRequest(c, isWebsocket)
 		if tokenString == "" {
-			return permissionDenied(c)
+			return utils.PermissionDenied(c)
 		}
 
 		claims, err := ValidateToken(tokenString)
 		if err != nil {
 			log.Error("failed to validate token", sl.Err(err))
-			return permissionDenied(c)
+			return utils.PermissionDenied(c)
 		}
 
 		if claims.UserID <= 0 {
 			log.Info("invalid token claims")
-			return permissionDenied(c)
+			return utils.PermissionDenied(c)
 		}
 
 		u, err := userReader.GetUserByID(c.Context(), claims.UserID)
 		if err != nil {
 			log.Error("failed to get user by id", sl.Err(err))
-			return permissionDenied(c)
+			return utils.PermissionDenied(c)
 		}
 
 		c.Locals("user_id", u.ID)
@@ -109,8 +110,4 @@ func ValidateToken(tokenString string) (*UserClaims, error) {
 		return nil, fmt.Errorf("failed to parse token claims")
 	}
 	return claims, nil
-}
-
-func permissionDenied(c *fiber.Ctx) error {
-	return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "permission denied"})
 }
