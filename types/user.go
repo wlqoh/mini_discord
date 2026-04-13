@@ -34,6 +34,10 @@ type RegisterUserRequest struct {
 	Password  string `json:"password" validate:"required,min=6,max=130"`
 }
 
+type DeleteUserRequest struct {
+	ID int `json:"id" validate:"required"`
+}
+
 type LoginUserRequest struct {
 	Email    string `json:"email" validate:"required,email"`
 	Password string `json:"password" validate:"required"`

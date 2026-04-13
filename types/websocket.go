@@ -11,7 +11,8 @@ import (
 type ServerStorage interface {
 	GetUserByID(ctx context.Context, id int) (*User, error)
 	CreateServer(ctx context.Context, server Server) (int64, error)
-	DeleteServer(ctx context.Context, server Server) error
+	DeleteServer(ctx context.Context, serverID int64, userID int) error
+	DeleteChannel(ctx context.Context, channelID int64, userID int) error
 	AddMemberToServer(ctx context.Context, userID int, serverID int64) error
 	CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error)
 	IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error)
@@ -26,8 +27,10 @@ type ServerStorage interface {
 
 const (
 	WsActionCreateServer      = "create_server"
+	WsActionDeleteServer      = "delete_server"
 	WsActionJoinServer        = "join_server"
 	WsActionCreateChannel     = "create_channel"
+	WsActionDeleteChannel     = "delete_channel"
 	WsActionSendMessage       = "send_message"
 	WsActionGetMessages       = "get_messages"
 	WsActionGetServers        = "get_servers"
@@ -58,6 +61,10 @@ type WsCreateServerRequest struct {
 	Name string `json:"name"`
 }
 
+type WsDeleteServerRequest struct {
+	ServerID int64 `json:"server_id"`
+}
+
 type WsJoinServerRequest struct {
 	ServerID int64 `json:"server_id"`
 }
@@ -66,6 +73,10 @@ type WsCreateChannelRequest struct {
 	ServerID int64  `json:"server_id"`
 	Name     string `json:"name"`
 	Type     string `json:"type,omitempty"`
+}
+
+type WsDeleteChannelRequest struct {
+	ChannelID int64 `json:"channel_id"`
 }
 
 type WsSendMessageRequest struct {

@@ -107,10 +107,14 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 	switch req.command.Action {
 	case types.WsActionCreateServer:
 		createServer(h, req, ctx)
+	case types.WsActionDeleteServer:
+		deleteServer(h, req, ctx)
 	case types.WsActionJoinServer:
 		joinServer(h, req, ctx)
 	case types.WsActionCreateChannel:
 		createChannel(h, req, ctx)
+	case types.WsActionDeleteChannel:
+		deleteChannel(h, req, ctx)
 	case types.WsActionSendMessage:
 		sendMessage(h, req, ctx)
 	case types.WsActionGetMessages:
@@ -180,6 +184,54 @@ func (h *Hub) enqueueEvent(cl *Client, event *types.WsEvent) {
 
 func (h *Hub) pushError(cl *Client, message string) {
 	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventError, Error: message})
+}
+
+func deleteChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsDeleteChannelRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid delete_channel payload")
+		return
+	}
+	if payload.ChannelID <= 0 {
+		h.pushError(req.client, "channel_id is required")
+		return
+	}
+
+	if err := h.storage.DeleteChannel(ctx, payload.ChannelID, req.client.UserID); err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"channel_id": payload.ChannelID,
+		},
+	})
+}
+
+func deleteServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsDeleteServerRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid delete_server payload")
+		return
+	}
+	if payload.ServerID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	if err := h.storage.DeleteServer(ctx, payload.ServerID, req.client.UserID); err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: map[string]any{
+			"server_id": payload.ServerID,
+		},
+	})
 }
 
 func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
