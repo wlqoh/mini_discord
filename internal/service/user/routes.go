@@ -8,6 +8,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
@@ -24,14 +25,14 @@ func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger)
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
-	router.Post("/login", h.handleLogin)
-	router.Post("/register", h.handleRegister)
-	router.Delete("/deleteUser", auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
+	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
+	limiterMW := limiter.FiberRateLimitMiddleware()
+	router.Post("/login", limiterMW, h.handleLogin)
+	router.Post("/register", limiterMW, h.handleRegister)
+	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {
-		router.Route("/renew", func(router fiber.Router) {
-			router.Post("/", h.handleRenewAccessToken)
-		})
+		router.Post("/renew", limiterMW, h.handleRenewAccessToken)
 	})
 }
 

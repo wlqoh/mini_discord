@@ -9,7 +9,6 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/wlqoh/mini_discord.git/internal/config"
-	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
 	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
@@ -36,15 +35,11 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
 
-	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
-	defer limiter.Close()
-
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
-	userRoutes := v1.Group("", limiter.FiberRateLimitMiddleware())
 
 	userHandler := user.NewHandler(s.db, cfg, log)
-	userHandler.RegisterRoutes(userRoutes)
+	userHandler.RegisterRoutes(v1)
 
 	hub := server.NewHub(s.db, log)
 	defer hub.Close()
