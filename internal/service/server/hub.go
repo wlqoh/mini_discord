@@ -123,6 +123,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		getServers(h, req, ctx)
 	case types.WsActionGetServerChannels:
 		getServerChannels(h, req, ctx)
+	case types.WsActionGetUsersOnline:
+		getUsersOnline(h, req, ctx)
 	case types.WsActionJoinVoiceChannel:
 		joinVoiceChannel(h, req, ctx)
 	case types.WsActionLeaveVoiceChannel:
@@ -350,6 +352,60 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
+func getUsersOnline(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsGetUsersOnlineRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid get_users_online payload")
+		return
+	}
+	if payload.ServerID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to check server membership")
+		return
+	}
+	if !isMember {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	serverUserIDs, err := h.storage.ListServerMembersUserIDs(ctx, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve server members")
+		return
+	}
+
+	h.mu.RLock()
+	onlineUsers := make([]types.UserResponse, 0, len(serverUserIDs))
+	for _, userID := range serverUserIDs {
+		if _, ok := h.clientsByUser[userID]; ok {
+			user, err := h.storage.GetUserByID(ctx, userID)
+			if err != nil {
+				h.pushError(req.client, "failed to resolve user")
+			}
+
+			onlineUsers = append(onlineUsers, types.UserResponse{
+				FirstName: user.FirstName,
+				LastName:  user.LastName,
+				Email:     user.Email,
+			})
+		}
+	}
+	h.mu.RUnlock()
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: types.WsGetUsersOnlineResponse{
+			ServerID: payload.ServerID,
+			Users:    onlineUsers,
+		},
+	})
+}
+
 func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
 		h.pushError(req.client, "rate limit exceeded for send_message")
@@ -367,17 +423,27 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	author, err := h.storage.GetUserByID(ctx, req.client.UserID)
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
 	if err != nil {
-		h.pushError(req.client, "failed to resolve author")
+		h.pushError(req.client, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	recipientUserIDs, err := h.storage.ListChannelMemberUserIDs(ctx, payload.ChannelID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve channel members")
 		return
 	}
 
 	msg := types.WsMessage{
 		ChannelID:       payload.ChannelID,
 		AuthorID:        req.client.UserID,
-		AuthorFirstName: author.FirstName,
-		AuthorLastName:  author.LastName,
+		AuthorFirstName: payload.FirstName,
+		AuthorLastName:  payload.LastName,
 		Content:         payload.Content,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -387,7 +453,7 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 	}
 
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
-	h.pushToAllUsers(event)
+	h.pushToUsers(recipientUserIDs, event)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }

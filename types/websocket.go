@@ -17,6 +17,7 @@ type ServerStorage interface {
 	CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error)
 	IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error)
 	CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error)
+	ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error)
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
 	SaveMessage(ctx context.Context, msg WsMessage) error
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor) ([]WsMessage, *WsMessageCursor, bool, error)
@@ -35,6 +36,7 @@ const (
 	WsActionGetMessages       = "get_messages"
 	WsActionGetServers        = "get_servers"
 	WsActionGetServerChannels = "get_server_channels"
+	WsActionGetUsersOnline    = "get_users_online"
 	WsActionJoinVoiceChannel  = "join_voice_channel"
 	WsActionLeaveVoiceChannel = "leave_voice_channel"
 	WsActionRTCSignal         = "rtc_signal"
@@ -82,6 +84,8 @@ type WsDeleteChannelRequest struct {
 type WsSendMessageRequest struct {
 	ChannelID int64  `json:"channel_id"`
 	Content   string `json:"content"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
 }
 
 type WsGetMessagesRequest struct {
@@ -96,6 +100,15 @@ type WsGetServersResponse struct {
 
 type WsGetServerChannelsRequest struct {
 	ServerID int64 `json:"server_id"`
+}
+
+type WsGetUsersOnlineRequest struct {
+	ServerID int64 `json:"server_id"`
+}
+
+type WsGetUsersOnlineResponse struct {
+	ServerID int64          `json:"server_id"`
+	Users    []UserResponse `json:"users"`
 }
 
 type WsGetChannelsResponse struct {

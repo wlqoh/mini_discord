@@ -139,22 +139,40 @@ func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelI
 	return exists, err
 }
 
-func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
-	var channelExists bool
-	err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(
-			SELECT 1 FROM channels WHERE id = $1
-		)`,
-		channelID,
-	).Scan(&channelExists)
+func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT user_id
+		FROM server_members
+		WHERE server_id = $1
+	`, serverID)
 	if err != nil {
 		return nil, err
 	}
-	if !channelExists {
-		return []int{}, nil
+	defer rows.Close()
+
+	userIDs := make([]int, 0)
+	for rows.Next() {
+		var userID int
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		userIDs = append(userIDs, userID)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM users`)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return userIDs, nil
+}
+
+func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT sm.user_id
+		FROM channels c
+		JOIN server_members sm ON sm.server_id = c.server_id
+		WHERE c.id = $1
+	`, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -332,15 +350,15 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 }
 
 func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
-	_ = userID
-
 	query := `
-		SELECT id, name, owner_id
-		FROM servers
-		ORDER BY id
+		SELECT s.id, s.name, s.owner_id
+		FROM servers s
+		JOIN server_members sm ON sm.server_id = s.id
+		WHERE sm.user_id = $1
+		ORDER BY s.id
 	`
 
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, err
 	}
