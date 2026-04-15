@@ -452,5 +452,18 @@ export class ChatSocket {
       this.flushQueue();
     });
   }
+
+  async searchServers(query: string, limit = 20): Promise<Array<{ id: number; name: string }>> {
+    const data = await this.sendCommand("search_servers", { query, limit });
+    const payload = data as { servers?: Array<{ id?: number; name?: string }> };
+
+    if (!Array.isArray(payload?.servers)) {
+      return [];
+    }
+
+    return payload.servers
+      .filter((server) => typeof server.id === "number" && typeof server.name === "string")
+      .map((server) => ({ id: server.id as number, name: server.name as string }));
+  }
 }
 

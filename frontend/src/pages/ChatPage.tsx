@@ -27,11 +27,14 @@ export default function ChatPage() {
     const socketRef = useRef<ChatSocket | null>(null);
     const callClientRef = useRef<CallClient | null>(null);
     const selectedServerIdRef = useRef(0);
+    const joinSearchRequestIdRef = useRef(0);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const isCreatingServerRef = useRef(false);
     const [isCreatingServer, setIsCreatingServer] = useState(false);
     const isCreatingChannelRef = useRef(false);
     const [isCreatingChannel, setIsCreatingChannel] = useState(false);
+    const [isSearchingServers, setIsSearchingServers] = useState(false);
+    const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
 
     const [servers, setServers] = useState<Server[]>([]);
     const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -54,6 +57,8 @@ export default function ChatPage() {
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
     const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
     const currentUserId: number | null = getCurrentUserId();
+    const [joinQuery, setJoinQuery] = useState("");
+    const [joinResults, setJoinResults] = useState<Array<{ id: number; name: string }>>([]);
     const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
         const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
         if (fullName) {
@@ -260,6 +265,72 @@ export default function ChatPage() {
     }, [selectedServerId]);
 
     useEffect(() => {
+        if (!isJoinModalOpen) {
+            setJoinResults([]);
+            setIsSearchingServers(false);
+            return;
+        }
+
+        const socket = socketRef.current;
+        if (!socket || !isConnected) {
+            setJoinResults([]);
+            setIsSearchingServers(false);
+            return;
+        }
+
+        const query = joinQuery.trim();
+        if (query.length < 2) {
+            setJoinResults([]);
+            setIsSearchingServers(false);
+            return;
+        }
+
+        setIsSearchingServers(true);
+
+        const timeoutId = window.setTimeout(() => {
+            const requestId = ++joinSearchRequestIdRef.current;
+            const searchFn = (socket as unknown as {
+                searchServers?: (searchQuery: string, limit?: number) => Promise<Array<{ id: number; name: string }>>;
+            }).searchServers;
+
+            if (!searchFn) {
+                if (requestId === joinSearchRequestIdRef.current) {
+                    setIsSearchingServers(false);
+                    setJoinResults([]);
+                }
+                return;
+            }
+
+            void searchFn(query, 20)
+                .then((results) => {
+                    if (requestId !== joinSearchRequestIdRef.current) {
+                        return;
+                    }
+                    setJoinResults(results);
+                    setError("");
+                })
+                .catch((err: unknown) => {
+                    if (requestId !== joinSearchRequestIdRef.current) {
+                        return;
+                    }
+
+                    const message = err instanceof Error ? err.message : "Failed to search servers";
+                    setError(message);
+                    setJoinResults([]);
+                })
+                .finally(() => {
+                    if (requestId === joinSearchRequestIdRef.current) {
+                        setIsSearchingServers(false);
+                    }
+                });
+        }, 350);
+
+        return () => {
+            window.clearTimeout(timeoutId);
+        };
+    }, [joinQuery, isJoinModalOpen, isConnected]);
+
+    useEffect(() => {
         if (selectedChannelId <= 0 || !socketRef.current || !isConnected || loadedChannels[selectedChannelId]) {
             return;
         }
@@ -283,6 +354,13 @@ export default function ChatPage() {
         setError("");
         setNewServerName("");
         setIsCreateServerModalOpen(true);
+    }
+
+    function openJoinServerModal() {
+        setError("");
+        setJoinQuery("");
+        setJoinResults([]);
+        setIsJoinModalOpen(true);
     }
 
     function openCreateChannelModal() {
@@ -442,6 +520,25 @@ export default function ChatPage() {
             setIsCameraEnabled(false);
         }
     }
+    
+    async function handleJoinServer(serverId: number) {
+        if (!socketRef.current || !isConnected) {
+            setError("No connection");
+            return;
+        }
+        
+        try {
+            await socketRef.current.joinServer(serverId);
+            await syncServersAndChannels(serverId);
+            setJoinQuery("");
+            setJoinResults([]);
+            setIsJoinModalOpen(false);
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to join server";
+            setError(message);
+        }
+    }
 
     function toggleMicrophone(): void {
         const next = !isMicEnabled;
@@ -484,6 +581,15 @@ export default function ChatPage() {
                     aria-label="Add server"
                     title="Add server">
                     +
+                </button>
+                <button
+                    className="server-add-btn"
+                    onClick={openJoinServerModal}
+                    disabled={!isConnected}
+                    aria-label="Join server"
+                    title="Join server"
+                >
+                    ?
                 </button>
                 <ul className="servers-list">
                     {servers.map((server) => (
@@ -648,6 +754,51 @@ export default function ChatPage() {
                                 disabled={isCreatingServer}
                             >
                                 {isCreatingServer ? "Creating..." : "Create"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isJoinModalOpen && (
+                <div className="modal-overlay" onClick={() => setIsJoinModalOpen(false)}>
+                    <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                        <h3 className="modal-title">Join server</h3>
+
+                        <input
+                            className="modal-input"
+                            type="text"
+                            placeholder="Search by server name"
+                            value={joinQuery}
+                            onChange={(e) => setJoinQuery(e.target.value)}
+                            maxLength={64}
+                            autoFocus
+                        />
+
+                        {isSearchingServers ? <div className="messages-empty">Searching...</div> : null}
+
+                        {!isSearchingServers && joinQuery.trim().length >= 2 && !joinResults.length ? (
+                            <div className="messages-empty">No servers found</div>
+                        ) : null}
+
+                        {!isSearchingServers && joinResults.length > 0 ? (
+                            <ul className="channels-list">
+                                {joinResults.map((server) => (
+                                    <li key={server.id}>
+                                        <button className="channel-row" onClick={() => void handleJoinServer(server.id)}>
+                                            Join {server.name}
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : null}
+
+                        <div className="modal-actions">
+                            <button
+                                className="modal-btn modal-btn-secondary"
+                                onClick={() => setIsJoinModalOpen(false)}
+                            >
+                                Close
                             </button>
                         </div>
                     </div>

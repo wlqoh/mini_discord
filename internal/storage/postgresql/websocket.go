@@ -400,3 +400,45 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 
 	return &channel, nil
 }
+
+func (s *Storage) SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]types.Server, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.id, s.name, s.owner_id
+		FROM servers s
+		WHERE s.name ILIKE '%' || $1 || '%'
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM server_members sm
+			WHERE sm.server_id = s.id
+			  AND sm.user_id = $2
+		  )
+		ORDER BY s.name, s.id
+		LIMIT $3
+	`, query, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	servers := make([]types.Server, 0)
+	for rows.Next() {
+		var server types.Server
+		if err := rows.Scan(&server.ID, &server.Name, &server.OwnerID); err != nil {
+			return nil, err
+		}
+		servers = append(servers, server)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return servers, nil
+}
+

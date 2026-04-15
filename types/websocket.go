@@ -24,6 +24,7 @@ type ServerStorage interface {
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
+	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
 }
 
 const (
@@ -40,6 +41,7 @@ const (
 	WsActionJoinVoiceChannel  = "join_voice_channel"
 	WsActionLeaveVoiceChannel = "leave_voice_channel"
 	WsActionRTCSignal         = "rtc_signal"
+	WsActionSearchServers     = "search_servers"
 
 	WsEventAck               = "ack"
 	WsEventError             = "error"
@@ -159,6 +161,15 @@ type WsMessageCursor struct {
 	ChannelID int64     `json:"channel_id"`
 	CreatedAt time.Time `json:"created_at"`
 	ID        int64     `json:"id"`
+}
+
+type WsSearchServersRequest struct {
+    Query string `json:"query"`
+    Limit int    `json:"limit,omitempty"`
+}
+
+type WsSearchServersResponse struct {
+    Servers []Server `json:"servers"`
 }
 
 func EncodeWsMessageCursor(cursor WsMessageCursor) (string, error) {

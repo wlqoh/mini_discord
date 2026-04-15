@@ -131,6 +131,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		leaveVoiceChannel(h, req)
 	case types.WsActionRTCSignal:
 		relayRTCSignal(h, req, ctx)
+	case types.WsActionSearchServers:
+        searchServers(h, req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -752,3 +754,32 @@ func normalizeChannelType(raw string) string {
 		return ""
 	}
 }
+
+func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {
+	var payload types.WsSearchServersRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid search_servers payload")
+		return
+	}
+
+	payload.Query = strings.TrimSpace(payload.Query)
+	if payload.Query == "" || len([]rune(payload.Query)) < 2 {
+		h.pushEvent(req.client, &types.WsEvent{
+			Event: types.WsEventAck,
+			Data:  types.WsSearchServersResponse{Servers: []types.Server{}},
+		})
+		return
+	}
+
+	servers, err := h.storage.SearchServersByName(ctx, req.client.UserID, payload.Query, payload.Limit)
+	if err != nil {
+		h.pushError(req.client, "failed to search servers")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  types.WsSearchServersResponse{Servers: servers},
+	})
+}
+
