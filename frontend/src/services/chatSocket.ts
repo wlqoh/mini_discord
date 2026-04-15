@@ -78,6 +78,16 @@ function toMessage(raw: unknown): Message | null {
   type RawMessage = Partial<Message> & {
     author_first_name?: unknown;
     author_last_name?: unknown;
+    first_name?: unknown;
+    last_name?: unknown;
+    authorFirstName?: unknown;
+    authorLastName?: unknown;
+    author?: {
+      first_name?: unknown;
+      last_name?: unknown;
+      firstName?: unknown;
+      lastName?: unknown;
+    } | unknown;
   };
 
   const candidate = raw as RawMessage;
@@ -89,12 +99,38 @@ function toMessage(raw: unknown): Message | null {
     return null;
   }
 
+  const authorObject =
+    candidate.author && typeof candidate.author === "object"
+      ? (candidate.author as {
+          first_name?: unknown;
+          last_name?: unknown;
+          firstName?: unknown;
+          lastName?: unknown;
+        })
+      : null;
+
+  const authorFirstName =
+    (typeof candidate.author_first_name === "string" && candidate.author_first_name) ||
+    (authorObject && typeof authorObject.first_name === "string" ? authorObject.first_name : "") ||
+    (authorObject && typeof authorObject.firstName === "string" ? authorObject.firstName : "") ||
+    (typeof candidate.first_name === "string" && candidate.first_name) ||
+    (typeof candidate.authorFirstName === "string" && candidate.authorFirstName) ||
+    "";
+
+  const authorLastName =
+    (typeof candidate.author_last_name === "string" && candidate.author_last_name) ||
+    (authorObject && typeof authorObject.last_name === "string" ? authorObject.last_name : "") ||
+    (authorObject && typeof authorObject.lastName === "string" ? authorObject.lastName : "") ||
+    (typeof candidate.last_name === "string" && candidate.last_name) ||
+    (typeof candidate.authorLastName === "string" && candidate.authorLastName) ||
+    "";
+
   return {
     id: typeof candidate.id === "number" ? candidate.id : 0,
     channel_id: candidate.channel_id,
     author_id: candidate.author_id,
-    author_first_name: typeof candidate.author_first_name === "string" ? candidate.author_first_name : "",
-    author_last_name: typeof candidate.author_last_name === "string" ? candidate.author_last_name : "",
+    author_first_name: authorFirstName,
+    author_last_name: authorLastName,
     content: candidate.content,
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
