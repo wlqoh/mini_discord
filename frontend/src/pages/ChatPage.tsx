@@ -289,19 +289,8 @@ export default function ChatPage() {
 
         const timeoutId = window.setTimeout(() => {
             const requestId = ++joinSearchRequestIdRef.current;
-            const searchFn = (socket as unknown as {
-                searchServers?: (searchQuery: string, limit?: number) => Promise<Array<{ id: number; name: string }>>;
-            }).searchServers;
 
-            if (!searchFn) {
-                if (requestId === joinSearchRequestIdRef.current) {
-                    setIsSearchingServers(false);
-                    setJoinResults([]);
-                }
-                return;
-            }
-
-            void searchFn(query, 20)
+            void socket.searchServers(query, 20)
                 .then((results) => {
                     if (requestId !== joinSearchRequestIdRef.current) {
                         return;
