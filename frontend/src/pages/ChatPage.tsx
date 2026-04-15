@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {useNavigate} from "react-router-dom";
-import { Search } from "lucide-react";
+import { Search, Trash2 } from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -625,12 +625,25 @@ export default function ChatPage() {
             <aside className="channels-sidebar">
                 <div className="channels-header">
                     <span>Server {currentServer?.name ?? "-"}</span>
+                    {isCurrentServerOwner ? (
+                        <button
+                            className="channels-add-btn"
+                            onClick={() => void handleDeleteServer()}
+                            disabled={!isConnected || selectedServerId <= 0}
+                            aria-label="Delete server"
+                            title="Delete server"
+                            type="button"
+                        >
+                            <Trash2 size={16} aria-hidden="true" />
+                        </button>
+                    ) : null}
                     <button
                         className="channels-add-btn"
                         onClick={openCreateChannelModal}
                         disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
                         aria-label="Create channel"
-                        title="Create channel">
+                        title="Create channel"
+                        type="button">
                         +
                     </button>
                 </div>
@@ -863,17 +876,6 @@ export default function ChatPage() {
                 </div>
             )}
 
-            {isCurrentServerOwner ? (
-                <button
-                    className="channels-add-btn"
-                    onClick={() => void handleDeleteServer()}
-                    disabled={!isConnected || selectedServerId <= 0}
-                    aria-label="Delete server"
-                    title="Delete server"
-                >
-                    Del
-                </button>
-            ) : null}
 
         </div>
     );
