@@ -84,8 +84,6 @@ type WsDeleteChannelRequest struct {
 type WsSendMessageRequest struct {
 	ChannelID int64  `json:"channel_id"`
 	Content   string `json:"content"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
 }
 
 type WsGetMessagesRequest struct {
