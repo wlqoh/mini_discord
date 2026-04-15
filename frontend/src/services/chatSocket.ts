@@ -388,17 +388,30 @@ export class ChatSocket {
     return payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null);
   }
 
-  async getServers(): Promise<Array<{ id: number; name: string }>> {
+  async getServers(): Promise<Array<{ id: number; name: string; owner_id: number }>> {
     const data = await this.sendCommand("get_servers", {});
-    const payload = data as { servers?: Array<{ id?: number; name?: string }> };
+    const payload = data as { servers?: Array<{ id?: number; name?: string; owner_id?: number }> };
 
     if (!Array.isArray(payload?.servers)) {
       return [];
     }
 
     return payload.servers
-      .filter((server) => typeof server.id === "number" && typeof server.name === "string")
-      .map((server) => ({ id: server.id as number, name: server.name as string }));
+        .filter(
+            (server) =>
+                typeof server.id === "number" &&
+                typeof server.name === "string" &&
+                typeof server.owner_id === "number",
+        )
+        .map((server) => ({
+          id: server.id as number,
+          name: server.name as string,
+          owner_id: server.owner_id as number,
+        }));
+  }
+
+  async deleteServer(serverId: number): Promise<void> {
+    await this.sendCommand("delete_server", { server_id: serverId });
   }
 
   async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {

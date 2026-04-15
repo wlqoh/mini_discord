@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {useNavigate} from "react-router-dom";
+import { Search } from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -529,6 +530,27 @@ export default function ChatPage() {
         }
     }
 
+    async function handleDeleteServer(): Promise<void> {
+        if (!socketRef.current || !isConnected || selectedServerId <= 0) {
+            setError("No connection");
+            return
+        }
+
+        const confirmed = window.confirm("Delete this server? This action cannot be undone");
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            await socketRef.current.deleteServer(selectedServerId);
+            await syncServersAndChannels();
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to delete server";
+            setError(message);
+        }
+    }
+
     function toggleMicrophone(): void {
         const next = !isMicEnabled;
         setIsMicEnabled(next);
@@ -544,6 +566,10 @@ export default function ChatPage() {
 
     const activeChannels = channelsByServer[selectedServerId] ?? [];
     const currentServer = servers.find((server) => server.id === selectedServerId);
+    const isCurrentServerOwner =
+        currentUserId !== null &&
+        currentServer !== undefined &&
+        currentServer.owner_id === currentUserId;
     const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
     const isVoiceChannel = currentChannel?.type === "voice";
     const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
@@ -578,7 +604,7 @@ export default function ChatPage() {
                     aria-label="Join server"
                     title="Join server"
                 >
-                    ?
+                    <Search size={18} aria-hidden="true" />
                 </button>
                 <ul className="servers-list">
                     {servers.map((server) => (
@@ -836,6 +862,19 @@ export default function ChatPage() {
                     </div>
                 </div>
             )}
+
+            {isCurrentServerOwner ? (
+                <button
+                    className="channels-add-btn"
+                    onClick={() => void handleDeleteServer()}
+                    disabled={!isConnected || selectedServerId <= 0}
+                    aria-label="Delete server"
+                    title="Delete server"
+                >
+                    Del
+                </button>
+            ) : null}
+
         </div>
     );
 }

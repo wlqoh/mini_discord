@@ -8,6 +8,7 @@ export interface Channel {
 export interface Server {
     id: number;
     name: string;
+    owner_id: number;
 }
 
 export interface Message {
