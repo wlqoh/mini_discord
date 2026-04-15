@@ -328,8 +328,20 @@ func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64
 }
 
 func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]types.Channel, error) {
-	query := "SELECT id, server_id, name, type FROM channels WHERE server_id = $1 ORDER BY id"
-	rows, err := s.db.QueryContext(ctx, query, serverID)
+	query := `
+		SELECT
+			id,
+			server_id,
+			name,
+			CASE
+				WHEN LOWER(TRIM(COALESCE(type, ''))) = $2 THEN $2
+				ELSE $3
+			END AS type
+		FROM channels
+		WHERE server_id = $1
+		ORDER BY id
+	`
+	rows, err := s.db.QueryContext(ctx, query, serverID, types.ChannelTypeVoice, types.ChannelTypeText)
 	if err != nil {
 		return nil, err
 	}

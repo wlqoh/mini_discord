@@ -403,25 +403,19 @@ export class ChatSocket {
 
   async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {
     const data = await this.sendCommand("get_server_channels", { server_id: serverId });
-    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string; type?: "text" | "voice" }> };
+    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }> };
 
     if (!Array.isArray(payload?.channels)) {
       return [];
     }
 
     return payload.channels
-      .filter(
-        (channel) =>
-          typeof channel.id === "number" &&
-          typeof channel.server_id === "number" &&
-          typeof channel.name === "string" &&
-          (channel.type === "text" || channel.type === "voice"),
-      )
+      .filter((channel) => typeof channel.id === "number" && typeof channel.server_id === "number" && typeof channel.name === "string")
       .map((channel) => ({
         id: channel.id as number,
         server_id: channel.server_id as number,
         name: channel.name as string,
-        type: channel.type as "text" | "voice",
+        type: channel.type === "voice" ? "voice" : "text",
       }));
   }
 

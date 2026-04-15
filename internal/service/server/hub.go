@@ -441,11 +441,17 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	user, err := h.storage.GetUserByID(ctx, req.client.UserID)
+	if err != nil || user == nil {
+		h.pushError(req.client, "failed to resolve message author")
+		return
+	}
+
 	msg := types.WsMessage{
 		ChannelID:       payload.ChannelID,
 		AuthorID:        req.client.UserID,
-		AuthorFirstName: payload.FirstName,
-		AuthorLastName:  payload.LastName,
+		AuthorFirstName: user.FirstName,
+		AuthorLastName:  user.LastName,
 		Content:         payload.Content,
 		CreatedAt:       time.Now().UTC(),
 	}
