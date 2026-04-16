@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS servers (
     id bigserial PRIMARY KEY,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL CHECK (char_length(name) <= 16),
     owner_id bigint REFERENCES users(id) ON DELETE CASCADE,
     created_at TIMESTAMP DEFAULT now()
 );
@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS server_members (
 CREATE TABLE IF NOT EXISTS channels (
     id bigserial PRIMARY KEY,
     server_id bigint REFERENCES servers(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
+    name TEXT NOT NULL CHECK (char_length(name) <= 16),
     type TEXT DEFAULT 'text',
     position INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT now()
