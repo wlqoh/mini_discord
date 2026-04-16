@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, password, created_at, updated_at FROM users WHERE email = $1", email)
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, avatar_key, password, created_at, updated_at FROM users WHERE email = $1", email)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -22,12 +22,14 @@ func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User
 
 func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 	u := new(types.User)
+	var avatarKey sql.NullString
 
 	err := row.Scan(
 		&u.ID,
 		&u.FirstName,
 		&u.LastName,
 		&u.Email,
+		&avatarKey,
 		&u.Password,
 		&u.CreatedAt,
 		&u.UpdatedAt,
@@ -39,11 +41,15 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 		return nil, err
 	}
 
+	if avatarKey.Valid {
+		u.AvatarKey = avatarKey.String
+	}
+
 	return u, nil
 }
 
 func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT * FROM users WHERE id = $1", id)
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, avatar_key, password, created_at, updated_at FROM users WHERE id = $1", id)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -51,6 +57,16 @@ func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) 
 	}
 
 	return u, nil
+}
+
+func (s *Storage) SaveUserAvatar(ctx context.Context, userID int, avatarKey string) error {
+	_, err := s.db.ExecContext(
+		ctx,
+		"UPDATE users SET avatar_key = $1, updated_at = NOW() WHERE id = $2",
+		avatarKey,
+		userID,
+	)
+	return err
 }
 
 func (s *Storage) CreateUser(ctx context.Context, user types.User) error {

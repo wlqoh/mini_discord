@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
@@ -27,12 +28,76 @@ func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger)
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
 	limiterMW := limiter.FiberRateLimitMiddleware()
+	router.Get("/getAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetImage)
+	router.Get("/setAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleSetImage)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
 	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {
 		router.Post("/renew", limiterMW, h.handleRenewAccessToken)
+	})
+}
+
+func (h *Handler) handleSetImage(c *fiber.Ctx) error {
+	const op = "service.user.handleSetImage"
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	user, err := h.storage.GetUserByID(c.Context(), clientID)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusUnauthorized, "can't get user")
+	}
+	if user.AvatarKey == "" {
+		uid := uuid.UUID{}.String()
+		err = h.storage.SaveUserAvatar(c.Context(), clientID, uid)
+		if err != nil {
+			h.log.Error(op, "error", err.Error())
+			return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
+		}
+	}
+
+	url := h.cfg.S3HOST + user.AvatarKey
+
+	err = h.storage.SaveUserAvatar(c.Context(), clientID, url)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
+	}
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"url": url,
+	})
+}
+
+func (h *Handler) handleGetImage(c *fiber.Ctx) error {
+	const op = "service.user.handleGetImage"
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	user, err := h.storage.GetUserByID(c.Context(), clientID)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "can't get user")
+	}
+
+	if user.AvatarKey == "" {
+		return utils.WriteError(c, fiber.StatusBadRequest, "user has no avatar")
+	}
+
+	url := h.cfg.S3HOST + user.AvatarKey
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"url": url,
 	})
 }
 

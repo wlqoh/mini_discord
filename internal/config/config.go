@@ -12,6 +12,7 @@ import (
 type Config struct {
 	Env                           string `yaml:"env" env-default:"local"`
 	StoragePath                   string `yaml:"storage_path" env-required:"true"`
+	S3HOST                        string `yaml:"S3_HOST" env-default:"https://storage.yandexcloud.net/"`
 	HTTPServer                    `yaml:"http_server"`
 	JWTSecret                     string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
 	JWTAccessExpirationInMinutes  int    `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
