@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { extractApiError } from "../services/apiError";
+import { getValidAccessToken } from "../services/authToken";
 
 import API from "../api";
 import "../index.css";
@@ -38,6 +39,12 @@ export default function Login(): React.JSX.Element {
 
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (getValidAccessToken()) {
+      navigate("/chat", { replace: true });
+    }
+  }, [navigate]);
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>): void => {
     const { name, value } = event.target;
