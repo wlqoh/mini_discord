@@ -12,10 +12,20 @@ import (
 type Config struct {
 	Env                           string `yaml:"env" env-default:"local"`
 	StoragePath                   string `yaml:"storage_path" env-required:"true"`
+	S3HOST                        string `yaml:"S3_HOST" env-default:"https://storage.yandexcloud.net/"`
+	S3                            S3Config `yaml:"s3"`
 	HTTPServer                    `yaml:"http_server"`
 	JWTSecret                     string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
 	JWTAccessExpirationInMinutes  int    `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
 	JWTRefreshExpirationInMinutes int    `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
+}
+
+type S3Config struct {
+	Endpoint        string `yaml:"endpoint" env:"S3_ENDPOINT" env-default:"https://storage.yandexcloud.net"`
+	Region          string `yaml:"region" env:"S3_REGION" env-default:"ru-central1"`
+	Bucket          string `yaml:"bucket" env:"S3_BUCKET" env-required:"true"`
+	AccessKeyID     string `yaml:"access_key_id" env:"S3_ACCESS_KEY_ID" env-required:"true"`
+	SecretAccessKey string `yaml:"secret_access_key" env:"S3_SECRET_ACCESS_KEY" env-required:"true"`
 }
 
 type HTTPServer struct {

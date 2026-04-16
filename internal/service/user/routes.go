@@ -2,12 +2,17 @@ package user
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/objectstorage"
 	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -18,15 +23,23 @@ type Handler struct {
 	storage types.UserStorage
 	cfg     *config.Config
 	log     *slog.Logger
+	s3      *objectstorage.Client
 }
 
 func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger) *Handler {
-	return &Handler{storage: storage, cfg: cfg, log: log}
+	s3Client, err := objectstorage.New(cfg)
+	if err != nil {
+		log.Error("failed to init object storage client", "error", err.Error())
+	}
+
+	return &Handler{storage: storage, cfg: cfg, log: log, s3: s3Client}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
 	limiterMW := limiter.FiberRateLimitMiddleware()
+	router.Get("/getAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetImage)
+	router.Post("/setAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleSetImage)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
 	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
@@ -35,6 +48,90 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 		router.Post("/renew", limiterMW, h.handleRenewAccessToken)
 	})
 }
+
+func (h *Handler) handleSetImage(c *fiber.Ctx) error {
+	const op = "service.user.handleSetImage"
+
+	if h.s3 == nil {
+		return utils.WriteError(c, fiber.StatusInternalServerError, "cloud storage is not configured")
+	}
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	file, err := c.FormFile("avatar")
+	if err != nil {
+		return utils.WriteError(c, fiber.StatusBadRequest, "avatar file is required")
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	switch ext {
+	case ".png", ".jpg", ".jpeg", ".webp":
+	default:
+		return utils.WriteError(c, fiber.StatusBadRequest, "unsupported avatar type")
+	}
+
+	src, err := file.Open()
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to open avatar")
+	}
+	defer src.Close()
+
+	raw, err := io.ReadAll(src)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to read avatar")
+	}
+
+	avatarKey := fmt.Sprintf("avatars/%d/%s%s", clientID, uuid.NewString(), ext)
+	url, err := h.s3.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
+	}
+
+	err = h.storage.SaveUserAvatar(c.Context(), clientID, avatarKey)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"url": url,
+	})
+}
+
+func (h *Handler) handleGetImage(c *fiber.Ctx) error {
+	const op = "service.user.handleGetImage"
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	user, err := h.storage.GetUserByID(c.Context(), clientID)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "can't get user")
+	}
+
+	if user.AvatarKey == "" {
+		return utils.WriteError(c, fiber.StatusBadRequest, "user has no avatar")
+	}
+
+	url := h.cfg.S3HOST + user.AvatarKey
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"url": url,
+	})
+}
+
 
 func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	const op = "service.user.handleLogin"
