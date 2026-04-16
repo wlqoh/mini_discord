@@ -14,6 +14,7 @@ import "../styles/chat.css";
 const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
+const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
 
 // function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
 //   const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
@@ -374,6 +375,10 @@ export default function ChatPage() {
             setError("Enter the server name");
             return;
         }
+        if ([...trimmedName].length > MAX_SERVER_CHANNEL_NAME_LENGTH) {
+            setError(`Server name must be at most ${MAX_SERVER_CHANNEL_NAME_LENGTH} characters`);
+            return;
+        }
 
         if (isCreatingServerRef.current) {
             return;
@@ -409,6 +414,10 @@ export default function ChatPage() {
         const trimmedName = newChannelName.trim();
         if (!trimmedName) {
             setError("Enter the channel name");
+            return;
+        }
+        if ([...trimmedName].length > MAX_SERVER_CHANNEL_NAME_LENGTH) {
+            setError(`Channel name must be at most ${MAX_SERVER_CHANNEL_NAME_LENGTH} characters`);
             return;
         }
 
@@ -803,7 +812,7 @@ export default function ChatPage() {
                             placeholder="Enter server name"
                             value={newServerName}
                             onChange={(e) => setNewServerName(e.target.value)}
-                            maxLength={64}
+                            maxLength={MAX_SERVER_CHANNEL_NAME_LENGTH}
                             autoFocus
                         />
 
@@ -884,7 +893,7 @@ export default function ChatPage() {
                             placeholder="Enter channel name"
                             value={newChannelName}
                             onChange={(e) => setNewChannelName(e.target.value)}
-                            maxLength={64}
+                            maxLength={MAX_SERVER_CHANNEL_NAME_LENGTH}
                             autoFocus
                         />
                         <select

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -36,6 +37,8 @@ type wsCommandRequest struct {
 	client  *Client
 	command types.WsCommand
 }
+
+const maxServerChannelNameLen = 16
 
 func NewHub(storage types.ServerStorage, log *slog.Logger) *Hub {
 	return &Hub{
@@ -254,6 +257,10 @@ func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 		h.pushError(req.client, "server name is required")
 		return
 	}
+	if utf8.RuneCountInString(payload.Name) > maxServerChannelNameLen {
+		h.pushError(req.client, "server name must be at most 16 characters")
+		return
+	}
 
 	serverID, err := h.storage.CreateServer(ctx, types.Server{Name: payload.Name, OwnerID: req.client.UserID})
 	if err != nil {
@@ -320,6 +327,10 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	payloadType := normalizeChannelType(payload.Type)
 	if payload.ServerID <= 0 || payload.Name == "" {
 		h.pushError(req.client, "server_id and name are required")
+		return
+	}
+	if utf8.RuneCountInString(payload.Name) > maxServerChannelNameLen {
+		h.pushError(req.client, "channel name must be at most 16 characters")
 		return
 	}
 	if payloadType == "" {
