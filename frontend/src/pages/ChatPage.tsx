@@ -9,11 +9,14 @@ import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
 import type {ChannelsByServer, Message, MessagesByChannel, Server, VoiceParticipant} from "../types/chat.ts";
+import {getMyAvatarUrl, uploadMyAvatar} from "../services/avatarApi.ts";
 import "../styles/chat.css";
 
 const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
+const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 // function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
 //   const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
@@ -36,6 +39,8 @@ export default function ChatPage() {
     const [isCreatingChannel, setIsCreatingChannel] = useState(false);
     const [isSearchingServers, setIsSearchingServers] = useState(false);
     const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+    const avatarInputRef = useRef<HTMLInputElement | null>(null);
+    const [avatarUrl, setAvatarUrl] = useState("")
 
     const [servers, setServers] = useState<Server[]>([]);
     const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -60,6 +65,8 @@ export default function ChatPage() {
     const currentUserId: number | null = getCurrentUserId();
     const [joinQuery, setJoinQuery] = useState("");
     const [joinResults, setJoinResults] = useState<Array<{ id: number; name: string }>>([]);
+    const [avatarError, setAvatarError] = useState("");
+    const [isAvatarUploading, setIsAvatarUploading] = useState(false);
     const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
         const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
         if (fullName) {
@@ -78,6 +85,11 @@ export default function ChatPage() {
         },
         [navigate],
     );
+
+    const loadAvatar = useCallback(async () => {
+        const url = await getMyAvatarUrl();
+        setAvatarUrl(url ?? "");
+    }, []);
 
     const syncServersAndChannels = useCallback(
         async (preferredServerId?: number) => {
@@ -264,6 +276,11 @@ export default function ChatPage() {
         }
         selectedServerIdRef.current = selectedServerId;
     }, [selectedServerId]);
+
+    useEffect(() => {
+        void loadAvatar();
+    }, [loadAvatar]);
+
 
     useEffect(() => {
         if (!isJoinModalOpen) {
@@ -551,6 +568,44 @@ export default function ChatPage() {
         }
     }
 
+    function openAvatarPicker(): void {
+        setAvatarError("");
+        avatarInputRef.current?.click();
+    }
+
+    async function handleAvatarChange(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+        const file = event.target.files?.[0];
+        if (!file) {
+            return;
+        }
+
+        if (!ALLOWED_AVATAR_TYPES.has(file.type)) {
+            setAvatarError("Unsupported file type. Please select a PNG, JPEG, or WEBP image.");
+            event.target.value = "";
+            return;
+        }
+
+        if (file.size > MAX_AVATAR_SIZE_BYTES) {
+            setAvatarError("File is too large. Please select an image smaller than 5 MB.");
+            event.target.value = "";
+            return;
+        }
+
+        setIsAvatarUploading(true);
+        setAvatarError("");
+
+        try {
+      const uploadedUrl = await uploadMyAvatar(file);
+      setAvatarUrl(uploadedUrl);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to upload avatar";
+            setAvatarError(message);
+        } finally {
+            setIsAvatarUploading(false);
+            event.target.value = "";
+        }
+    }
+
     function toggleMicrophone(): void {
         const next = !isMicEnabled;
         setIsMicEnabled(next);
@@ -670,7 +725,16 @@ export default function ChatPage() {
                             aria-label="Open profile"
                             title="Profile"
                         >
-                            {userInitial}
+                            {avatarUrl ? (
+                                <img
+                                    src={avatarUrl}
+                                    alt="User avatar"
+                                    className="profile-open-avatar"
+                                    onError={() => setAvatarUrl("")}
+                                />
+                            ) : (
+                                userInitial
+                            )}
                         </button>
                     </div>
                     <div
@@ -715,6 +779,41 @@ export default function ChatPage() {
                     <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Profile</h3>
                         <div className="profile-modal-list">
+                            <div className="profile-avatar-block">
+                                <div className="profile-avatar-preview-wrap">
+                                    {avatarUrl ? (
+                                        <img
+                                            src={avatarUrl}
+                                            alt="Current avatar"
+                                            className="profile-avatar-preview"
+                                            onError={() => setAvatarUrl("")}
+                                        />
+                                    ) : (
+                                        <div className="profile-avatar-fallback">{userInitial}</div>
+                                    )}
+                                </div>
+
+                                <div className="profile-avatar-actions">
+                                    <input
+                                        ref={avatarInputRef}
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/webp"
+                                        onChange={(e) => void handleAvatarChange(e)}
+                                        style={{ display: "none" }}
+                                    />
+                                    <button
+                                        className="modal-btn modal-btn-primary"
+                                        type="button"
+                                        onClick={openAvatarPicker}
+                                        disabled={isAvatarUploading}
+                                    >
+                                        {isAvatarUploading ? "Uploading..." : "Change avatar"}
+                                    </button>
+                                </div>
+
+                                {avatarError ? <div className="profile-avatar-error">{avatarError}</div> : null}
+                            </div>
+
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">First name</span>
                                 <span className="profile-modal-value">{currentUserProfile?.first_name || "-"}</span>
