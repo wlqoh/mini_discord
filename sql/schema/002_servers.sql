@@ -7,3 +7,4 @@ CREATE TABLE servers (
 );
 -- +goose Down
 DROP TABLE IF EXISTS servers;
+
