@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import { Search, Trash2 } from "lucide-react";
+import {Search, Trash2} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -53,7 +53,11 @@ export default function ChatPage() {
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
     const [voiceChannelId, setVoiceChannelId] = useState(0);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-    const [remoteStreams, setRemoteStreams] = useState<Array<{ userId: number; label: string; stream: MediaStream }>>([]);
+    const [remoteStreams, setRemoteStreams] = useState<Array<{
+        userId: number;
+        label: string;
+        stream: MediaStream
+    }>>([]);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
     const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
@@ -67,7 +71,6 @@ export default function ChatPage() {
         }
         return `User ${participant.user_id}`;
     }, []);
-
 
 
     const handleAuthFailure = useCallback(
@@ -510,13 +513,13 @@ export default function ChatPage() {
             setIsCameraEnabled(false);
         }
     }
-    
+
     async function handleJoinServer(serverId: number) {
         if (!socketRef.current || !isConnected) {
             setError("No connection");
             return;
         }
-        
+
         try {
             await socketRef.current.joinServer(serverId);
             await syncServersAndChannels(serverId);
@@ -547,6 +550,25 @@ export default function ChatPage() {
             setError("");
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to delete server";
+            setError(message);
+        }
+    }
+
+    async function handleDeleteChannel(channelId: number): Promise<void> {
+        if (!socketRef.current || !isConnected || selectedServerId <= 0 || channelId <= 0) {
+            setError("No connection");
+            return
+        }
+
+        const confirmed = window.confirm("Delete this channel? This action cannot be undone");
+        if (!confirmed) return;
+
+        try {
+            await socketRef.current.deleteChannel(channelId);
+            await syncServersAndChannels(selectedServerId);
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to delete channel";
             setError(message);
         }
     }
@@ -604,7 +626,7 @@ export default function ChatPage() {
                     aria-label="Join server"
                     title="Join server"
                 >
-                    <Search size={18} aria-hidden="true" />
+                    <Search size={18} aria-hidden="true"/>
                 </button>
                 <ul className="servers-list">
                     {servers.map((server) => (
@@ -625,35 +647,52 @@ export default function ChatPage() {
             <aside className="channels-sidebar">
                 <div className="channels-header">
                     <span>Server {currentServer?.name ?? "-"}</span>
-                    {isCurrentServerOwner ? (
+                    <div className="actions">
+                        {isCurrentServerOwner ? (
+                            <button
+                                className="channels-add-btn"
+                                onClick={() => void handleDeleteServer()}
+                                disabled={!isConnected || selectedServerId <= 0}
+                                aria-label="Delete server"
+                                title="Delete server"
+                                type="button"
+                            >
+                                <Trash2 size={16} aria-hidden="true"/>
+                            </button>
+                        ) : null}
                         <button
                             className="channels-add-btn"
-                            onClick={() => void handleDeleteServer()}
-                            disabled={!isConnected || selectedServerId <= 0}
-                            aria-label="Delete server"
-                            title="Delete server"
-                            type="button"
-                        >
-                            <Trash2 size={16} aria-hidden="true" />
+                            onClick={openCreateChannelModal}
+                            disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
+                            aria-label="Create channel"
+                            title="Create channel"
+                            type="button">
+                            +
                         </button>
-                    ) : null}
-                    <button
-                        className="channels-add-btn"
-                        onClick={openCreateChannelModal}
-                        disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
-                        aria-label="Create channel"
-                        title="Create channel"
-                        type="button">
-                        +
-                    </button>
+                    </div>
                 </div>
                 <ul className="channels-list">
                     {activeChannels.map((channel) => (
-                        <li key={channel.id}>
-                            <button className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
-                                    onClick={() => setSelectedChannelId(channel.id)}>
+                        <li key={channel.id} className="channel-row-wrap">
+                            <button
+                                className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
+                                onClick={() => setSelectedChannelId(channel.id)}
+                                type="button"
+                            >
                                 {channel.type === "voice" ? "🔊" : "#"} {channel.name}
                             </button>
+
+                            {isCurrentServerOwner ? (
+                                <button
+                                    className="channels-delete-btn"
+                                    type="button"
+                                    onClick={() => void handleDeleteChannel(channel.id)}
+                                    aria-label={`Delete channel ${channel.name}`}
+                                    title="Delete channel"
+                                >
+                                    <Trash2 size={14} aria-hidden="true"/>
+                                </button>
+                            ) : null}
                         </li>
                     ))}
                 </ul>
@@ -697,15 +736,15 @@ export default function ChatPage() {
                                 )}
                             </div>
                             <div className="video-grid">
-                                {localStream && <VideoTile stream={localStream} label="You" muted />}
+                                {localStream && <VideoTile stream={localStream} label="You" muted/>}
                                 {remoteStreams.map((item) => (
-                                    <VideoTile key={item.userId} stream={item.stream} label={item.label} />
+                                    <VideoTile key={item.userId} stream={item.stream} label={item.label}/>
                                 ))}
                             </div>
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList messages={activeMessages} currentUserId={currentUserId} />
+                    <MessageList messages={activeMessages} currentUserId={currentUserId}/>
                 </div>
                 <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0 || isVoiceChannel}/>
             </section>
@@ -770,14 +809,14 @@ export default function ChatPage() {
 
                         <div className="modal-actions">
                             <button
-                                className="modal-btn modal-btn-secondary"
+                                className="modal-btn modal-btn-primary"
                                 onClick={() => setIsCreateServerModalOpen(false)}
                                 disabled={isCreatingServer}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="modal-btn modal-btn-primary"
+                                className="modal-btn modal-btn-secondary"
                                 onClick={handleAddServerSubmit}
                                 disabled={isCreatingServer}
                             >
@@ -813,7 +852,8 @@ export default function ChatPage() {
                             <ul className="channels-list">
                                 {joinResults.map((server) => (
                                     <li key={server.id}>
-                                        <button className="channel-row" onClick={() => void handleJoinServer(server.id)}>
+                                        <button className="channel-row"
+                                                onClick={() => void handleJoinServer(server.id)}>
                                             Join {server.name}
                                         </button>
                                     </li>
@@ -858,14 +898,14 @@ export default function ChatPage() {
 
                         <div className="modal-actions">
                             <button
-                                className="modal-btn modal-btn-secondary"
+                                className="modal-btn modal-btn-primary"
                                 onClick={() => setIsCreateChannelModalOpen(false)}
                                 disabled={isCreatingChannel}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="modal-btn modal-btn-primary"
+                                className="modal-btn modal-btn-secondary"
                                 onClick={handleAddChannelSubmit}
                                 disabled={isCreatingChannel}
                             >

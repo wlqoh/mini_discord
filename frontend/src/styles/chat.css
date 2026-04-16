@@ -90,7 +90,12 @@
     background: #3a3c43;
     color: var(--text-primary);
     cursor: pointer;
-    font-size: 18px;
+    font-size: 20px;
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
 }
 
 .channels-list {
@@ -102,8 +107,9 @@
 }
 
 .channel-row {
+    flex: 1;
     width: 100%;
-    border: none;
+    border: 1px solid #3b3d44;
     border-radius: 8px;
     background: transparent;
     color: var(--text-secondary);
@@ -112,10 +118,31 @@
     cursor: pointer;
 }
 
+.channel-row-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
 .channel-row.active,
 .channel-row:hover {
     background: #3a3c43;
     color: var(--text-primary);
+}
+
+.channels-delete-btn {
+    border: none;
+    border-radius: 8px;
+    width: 32px;
+    height: 32px;
+    background: var(--panel-2);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 10px;
+}
+
+.channels-delete-btn:hover {
+    background: #4a4d55;
 }
 
 .chat-main {
@@ -305,6 +332,9 @@
 }
 
 .modal-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     width: min(420px, 92vw);
     background: var(--panel);
     border-radius: 12px;
@@ -321,7 +351,7 @@
 .modal-input {
     width: 100%;
     padding: 10px 12px;
-    border: 1px solid #3a3c43;
+    border: 1px solid var(--panel-2);
     border-radius: 10px;
     background: var(--input-bg);
     color: var(--text-primary);
@@ -346,15 +376,15 @@
 }
 
 .modal-btn-secondary {
-    background: #3a3c43;
-    color: var(--button-text);
-    border-color: #3a3c43;
-}
-
-.modal-btn-primary {
     background: var(--button-bg);
     color: var(--button-text);
     border-color: var(--button-bg);
+}
+
+.modal-btn-primary {
+    background: #3a3c43;
+    color: var(--button-text);
+    border-color: #3a3c43;
 }
 
 .profile-modal-card {
