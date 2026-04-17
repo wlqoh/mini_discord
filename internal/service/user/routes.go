@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/internal/config"
-	"github.com/wlqoh/mini_discord.git/internal/lib/objectstorage"
 	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -20,19 +20,14 @@ import (
 )
 
 type Handler struct {
-	storage types.UserStorage
-	cfg     *config.Config
-	log     *slog.Logger
-	s3      *objectstorage.Client
+	storage  types.UserStorage
+	cfg      *config.Config
+	log      *slog.Logger
+	s3Client types.S3ClientStorage
 }
 
-func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger) *Handler {
-	s3Client, err := objectstorage.New(cfg)
-	if err != nil {
-		log.Error("failed to init object storage client", "error", err.Error())
-	}
-
-	return &Handler{storage: storage, cfg: cfg, log: log, s3: s3Client}
+func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
+	return &Handler{storage: storage, cfg: cfg, log: log, s3Client: s3Client}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
@@ -51,10 +46,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 
 func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 	const op = "service.user.handleSetImage"
-
-	if h.s3 == nil {
-		return utils.WriteError(c, fiber.StatusInternalServerError, "cloud storage is not configured")
-	}
+	const maxAvatarSizeBytes int64 = 1 * 1024 * 1024
 
 	rawUserID := c.Locals("user_id")
 	clientID, ok := rawUserID.(int)
@@ -66,6 +58,10 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 	file, err := c.FormFile("avatar")
 	if err != nil {
 		return utils.WriteError(c, fiber.StatusBadRequest, "avatar file is required")
+	}
+
+	if file.Size > maxAvatarSizeBytes {
+		return utils.WriteError(c, fiber.StatusBadRequest, "avatar is too large (max 1MB)")
 	}
 
 	ext := strings.ToLower(filepath.Ext(file.Filename))
@@ -80,25 +76,56 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 		h.log.Error(op, "error", err.Error())
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to open avatar")
 	}
-	defer src.Close()
+	defer func() {
+		if closeErr := src.Close(); closeErr != nil {
+			h.log.Error(op, "error", closeErr.Error())
+		}
+	}()
 
-	raw, err := io.ReadAll(src)
+	var url string
+
+	raw, err := io.ReadAll(io.LimitReader(src, maxAvatarSizeBytes+1))
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to read avatar")
 	}
 
-	avatarKey := fmt.Sprintf("avatars/%d/%s%s", clientID, uuid.NewString(), ext)
-	url, err := h.s3.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
-	if err != nil {
-		h.log.Error(op, "error", err.Error())
-		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
+	if int64(len(raw)) > maxAvatarSizeBytes {
+		return utils.WriteError(c, fiber.StatusBadRequest, "avatar is too large (max 1MB)")
 	}
 
-	err = h.storage.SaveUserAvatar(c.Context(), clientID, avatarKey)
+	contentType := http.DetectContentType(raw)
+	switch contentType {
+	case "image/png", "image/jpeg", "image/webp":
+	default:
+		return utils.WriteError(c, fiber.StatusBadRequest, "unsupported avatar content type")
+	}
+
+	user, err := h.storage.GetUserByID(c.Context(), clientID)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
+		return utils.WriteError(c, fiber.StatusUnauthorized, "can't get user")
+	}
+
+	avatarKey := user.AvatarKey
+	if avatarKey == "" {
+		avatarKey = uuid.NewString()
+		url, err = h.s3Client.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
+		if err != nil {
+			h.log.Error(op, "error", err.Error())
+			return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
+		}
+		err = h.storage.SaveUserAvatar(c.Context(), clientID, avatarKey)
+		if err != nil {
+			h.log.Error(op, "error", err.Error())
+			return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
+		}
+	} else {
+		url, err = h.s3Client.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
+		if err != nil {
+			h.log.Error(op, "error", err.Error())
+			return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
+		}
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
@@ -131,7 +158,6 @@ func (h *Handler) handleGetImage(c *fiber.Ctx) error {
 		"url": url,
 	})
 }
-
 
 func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	const op = "service.user.handleLogin"

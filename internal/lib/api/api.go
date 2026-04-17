@@ -11,6 +11,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
+	"github.com/wlqoh/mini_discord.git/internal/storage/objectStorage"
 	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
 )
 
@@ -35,10 +36,12 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
 
+	s3Client := objectStorage.NewS3Client(cfg)
+
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
-	userHandler := user.NewHandler(s.db, cfg, log)
+	userHandler := user.NewHandler(s.db, cfg, log, s3Client)
 	userHandler.RegisterRoutes(v1)
 
 	hub := server.NewHub(s.db, log)
