@@ -3,6 +3,7 @@ package objectStorage
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"mime"
 	"path/filepath"
@@ -44,12 +45,13 @@ func (s3Client *S3Client) PutAvatar(ctx context.Context, key string, data []byte
 
 	_, err := s3Client.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(s3Client.cfg.S3.Bucket),
-		Key:         aws.String(key),
+		Key:         aws.String(fmt.Sprintf("avatars/%s", key)),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String(contentType),
 	})
 	if err != nil {
 		return "", err
 	}
-	return s3Client.cfg.S3HOST + key, nil
+
+	return fmt.Sprintf("%savatars/%s", s3Client.cfg.S3HOST, key), nil
 }

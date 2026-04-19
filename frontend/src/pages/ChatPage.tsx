@@ -16,7 +16,7 @@ const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
 const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
-const MAX_AVATAR_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_AVATAR_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
 const ALLOWED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 
 // function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
@@ -617,7 +617,7 @@ export default function ChatPage() {
         }
 
         if (file.size > MAX_AVATAR_SIZE_BYTES) {
-            setAvatarError("File is too large. Please select an image smaller than 5 MB.");
+            setAvatarError("File is too large. Please select an image smaller than 1 MB.");
             event.target.value = "";
             return;
         }

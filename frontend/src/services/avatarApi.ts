@@ -5,6 +5,36 @@ type AvatarUrlResponse = {
     url: string;
 };
 
+function looksLikeAvatarKey(value: string): boolean {
+    // Avatar keys are currently UUID-like values without file extension.
+    return /^[a-z0-9-]{16,}$/i.test(value);
+}
+
+function ensureAvatarPath(url: string): string {
+    if (!url) {
+        return url;
+    }
+
+    try {
+        const parsed = new URL(url, window.location.origin);
+        const segments = parsed.pathname.split("/").filter(Boolean);
+        if (segments.length === 0 || segments.includes("avatars")) {
+            return parsed.toString();
+        }
+
+        const lastSegment = segments[segments.length - 1];
+        if (!looksLikeAvatarKey(lastSegment)) {
+            return parsed.toString();
+        }
+
+        segments.splice(segments.length - 1, 0, "avatars");
+        parsed.pathname = `/${segments.join("/")}`;
+        return parsed.toString();
+    } catch {
+        return url;
+    }
+}
+
 function withCacheBuster(url: string, version?: string): string {
     if (!url) {
         return url;
@@ -27,19 +57,19 @@ function normalizeAvatarUrl(url: string): string {
     }
 
     if (/^https?:\/\//i.test(url)) {
-        return url;
+        return ensureAvatarPath(url);
     }
 
     const baseFromApi = API.defaults.baseURL;
     if (typeof baseFromApi === "string" && baseFromApi.length > 0) {
         try {
-            return new URL(url, baseFromApi).toString();
+            return ensureAvatarPath(new URL(url, baseFromApi).toString());
         } catch {
             // fallback below
         }
     }
 
-    return new URL(url, window.location.origin).toString();
+    return ensureAvatarPath(new URL(url, window.location.origin).toString());
 }
 
 export async function getMyAvatarUrl(): Promise<string | null> {
