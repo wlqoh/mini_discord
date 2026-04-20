@@ -78,6 +78,10 @@ function toMessage(raw: unknown): Message | null {
   type RawMessage = Partial<Message> & {
     author_first_name?: unknown;
     author_last_name?: unknown;
+    author_avatar_url?: unknown;
+    auuthor_avatar_url?: unknown;
+    authorAvatarUrl?: unknown;
+    avatar_url?: unknown;
     first_name?: unknown;
     last_name?: unknown;
     authorFirstName?: unknown;
@@ -125,12 +129,20 @@ function toMessage(raw: unknown): Message | null {
     (typeof candidate.authorLastName === "string" && candidate.authorLastName) ||
     "";
 
+  const authorAvatarUrl =
+    (typeof candidate.author_avatar_url === "string" && candidate.author_avatar_url) ||
+    (typeof candidate.auuthor_avatar_url === "string" && candidate.auuthor_avatar_url) ||
+    (typeof candidate.authorAvatarUrl === "string" && candidate.authorAvatarUrl) ||
+    (typeof candidate.avatar_url === "string" && candidate.avatar_url) ||
+    "";
+
   return {
     id: typeof candidate.id === "number" ? candidate.id : 0,
     channel_id: candidate.channel_id,
     author_id: candidate.author_id,
     author_first_name: authorFirstName,
     author_last_name: authorLastName,
+    author_avatar_url: authorAvatarUrl,
     content: candidate.content,
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };

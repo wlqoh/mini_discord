@@ -222,7 +222,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, m.content, m.created_at, m.edited_at
+	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.avatar_key, m.content, m.created_at, m.edited_at
 		 FROM messages m
 		 LEFT JOIN users u ON u.id = m.author_id
 		 WHERE m.channel_id = $1
@@ -231,7 +231,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, m.content, m.created_at, m.edited_at
+		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.avatar_key, m.content, m.created_at, m.edited_at
 			 FROM messages m
 			 LEFT JOIN users u ON u.id = m.author_id
 			 WHERE m.channel_id = $1
@@ -250,17 +250,22 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	var messages []types.WsMessage
 	for rows.Next() {
 		var msg types.WsMessage
+		var avatarKey sql.NullString
 		if err := rows.Scan(
 			&msg.ID,
 			&msg.ChannelID,
 			&msg.AuthorID,
 			&msg.AuthorFirstName,
 			&msg.AuthorLastName,
+			&avatarKey,
 			&msg.Content,
 			&msg.CreatedAt,
 			&msg.EditedAt,
 		); err != nil {
 			return nil, nil, false, err
+		}
+		if avatarKey.Valid {
+			msg.AuthorAvatarURL = avatarKey.String
 		}
 		messages = append(messages, msg)
 	}
@@ -453,4 +458,3 @@ func (s *Storage) SearchServersByName(ctx context.Context, userID int, query str
 
 	return servers, nil
 }
-

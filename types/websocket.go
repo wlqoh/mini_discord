@@ -214,6 +214,7 @@ type WsMessage struct {
 	AuthorID        int        `json:"author_id"`
 	AuthorFirstName string     `json:"author_first_name"`
 	AuthorLastName  string     `json:"author_last_name"`
+	AuthorAvatarURL string     `json:"author_avatar_url,omitempty"`
 	Content         string     `json:"content"`
 	CreatedAt       time.Time  `json:"created_at"`
 	EditedAt        *time.Time `json:"edited_at,omitempty"`

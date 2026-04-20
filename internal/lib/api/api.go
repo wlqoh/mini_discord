@@ -44,7 +44,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	userHandler := user.NewHandler(s.db, cfg, log, s3Client)
 	userHandler.RegisterRoutes(v1)
 
-	hub := server.NewHub(s.db, log)
+	hub := server.NewHub(s.db, log, cfg.S3HOST)
 	defer hub.Close()
 	wsHandler := server.NewHandler(hub, cfg.HTTPServer.WSAllowedOrigins)
 	wsHandler.RegisterRoutes(v1)

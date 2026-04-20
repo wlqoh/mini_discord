@@ -17,6 +17,7 @@ export interface Message {
     author_id: number;
     author_first_name?: string;
     author_last_name?: string;
+    author_avatar_url?: string;
     content: string;
     created_at: string;
 }
@@ -56,6 +57,7 @@ export interface RTCSignalEvent {
     sdp_mid?: string;
     sdp_mline_index?: number;
 }
+
 
 export type MessagesByChannel = Record<number, Message[]>;
 export type ChannelsByServer = Record<number, Channel[]>;

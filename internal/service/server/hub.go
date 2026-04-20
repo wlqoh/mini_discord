@@ -18,6 +18,7 @@ import (
 
 type Hub struct {
 	storage              types.ServerStorage
+	s3Host               string
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
 	createServerLimiter  *ratelimit.TokenBucket
@@ -40,9 +41,10 @@ type wsCommandRequest struct {
 
 const maxServerChannelNameLen = 16
 
-func NewHub(storage types.ServerStorage, log *slog.Logger) *Hub {
+func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
 	return &Hub{
 		storage:              storage,
+		s3Host:               strings.TrimSpace(s3Host),
 		clientsByUser:        make(map[int]*Client),
 		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
 		createChannelLimiter: ratelimit.NewTokenBucket(5.0/60.0, 5.0),
@@ -135,7 +137,7 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 	case types.WsActionRTCSignal:
 		relayRTCSignal(h, req, ctx)
 	case types.WsActionSearchServers:
-        searchServers(h, req, ctx)
+		searchServers(h, req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -463,6 +465,7 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		AuthorID:        req.client.UserID,
 		AuthorFirstName: user.FirstName,
 		AuthorLastName:  user.LastName,
+		AuthorAvatarURL: h.avatarURLFromKey(user.AvatarKey),
 		Content:         payload.Content,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -503,6 +506,10 @@ func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
 	if err != nil {
 		h.pushError(req.client, "failed to get messages")
 		return
+	}
+
+	for i := range messages {
+		messages[i].AuthorAvatarURL = h.avatarURLFromKey(messages[i].AuthorAvatarURL)
 	}
 
 	var nextCursorRaw string
@@ -772,6 +779,29 @@ func normalizeChannelType(raw string) string {
 	}
 }
 
+func (h *Hub) avatarURLFromKey(avatarKey string) string {
+	key := strings.TrimSpace(avatarKey)
+	if key == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
+		return key
+	}
+
+	if h.s3Host == "" {
+		return key
+	}
+
+	if !strings.Contains(key, "/") {
+		key = "avatars/" + key
+	}
+
+	base := strings.TrimRight(h.s3Host, "/")
+	trimmedKey := strings.TrimLeft(key, "/")
+	return base + "/" + trimmedKey
+}
+
 func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {
 	var payload types.WsSearchServersRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
@@ -799,4 +829,3 @@ func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {
 		Data:  types.WsSearchServersResponse{Servers: servers},
 	})
 }
-
