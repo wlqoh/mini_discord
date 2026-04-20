@@ -153,7 +153,7 @@ func (h *Handler) handleGetImage(c *fiber.Ctx) error {
 		return utils.WriteError(c, fiber.StatusBadRequest, "user has no avatar")
 	}
 
-	url := h.cfg.S3HOST + user.AvatarKey
+	url := h.cfg.S3HOST + "avatars/" + user.AvatarKey
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"url": url,
 	})
