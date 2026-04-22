@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff} from "lucide-react";
+import {Search, Trash2} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -659,7 +659,6 @@ export default function ChatPage() {
     const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
     const isVoiceChannel = currentChannel?.type === "voice";
     const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
-    const shouldHideMessageInput = isInSelectedVoiceChannel;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
     const userDisplayName = [currentUserProfile?.first_name, currentUserProfile?.last_name].filter(Boolean).join(" ").trim();
     const userInitial =
@@ -793,20 +792,18 @@ export default function ChatPage() {
                             <div className="voice-controls">
                                 {!isInSelectedVoiceChannel ? (
                                     <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
-                                        Join
+                                        Join voice
                                     </button>
                                 ) : (
                                     <>
                                         <button className="message-send-btn" onClick={() => void handleLeaveVoice()}>
-                                            Leave
+                                            Leave voice
                                         </button>
-                                        <button className="micam-btn" onClick={toggleMicrophone}>
-                                            {isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
-                                                <MicOff size={18} aria-hidden="true" color="#B80606"/>}
+                                        <button className="channels-add-btn" onClick={toggleMicrophone}>
+                                            {isMicEnabled ? "Mic on" : "Mic off"}
                                         </button>
-                                        <button className="micam-btn" onClick={toggleCamera}>
-                                            {isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
-                                                <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
+                                        <button className="channels-add-btn" onClick={toggleCamera}>
+                                            {isCameraEnabled ? "Cam on" : "Cam off"}
                                         </button>
                                     </>
                                 )}
@@ -822,9 +819,7 @@ export default function ChatPage() {
                     {error ? <div className="messages-empty">{error}</div> : null}
                     <MessageList messages={activeMessages} currentUserId={currentUserId}/>
                 </div>
-                {shouldHideMessageInput ? null : (
-                    <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0}/>
-                )}
+                <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0 || isVoiceChannel}/>
             </section>
 
             {isProfileModalOpen && (
