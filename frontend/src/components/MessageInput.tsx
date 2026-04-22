@@ -1,4 +1,5 @@
 import  { useState } from "react";
+import  { Send } from "lucide-react"
 
 type Props = {
     disabled?: boolean;
@@ -27,7 +28,7 @@ export default function MessageInput({ disabled, onSend }: Props) {
                 disabled={disabled}
             />
             <button className="message-send-btn" type="submit" disabled={disabled || !text.trim()}>
-                Send
+                <Send size={24} aria-hidden="true"/>
             </button>
         </form>
     );
