@@ -1,6 +1,7 @@
 import type {
   JoinVoiceResponse,
   Message,
+  OnlineUser,
   RTCSignalEvent,
   RTCSignalPayload,
   VoiceParticipant,
@@ -481,6 +482,28 @@ export class ChatSocket {
         server_id: channel.server_id as number,
         name: channel.name as string,
         type: channel.type === "voice" ? "voice" : "text",
+      }));
+  }
+
+  async getUsersOnline(serverId: number): Promise<OnlineUser[]> {
+    const data = await this.sendCommand("get_users_online", { server_id: serverId });
+    const payload = data as { users?: Array<{ first_name?: string; last_name?: string; email?: string }> };
+
+    if (!Array.isArray(payload?.users)) {
+      return [];
+    }
+
+    return payload.users
+      .filter(
+        (user) =>
+          typeof user.first_name === "string" &&
+          typeof user.last_name === "string" &&
+          typeof user.email === "string",
+      )
+      .map((user) => ({
+        first_name: user.first_name as string,
+        last_name: user.last_name as string,
+        email: user.email as string,
       }));
   }
 

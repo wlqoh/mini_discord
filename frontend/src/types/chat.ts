@@ -28,6 +28,12 @@ export interface VoiceParticipant {
     last_name?: string;
 }
 
+export interface OnlineUser {
+    first_name: string;
+    last_name: string;
+    email: string;
+}
+
 export interface JoinVoiceResponse {
     channel_id: number;
     participants: VoiceParticipant[];

@@ -361,9 +361,9 @@
 
 .message-form {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     gap: 10px;
-    align-items: center;
+    align-items: end;
     padding: 14px 18px;
     border-top: 1px solid var(--line);
     background: var(--panel);
@@ -396,6 +396,157 @@
 
 .message-send-btn:hover {
     color: #b80606;
+}
+
+.message-actions-wrap {
+    position: relative;
+}
+
+.message-online-toggle-btn {
+    border: none;
+    border-radius: 10px;
+    background: #3a3c43;
+    color: var(--text-primary);
+    padding: 10px 12px;
+    min-height: 44px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.message-online-toggle-btn:hover,
+.message-online-toggle-btn.active {
+    background: #4a4d55;
+}
+
+.online-users-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    width: min(320px, 84vw);
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid #3a3c43;
+    border-radius: 12px;
+    background: var(--panel-2);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    z-index: 25;
+}
+
+.online-users-panel-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.online-users-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+}
+
+.online-users-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px;
+    border: 1px solid #34363b;
+    border-radius: 8px;
+    background: rgba(58, 60, 67, 0.25);
+}
+
+.online-users-meta {
+    min-width: 0;
+}
+
+.online-users-avatar-wrap {
+    position: relative;
+    width: 34px;
+    height: 34px;
+}
+
+.online-users-avatar-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    display: block;
+    border: 1px solid #4a4d55;
+}
+
+.online-users-avatar-fallback {
+    display: none;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid #4a4d55;
+    background: linear-gradient(145deg, #43464f 0%, #343741 100%);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
+    align-items: center;
+    justify-content: center;
+    letter-spacing: 0.02em;
+}
+
+.online-users-avatar-fallback.show {
+    display: flex;
+}
+
+.online-users-status {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--panel-2);
+    background: var(--button-bg);
+}
+
+.online-users-name {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.online-users-email {
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.online-users-empty {
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 4px 2px;
+}
+
+@media (max-width: 768px) {
+    .message-form {
+        grid-template-columns: 1fr auto;
+    }
+
+    .message-actions-wrap {
+        grid-column: 1 / -1;
+    }
+
+    .online-users-panel {
+        left: 0;
+        right: auto;
+        width: 100%;
+        max-height: 40vh;
+    }
 }
 
 .modal-overlay {

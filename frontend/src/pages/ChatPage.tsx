@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
@@ -8,7 +8,7 @@ import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
-import type {ChannelsByServer, Message, MessagesByChannel, Server, VoiceParticipant} from "../types/chat.ts";
+import type {ChannelsByServer, Message, MessagesByChannel, OnlineUser, Server, VoiceParticipant} from "../types/chat.ts";
 import {getMyAvatarUrl, uploadMyAvatar} from "../services/avatarApi.ts";
 import "../styles/chat.css";
 
@@ -42,7 +42,9 @@ export default function ChatPage() {
     const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
     const [avatarUrl, setAvatarUrl] = useState("")
-
+    const [isOnlinePanelOpen, setIsOnlinePanelOpen] = useState(false);
+    const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
+    const [isOnlineUsersLoading, setIsOnlineUsersLoading] = useState(false);
     const [servers, setServers] = useState<Server[]>([]);
     const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
     const [selectedServerId, setSelectedServerId] = useState<number>(0);
@@ -94,6 +96,24 @@ export default function ChatPage() {
         const url = await getMyAvatarUrl();
         setAvatarUrl(url ?? "");
     }, []);
+
+    const refreshOnlineUsers = useCallback(async () => {
+        if (!socketRef.current || !isConnected || selectedServerId <= 0) {
+            setOnlineUsers([]);
+            return;
+        }
+
+        try {
+            setIsOnlineUsersLoading(true);
+            const users = await socketRef.current.getUsersOnline(selectedServerId);
+            setOnlineUsers(users);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to load online users";
+            setError(message);
+        } finally {
+            setIsOnlineUsersLoading(false);
+        }
+    }, [isConnected, selectedServerId]);
 
     const syncServersAndChannels = useCallback(
         async (preferredServerId?: number) => {
@@ -282,9 +302,26 @@ export default function ChatPage() {
     }, [selectedServerId]);
 
     useEffect(() => {
+        if (!isConnected || selectedServerId <= 0) {
+            setOnlineUsers([]);
+            setIsOnlinePanelOpen(false);
+            return;
+        }
+
+        void refreshOnlineUsers();
+
+        const intervalId = window.setInterval(() => {
+            void refreshOnlineUsers();
+        }, 10000);
+
+        return () => window.clearInterval(intervalId);
+    }, [isConnected, selectedServerId, refreshOnlineUsers]);
+
+    useEffect(() => {
         void loadAvatar();
     }, [loadAvatar]);
 
+    
 
     useEffect(() => {
         if (!isJoinModalOpen) {
@@ -667,6 +704,28 @@ export default function ChatPage() {
         currentUserProfile?.email?.[0]?.toUpperCase() ??
         "U";
 
+    const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
+        const map: Record<string, string> = {};
+
+        const add = (firstName?: string, lastName?: string, avatar?: string) => {
+            const fullName = [firstName, lastName].filter(Boolean).join(" ").trim().toLowerCase();
+            if (!fullName || !avatar || map[fullName]) {
+                return;
+            }
+            map[fullName] = avatar;
+        };
+
+        Object.values(messagesByChannel).forEach((messages) => {
+            messages.forEach((message) => {
+                add(message.author_first_name, message.author_last_name, message.author_avatar_url);
+            });
+        });
+
+        add(currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl);
+
+        return map;
+    }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl]);
+
     useEffect(() => {
         const el = chatContentRef.current;
         if (!el) return;
@@ -823,7 +882,15 @@ export default function ChatPage() {
                     <MessageList messages={activeMessages} currentUserId={currentUserId}/>
                 </div>
                 {shouldHideMessageInput ? null : (
-                    <MessageInput onSend={handleSend} disabled={!isConnected || selectedChannelId <= 0}/>
+                    <MessageInput
+                        onSend={handleSend}
+                        disabled={!isConnected || selectedChannelId <= 0}
+                        isOnlinePanelOpen={isOnlinePanelOpen}
+                        onToggleOnlinePanel={() => setIsOnlinePanelOpen((prev) => !prev)}
+                        onlineUsers={onlineUsers}
+                        isOnlineUsersLoading={isOnlineUsersLoading}
+                        onlineUserAvatarByName={onlineUserAvatarByName}
+                    />
                 )}
             </section>
 
