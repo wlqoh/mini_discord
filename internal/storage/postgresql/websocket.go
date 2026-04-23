@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 )
 
 func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64, error) {
@@ -212,7 +213,7 @@ func (s *Storage) SaveMessage(ctx context.Context, msg types.WsMessage) error {
 	return err
 }
 
-func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, cursor *types.WsMessageCursor) ([]types.WsMessage, *types.WsMessageCursor, bool, error) {
+func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, cursor *types.WsMessageCursor, s3Host string) ([]types.WsMessage, *types.WsMessageCursor, bool, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -265,7 +266,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			return nil, nil, false, err
 		}
 		if avatarKey.Valid {
-			msg.AuthorAvatarURL = avatarKey.String
+			msg.AuthorAvatarURL = utils.AvatarURLFromKey(avatarKey.String, s3Host)
 		}
 		messages = append(messages, msg)
 	}

@@ -36,7 +36,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
 
-	s3Client := objectStorage.NewS3Client(cfg)
+	s3Client := objectStorage.NewS3Client(cfg, log)
 
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
