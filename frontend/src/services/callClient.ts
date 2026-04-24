@@ -16,6 +16,7 @@ type PeerState = {
   pc: RTCPeerConnection;
   stream: MediaStream;
   user: VoiceParticipant;
+  pendingCandidates: RTCIceCandidateInit[];
 };
 
 function formatMediaError(err: unknown): string {
@@ -262,7 +263,7 @@ export class CallClient {
       pc.addTrack(track, this.localStream as MediaStream);
     });
 
-    this.peers.set(user.user_id, { pc, stream: remoteStream, user });
+    this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
 
     if (initiateOffer) {
       await this.createAndSendOffer(user.user_id);
@@ -328,6 +329,10 @@ export class CallClient {
     this.participants.set(event.from_user_id, participant);
 
     const pc = await this.ensurePeer(participant, false);
+    const peer = this.peers.get(event.from_user_id);
+    if (!peer) {
+      return;
+    }
 
     try {
       if (event.signal_type === "offer") {
@@ -335,6 +340,7 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
+        await this.flushPendingCandidates(peer);
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -352,6 +358,7 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
+        await this.flushPendingCandidates(peer);
         return;
       }
 
@@ -359,13 +366,33 @@ export class CallClient {
         return;
       }
 
-      await pc.addIceCandidate({
+      const candidate: RTCIceCandidateInit = {
         candidate: event.candidate,
         sdpMid: event.sdp_mid,
         sdpMLineIndex: event.sdp_mline_index,
-      });
+      };
+
+      if (!pc.remoteDescription) {
+        peer.pendingCandidates.push(candidate);
+        return;
+      }
+
+      await pc.addIceCandidate(candidate);
     } catch {
       this.onError("Failed to handle WebRTC signal");
+    }
+  }
+
+  private async flushPendingCandidates(peer: PeerState): Promise<void> {
+    if (!peer.pendingCandidates.length) {
+      return;
+    }
+
+    const pending = [...peer.pendingCandidates];
+    peer.pendingCandidates.length = 0;
+
+    for (const candidate of pending) {
+      await peer.pc.addIceCandidate(candidate);
     }
   }
 }

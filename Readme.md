@@ -162,6 +162,37 @@ docker compose up -d --build
 
 Example file: `frontend/.env.production.example`.
 
+### Required TURN setup for stable production calls
+
+Without TURN, calls can work inconsistently across different ISPs/NATs (exactly the case when VPN helps some users).
+
+1. Set TURN variables in your deployment `.env`:
+
+```bash
+TURN_REALM=your-domain.com
+TURN_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
+TURN_USERNAME=mini_discord
+TURN_PASSWORD=strong-turn-password
+
+VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp
+VITE_WEBRTC_TURN_USERNAME=mini_discord
+VITE_WEBRTC_TURN_CREDENTIAL=strong-turn-password
+VITE_WEBRTC_FORCE_RELAY=false
+```
+
+2. Open firewall ports on the host:
+
+- `3478/tcp`
+- `3478/udp`
+- `49160-49200/udp`
+
+3. Rebuild and restart:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
 Optional websocket override:
 
 ```bash
