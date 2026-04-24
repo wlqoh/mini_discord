@@ -16,7 +16,6 @@ type PeerState = {
   pc: RTCPeerConnection;
   stream: MediaStream;
   user: VoiceParticipant;
-  pendingCandidates: RTCIceCandidateInit[];
 };
 
 function formatMediaError(err: unknown): string {
@@ -278,7 +277,7 @@ export class CallClient {
       pc.addTrack(track, this.localStream as MediaStream);
     });
 
-    this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
+    this.peers.set(user.user_id, { pc, stream: remoteStream, user });
 
     if (initiateOffer) {
       await this.createAndSendOffer(user.user_id);
@@ -345,22 +344,13 @@ export class CallClient {
     this.participants.set(event.from_user_id, participant);
 
     const pc = await this.ensurePeer(participant, false);
-    const peer = this.peers.get(event.from_user_id);
-    if (!peer) {
-      return;
-    }
-
     try {
       if (event.signal_type === "offer") {
         if (!event.sdp) {
           return;
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
-<<<<<<< HEAD
-        await this.flushPendingCandidates(peer);
-=======
         await this.flushPendingIceCandidates(event.from_user_id, pc);
->>>>>>> 82b2505eb7561348a8136721a26337029347882d
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -378,11 +368,7 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
-<<<<<<< HEAD
-        await this.flushPendingCandidates(peer);
-=======
         await this.flushPendingIceCandidates(event.from_user_id, pc);
->>>>>>> 82b2505eb7561348a8136721a26337029347882d
         return;
       }
 
@@ -397,13 +383,9 @@ export class CallClient {
       };
 
       if (!pc.remoteDescription) {
-<<<<<<< HEAD
-        peer.pendingCandidates.push(candidate);
-=======
         const queued = this.pendingIceCandidates.get(event.from_user_id) ?? [];
         queued.push(candidate);
         this.pendingIceCandidates.set(event.from_user_id, queued);
->>>>>>> 82b2505eb7561348a8136721a26337029347882d
         return;
       }
 
@@ -413,18 +395,6 @@ export class CallClient {
     }
   }
 
-  private async flushPendingCandidates(peer: PeerState): Promise<void> {
-    if (!peer.pendingCandidates.length) {
-      return;
-    }
-
-    const pending = [...peer.pendingCandidates];
-    peer.pendingCandidates.length = 0;
-
-    for (const candidate of pending) {
-      await peer.pc.addIceCandidate(candidate);
-    }
-  }
 }
 
 
