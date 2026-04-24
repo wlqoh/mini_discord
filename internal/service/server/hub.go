@@ -14,6 +14,7 @@ import (
 
 	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
 	"github.com/wlqoh/mini_discord.git/types"
+	"github.com/wlqoh/mini_discord.git/utils"
 )
 
 type Hub struct {
@@ -406,6 +407,7 @@ func getUsersOnline(h *Hub, req wsCommandRequest, ctx context.Context) {
 			onlineUsers = append(onlineUsers, types.UserResponse{
 				FirstName: user.FirstName,
 				LastName:  user.LastName,
+				AvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 				Email:     user.Email,
 			})
 		}
@@ -465,7 +467,7 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 		AuthorID:        req.client.UserID,
 		AuthorFirstName: user.FirstName,
 		AuthorLastName:  user.LastName,
-		AuthorAvatarURL: h.avatarURLFromKey(user.AvatarKey),
+		AuthorAvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 		Content:         payload.Content,
 		CreatedAt:       time.Now().UTC(),
 	}
@@ -502,14 +504,10 @@ func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	messages, nextCursor, hasMore, err := h.storage.GetMessages(ctx, payload.ChannelID, payload.Limit, cursor)
+	messages, nextCursor, hasMore, err := h.storage.GetMessages(ctx, payload.ChannelID, payload.Limit, cursor, h.s3Host)
 	if err != nil {
 		h.pushError(req.client, "failed to get messages")
 		return
-	}
-
-	for i := range messages {
-		messages[i].AuthorAvatarURL = h.avatarURLFromKey(messages[i].AuthorAvatarURL)
 	}
 
 	var nextCursorRaw string
@@ -710,8 +708,6 @@ func relayRTCSignal(h *Hub, req wsCommandRequest, ctx context.Context) {
 			SDPMLineIndex: payload.SDPMLineIndex,
 		},
 	})
-
-	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
 
 func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
@@ -777,29 +773,6 @@ func normalizeChannelType(raw string) string {
 	default:
 		return ""
 	}
-}
-
-func (h *Hub) avatarURLFromKey(avatarKey string) string {
-	key := strings.TrimSpace(avatarKey)
-	if key == "" {
-		return ""
-	}
-
-	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
-		return key
-	}
-
-	if h.s3Host == "" {
-		return key
-	}
-
-	if !strings.Contains(key, "/") {
-		key = "avatars/" + key
-	}
-
-	base := strings.TrimRight(h.s3Host, "/")
-	trimmedKey := strings.TrimLeft(key, "/")
-	return base + "/" + trimmedKey
 }
 
 func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {

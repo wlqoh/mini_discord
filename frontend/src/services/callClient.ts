@@ -93,6 +93,8 @@ export class CallClient {
 
   private readonly participants = new Map<number, VoiceParticipant>();
 
+  private readonly pendingIceCandidates = new Map<number, RTCIceCandidateInit[]>();
+
   private readonly unsubscribers: Array<() => void> = [];
 
   private localStream: MediaStream | null = null;
@@ -223,6 +225,19 @@ export class CallClient {
       this.onRemoteLeft(userID);
     });
     this.peers.clear();
+    this.pendingIceCandidates.clear();
+  }
+
+  private async flushPendingIceCandidates(remoteUserID: number, pc: RTCPeerConnection): Promise<void> {
+    const queued = this.pendingIceCandidates.get(remoteUserID);
+    if (!queued?.length) {
+      return;
+    }
+
+    this.pendingIceCandidates.delete(remoteUserID);
+    for (const candidate of queued) {
+      await pc.addIceCandidate(candidate);
+    }
   }
 
   private async ensurePeer(user: VoiceParticipant, initiateOffer: boolean): Promise<RTCPeerConnection> {
@@ -317,6 +332,7 @@ export class CallClient {
 
     state.pc.close();
     this.peers.delete(event.user.user_id);
+    this.pendingIceCandidates.delete(event.user.user_id);
     this.onRemoteLeft(event.user.user_id);
   }
 
@@ -340,7 +356,11 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
+<<<<<<< HEAD
         await this.flushPendingCandidates(peer);
+=======
+        await this.flushPendingIceCandidates(event.from_user_id, pc);
+>>>>>>> 82b2505eb7561348a8136721a26337029347882d
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -358,7 +378,11 @@ export class CallClient {
           return;
         }
         await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
+<<<<<<< HEAD
         await this.flushPendingCandidates(peer);
+=======
+        await this.flushPendingIceCandidates(event.from_user_id, pc);
+>>>>>>> 82b2505eb7561348a8136721a26337029347882d
         return;
       }
 
@@ -373,7 +397,13 @@ export class CallClient {
       };
 
       if (!pc.remoteDescription) {
+<<<<<<< HEAD
         peer.pendingCandidates.push(candidate);
+=======
+        const queued = this.pendingIceCandidates.get(event.from_user_id) ?? [];
+        queued.push(candidate);
+        this.pendingIceCandidates.set(event.from_user_id, queued);
+>>>>>>> 82b2505eb7561348a8136721a26337029347882d
         return;
       }
 

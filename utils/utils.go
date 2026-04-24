@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v2"
@@ -16,6 +17,30 @@ func WriteJSON(w http.ResponseWriter, status int, v any) error {
 	w.WriteHeader(status)
 
 	return json.NewEncoder(w).Encode(v)
+}
+
+func AvatarURLFromKey(avatarKey, S3HOST string) string {
+
+	key := strings.TrimSpace(avatarKey)
+	if key == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(key, "http://") || strings.HasPrefix(key, "https://") {
+		return key
+	}
+
+	if S3HOST == "" {
+		return key
+	}
+
+	if !strings.Contains(key, "/") {
+		key = "avatars/" + key
+	}
+
+	base := strings.TrimRight(S3HOST, "/")
+	trimmedKey := strings.TrimLeft(key, "/")
+	return base + "/" + trimmedKey
 }
 
 type ErrorResponse struct {

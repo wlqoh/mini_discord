@@ -20,7 +20,7 @@ type ServerStorage interface {
 	ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error)
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
 	SaveMessage(ctx context.Context, msg WsMessage) error
-	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor) ([]WsMessage, *WsMessageCursor, bool, error)
+	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
@@ -162,12 +162,12 @@ type WsMessageCursor struct {
 }
 
 type WsSearchServersRequest struct {
-    Query string `json:"query"`
-    Limit int    `json:"limit,omitempty"`
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
 }
 
 type WsSearchServersResponse struct {
-    Servers []Server `json:"servers"`
+	Servers []Server `json:"servers"`
 }
 
 func EncodeWsMessageCursor(cursor WsMessageCursor) (string, error) {
