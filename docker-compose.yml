@@ -9,8 +9,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/init:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U murad -d postgres"]
       interval: 5s
@@ -19,6 +17,7 @@ services:
 
   migrate:
     image: postgres:17-alpine
+    network_mode: "service:db"
     depends_on:
       db:
         condition: service_healthy
@@ -28,9 +27,9 @@ services:
       - ./sql/init:/migrations:ro
     command: >
       sh -c "
-      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/01_users.sql &&
-      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/02_chat_schema.sql &&
-      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/03_users_avatar_key.sql
+      psql -h 127.0.0.1 -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/01_users.sql &&
+      psql -h 127.0.0.1 -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/02_chat_schema.sql &&
+      psql -h 127.0.0.1 -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/03_users_avatar_key.sql
       "
 
   backend:
@@ -52,6 +51,7 @@ services:
     image: coturn/coturn:4.6.3
     user: "0:0"
     restart: unless-stopped
+    profiles: ["turn"]
     command:
       - -n
       - --log-file=stdout
@@ -92,7 +92,6 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
-      - turn
     ports:
       - "127.0.0.1:8081:80"
 
