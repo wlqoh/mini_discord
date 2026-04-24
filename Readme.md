@@ -150,8 +150,8 @@ VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
 VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478?transport=udp,turns:turn.your-domain.com:5349?transport=tcp
 VITE_WEBRTC_TURN_USERNAME=mini_discord
 VITE_WEBRTC_TURN_CREDENTIAL=change-me
-# optional debug switch (forces TURN relay only)
-VITE_WEBRTC_FORCE_RELAY=false
+# relay-first production mode (recommended for mixed NAT/ISP conditions)
+VITE_WEBRTC_FORCE_RELAY=true
 ```
 
 For docker-compose production build, export the same `VITE_*` variables in shell (or `.env`) before running:
@@ -173,17 +173,21 @@ TURN_REALM=your-domain.com
 TURN_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
 TURN_USERNAME=mini_discord
 TURN_PASSWORD=strong-turn-password
+TURN_TLS_CERT_FILE=/etc/letsencrypt/live/your-domain.com/fullchain.pem
+TURN_TLS_KEY_FILE=/etc/letsencrypt/live/your-domain.com/privkey.pem
 
-VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp
+VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp,turns:your-domain.com:5349?transport=tcp
 VITE_WEBRTC_TURN_USERNAME=mini_discord
 VITE_WEBRTC_TURN_CREDENTIAL=strong-turn-password
-VITE_WEBRTC_FORCE_RELAY=false
+VITE_WEBRTC_FORCE_RELAY=true
 ```
 
 2. Open firewall ports on the host:
 
 - `3478/tcp`
 - `3478/udp`
+- `5349/tcp`
+- `5349/udp`
 - `49160-49200/udp`
 
 3. Rebuild and restart:
