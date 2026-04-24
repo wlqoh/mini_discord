@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -194,6 +195,69 @@ func (h *Hub) enqueueEvent(cl *Client, event *types.WsEvent) {
 
 func (h *Hub) pushError(cl *Client, message string) {
 	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventError, Error: message})
+}
+
+func (h *Hub) listOnlineServerUserIDs(ctx context.Context, serverID int64, excludeUserID int) ([]int, error) {
+	serverUserIDs, err := h.storage.ListServerMembersUserIDs(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+
+	h.mu.RLock()
+	onlineUsers := make([]int, 0, len(serverUserIDs))
+	for _, userID := range serverUserIDs {
+		if userID == excludeUserID {
+			continue
+		}
+		if _, ok := h.clientsByUser[userID]; ok {
+			onlineUsers = append(onlineUsers, userID)
+		}
+	}
+	h.mu.RUnlock()
+
+	return onlineUsers, nil
+}
+
+func (h *Hub) buildVoiceParticipantsSnapshot(ctx context.Context, channels []types.Channel) []types.WsVoiceChannelParticipants {
+	voiceChannelIDs := make([]int64, 0, len(channels))
+	for _, ch := range channels {
+		if ch.Type == types.ChannelTypeVoice {
+			voiceChannelIDs = append(voiceChannelIDs, ch.ID)
+		}
+	}
+
+	h.mu.RLock()
+	participantsByChannel := make(map[int64][]int, len(voiceChannelIDs))
+	for _, channelID := range voiceChannelIDs {
+		participants := h.voiceParticipants[channelID]
+		if len(participants) == 0 {
+			continue
+		}
+
+		userIDs := make([]int, 0, len(participants))
+		for userID := range participants {
+			userIDs = append(userIDs, userID)
+		}
+		participantsByChannel[channelID] = userIDs
+	}
+	h.mu.RUnlock()
+
+	snapshot := make([]types.WsVoiceChannelParticipants, 0, len(participantsByChannel))
+	for channelID, userIDs := range participantsByChannel {
+		participants := make([]types.WsVoiceParticipant, 0, len(userIDs))
+		for _, userID := range userIDs {
+			participants = append(participants, h.resolveVoiceParticipant(ctx, userID))
+		}
+		sort.Slice(participants, func(i, j int) bool { return participants[i].UserID < participants[j].UserID })
+
+		snapshot = append(snapshot, types.WsVoiceChannelParticipants{
+			ChannelID:    channelID,
+			Participants: participants,
+		})
+	}
+	sort.Slice(snapshot, func(i, j int) bool { return snapshot[i].ChannelID < snapshot[j].ChannelID })
+
+	return snapshot
 }
 
 func deleteChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
@@ -564,11 +628,16 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	voiceParticipants := h.buildVoiceParticipantsSnapshot(ctx, channels)
+
 	h.log.Info("ws get_server_channels", "user_id", req.client.UserID, "server_id", payload.ServerID, "channels_count", len(channels))
 
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,
-		Data:  types.WsGetChannelsResponse{Channels: channels},
+		Data: types.WsGetChannelsResponse{
+			Channels:          channels,
+			VoiceParticipants: voiceParticipants,
+		},
 	})
 }
 
@@ -641,7 +710,13 @@ func joinVoiceChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 		},
 	})
 
-	h.pushToUsers(otherUserIDs, &types.WsEvent{
+	serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, req.client.UserID)
+	if err != nil {
+		h.log.Warn("failed to resolve online users for voice join broadcast", "server_id", channel.ServerID, "err", err)
+		serverOnlineUserIDs = otherUserIDs
+	}
+
+	h.pushToUsers(serverOnlineUserIDs, &types.WsEvent{
 		Event: types.WsEventVoiceUserJoined,
 		Data: types.WsVoiceUserEvent{
 			ChannelID: payload.ChannelID,
@@ -737,6 +812,19 @@ func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
 		notifyUsers = append(notifyUsers, userID)
 	}
 	h.mu.Unlock()
+
+	ctx := context.Background()
+	channel, err := h.storage.GetChannelByID(ctx, channelID)
+	if err != nil {
+		h.log.Warn("failed to resolve channel for voice leave broadcast", "channel_id", channelID, "err", err)
+	} else if channel != nil {
+		serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, cl.UserID)
+		if err != nil {
+			h.log.Warn("failed to resolve online users for voice leave broadcast", "server_id", channel.ServerID, "err", err)
+		} else {
+			notifyUsers = serverOnlineUserIDs
+		}
+	}
 
 	h.pushToUsers(notifyUsers, &types.WsEvent{
 		Event: types.WsEventVoiceUserLeft,
