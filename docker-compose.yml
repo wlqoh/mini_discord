@@ -65,8 +65,8 @@ services:
       - --pkey=/certs/privkey.pem
       - --no-tlsv1
       - --no-tlsv1_1
-      - --min-port=49160
-      - --max-port=49200
+      - --min-port=${TURN_MIN_PORT:-49160}
+      - --max-port=${TURN_MAX_PORT:-49999}
       - --fingerprint
       - --no-cli
     volumes:
@@ -77,7 +77,7 @@ services:
       - "3478:3478/udp"
       - "5349:5349/tcp"
       - "5349:5349/udp"
-      - "49160-49200:49160-49200/udp"
+      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49999}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49999}/udp"
 
   frontend:
     build:

@@ -173,6 +173,8 @@ TURN_REALM=your-domain.com
 TURN_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
 TURN_USERNAME=mini_discord
 TURN_PASSWORD=strong-turn-password
+TURN_MIN_PORT=49160
+TURN_MAX_PORT=49999
 TURN_TLS_CERT_FILE=/etc/letsencrypt/live/your-domain.com/fullchain.pem
 TURN_TLS_KEY_FILE=/etc/letsencrypt/live/your-domain.com/privkey.pem
 
@@ -188,7 +190,7 @@ VITE_WEBRTC_FORCE_RELAY=true
 - `3478/udp`
 - `5349/tcp`
 - `5349/udp`
-- `49160-49200/udp`
+- `${TURN_MIN_PORT}-${TURN_MAX_PORT}/udp`
 
 3. Rebuild and restart:
 

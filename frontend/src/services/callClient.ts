@@ -84,6 +84,8 @@ function buildIceTransportPolicy(): RTCIceTransportPolicy {
 }
 
 export class CallClient {
+  private static readonly ICE_RESTART_DELAY_MS = 2500;
+
   private readonly socket: ChatSocket;
 
   private readonly selfUserID: number;
@@ -93,6 +95,8 @@ export class CallClient {
   private readonly participants = new Map<number, VoiceParticipant>();
 
   private readonly pendingIceCandidates = new Map<number, RTCIceCandidateInit[]>();
+
+  private readonly scheduledIceRestarts = new Map<number, number>();
 
   private readonly unsubscribers: Array<() => void> = [];
 
@@ -223,8 +227,31 @@ export class CallClient {
       state.pc.close();
       this.onRemoteLeft(userID);
     });
+    this.scheduledIceRestarts.forEach((timerId) => window.clearTimeout(timerId));
+    this.scheduledIceRestarts.clear();
     this.peers.clear();
     this.pendingIceCandidates.clear();
+  }
+
+  private clearScheduledIceRestart(remoteUserID: number): void {
+    const timerId = this.scheduledIceRestarts.get(remoteUserID);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      this.scheduledIceRestarts.delete(remoteUserID);
+    }
+  }
+
+  private scheduleIceRestart(remoteUserID: number): void {
+    if (this.currentChannelID <= 0 || this.selfUserID >= remoteUserID || this.scheduledIceRestarts.has(remoteUserID)) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      this.scheduledIceRestarts.delete(remoteUserID);
+      void this.createAndSendOffer(remoteUserID, true);
+    }, CallClient.ICE_RESTART_DELAY_MS);
+
+    this.scheduledIceRestarts.set(remoteUserID, timerId);
   }
 
   private async flushPendingIceCandidates(remoteUserID: number, pc: RTCPeerConnection): Promise<void> {
@@ -253,8 +280,18 @@ export class CallClient {
     });
 
     pc.ontrack = (event) => {
-      event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
-      this.onRemoteStream(user, remoteStream);
+      if (event.streams[0]) {
+        event.streams[0].getTracks().forEach((track) => {
+          if (!remoteStream.getTracks().some((existing) => existing.id === track.id)) {
+            remoteStream.addTrack(track);
+          }
+        });
+      } else if (!remoteStream.getTracks().some((existing) => existing.id === event.track.id)) {
+        remoteStream.addTrack(event.track);
+      }
+
+      const current = this.peers.get(user.user_id)?.user ?? user;
+      this.onRemoteStream(current, remoteStream);
     };
 
     pc.onicecandidate = (event) => {
@@ -273,6 +310,21 @@ export class CallClient {
       void this.socket.sendRTCSignal(payload);
     };
 
+    pc.oniceconnectionstatechange = () => {
+      switch (pc.iceConnectionState) {
+        case "connected":
+        case "completed":
+          this.clearScheduledIceRestart(user.user_id);
+          break;
+        case "disconnected":
+        case "failed":
+          this.scheduleIceRestart(user.user_id);
+          break;
+        default:
+          break;
+      }
+    };
+
     this.localStream?.getTracks().forEach((track) => {
       pc.addTrack(track, this.localStream as MediaStream);
     });
@@ -286,14 +338,21 @@ export class CallClient {
     return pc;
   }
 
-  private async createAndSendOffer(remoteUserID: number): Promise<void> {
+  private async createAndSendOffer(remoteUserID: number, iceRestart = false): Promise<void> {
     const peer = this.peers.get(remoteUserID);
     if (!peer || this.currentChannelID <= 0) {
       return;
     }
 
+    if (peer.pc.signalingState !== "stable") {
+      if (iceRestart) {
+        this.scheduleIceRestart(remoteUserID);
+      }
+      return;
+    }
+
     try {
-      const offer = await peer.pc.createOffer();
+      const offer = await peer.pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
       await peer.pc.setLocalDescription(offer);
 
       await this.socket.sendRTCSignal({
@@ -303,6 +362,9 @@ export class CallClient {
         sdp: offer.sdp,
       });
     } catch {
+      if (iceRestart) {
+        this.scheduleIceRestart(remoteUserID);
+      }
       this.onError("Failed to create WebRTC offer");
     }
   }
@@ -331,6 +393,7 @@ export class CallClient {
 
     state.pc.close();
     this.peers.delete(event.user.user_id);
+    this.clearScheduledIceRestart(event.user.user_id);
     this.pendingIceCandidates.delete(event.user.user_id);
     this.onRemoteLeft(event.user.user_id);
   }
@@ -349,6 +412,11 @@ export class CallClient {
         if (!event.sdp) {
           return;
         }
+
+        if (pc.signalingState !== "stable") {
+          await pc.setLocalDescription({ type: "rollback" });
+        }
+
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
         await this.flushPendingIceCandidates(event.from_user_id, pc);
         const answer = await pc.createAnswer();
