@@ -708,8 +708,6 @@ func relayRTCSignal(h *Hub, req wsCommandRequest, ctx context.Context) {
 			SDPMLineIndex: payload.SDPMLineIndex,
 		},
 	})
-
-	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
 
 func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {

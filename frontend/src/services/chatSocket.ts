@@ -521,7 +521,18 @@ export class ChatSocket {
   }
 
   async sendRTCSignal(payload: RTCSignalPayload): Promise<void> {
-    await this.sendCommand("rtc_signal", payload as unknown as Record<string, unknown>);
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket not connected");
+    }
+
+    // RTC signaling is latency-sensitive and can burst with ICE candidates,
+    // so it bypasses the ack queue used for regular chat commands.
+    this.socket.send(
+      JSON.stringify({
+        action: "rtc_signal",
+        payload,
+      }),
+    );
   }
 
   private sendCommand(action: string, payload: Record<string, unknown>): Promise<unknown> {
