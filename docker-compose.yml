@@ -50,6 +50,7 @@ services:
 
   turn:
     image: coturn/coturn:4.6.3
+    user: "0:0"
     restart: unless-stopped
     command:
       - -n
