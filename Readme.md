@@ -147,7 +147,7 @@ docker compose up -d --build
 ```bash
 VITE_API_URL=/api/v1
 VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
-VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478?transport=udp,turns:turn.your-domain.com:5349?transport=tcp
+VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478?transport=udp,turn:turn.your-domain.com:3478?transport=tcp,turns:turn.your-domain.com:5349?transport=tcp
 VITE_WEBRTC_TURN_USERNAME=mini_discord
 VITE_WEBRTC_TURN_CREDENTIAL=change-me
 # optional debug switch (forces TURN relay only)
@@ -173,8 +173,13 @@ TURN_REALM=your-domain.com
 TURN_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
 TURN_USERNAME=mini_discord
 TURN_PASSWORD=strong-turn-password
+TURN_TLS_PORT=5349
+TURN_TLS_CERT_FILE=/etc/coturn/certs/fullchain.pem
+TURN_TLS_KEY_FILE=/etc/coturn/certs/privkey.pem
+TURN_MIN_PORT=49160
+TURN_MAX_PORT=49260
 
-VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp
+VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp,turns:your-domain.com:5349?transport=tcp
 VITE_WEBRTC_TURN_USERNAME=mini_discord
 VITE_WEBRTC_TURN_CREDENTIAL=strong-turn-password
 VITE_WEBRTC_FORCE_RELAY=false
@@ -184,9 +189,18 @@ VITE_WEBRTC_FORCE_RELAY=false
 
 - `3478/tcp`
 - `3478/udp`
-- `49160-49200/udp`
+- `5349/tcp`
+- `49160-49260/udp`
+- `49160-49260/tcp`
 
-3. Rebuild and restart:
+3. Put certificates for coturn to `deploy/coturn/certs/`:
+
+- `deploy/coturn/certs/fullchain.pem`
+- `deploy/coturn/certs/privkey.pem`
+
+For highly restrictive networks (some VPN/corporate/mobile providers), TURN over UDP can still be blocked. In that case, keep `transport=tcp` in `VITE_WEBRTC_TURN_URLS` and temporarily set `VITE_WEBRTC_FORCE_RELAY=true` to validate that relay path is healthy.
+
+4. Rebuild and restart:
 
 ```bash
 docker compose down
@@ -197,6 +211,12 @@ Optional websocket override:
 
 ```bash
 VITE_WS_URL=wss://your-domain.com/api/v1/server/ws
+```
+
+Quick check after deploy (logs should show allocations when users join calls):
+
+```bash
+docker compose logs -f turn
 ```
 
 ### Origin allow-lists
