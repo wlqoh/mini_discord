@@ -1,6 +1,9 @@
 package user
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +38,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	limiterMW := limiter.FiberRateLimitMiddleware()
 	router.Get("/getAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetImage)
 	router.Post("/setAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleSetImage)
+	router.Get("/webrtc/turn-credentials", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetTurnCredentials)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
 	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
@@ -369,4 +373,61 @@ func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(res)
+}
+
+func (h *Handler) handleGetTurnCredentials(c *fiber.Ctx) error {
+	const minTTLSeconds = 60
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	secret := strings.TrimSpace(h.cfg.WebRTC.TurnStaticAuthSecret)
+	turnURLs := h.turnURLs()
+	if secret == "" || len(turnURLs) == 0 {
+		return utils.WriteError(c, fiber.StatusServiceUnavailable, "turn credentials are not configured")
+	}
+
+	ttlSeconds := h.cfg.WebRTC.TurnCredentialsTTLSeconds
+	if ttlSeconds < minTTLSeconds {
+		ttlSeconds = minTTLSeconds
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second)
+	username := fmt.Sprintf("%d:%d", expiresAt.Unix(), clientID)
+
+	mac := hmac.New(sha1.New, []byte(secret))
+	if _, err := mac.Write([]byte(username)); err != nil {
+		h.log.Error("service.user.handleGetTurnCredentials", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to generate turn credentials")
+	}
+
+	credential := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+
+	return c.Status(fiber.StatusOK).JSON(types.TurnCredentialsResponse{
+		URLs:       turnURLs,
+		Username:   username,
+		Credential: credential,
+		TTLSeconds: ttlSeconds,
+		ExpiresAt:  expiresAt,
+	})
+}
+
+func (h *Handler) turnURLs() []string {
+	if len(h.cfg.WebRTC.TurnURLs) == 0 {
+		return nil
+	}
+
+	urls := make([]string, 0, len(h.cfg.WebRTC.TurnURLs))
+	for _, rawURL := range h.cfg.WebRTC.TurnURLs {
+		url := strings.TrimSpace(rawURL)
+		if url == "" {
+			continue
+		}
+		urls = append(urls, url)
+	}
+
+	return urls
 }

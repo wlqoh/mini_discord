@@ -10,14 +10,21 @@ import (
 )
 
 type Config struct {
-	Env                           string `yaml:"env" env-default:"local"`
-	StoragePath                   string `yaml:"storage_path" env-required:"true"`
-	S3HOST                        string `yaml:"S3_HOST" env-default:"https://storage.yandexcloud.net/"`
-	S3                            S3Config `yaml:"s3"`
+	Env                           string       `yaml:"env" env-default:"local"`
+	StoragePath                   string       `yaml:"storage_path" env-required:"true"`
+	S3HOST                        string       `yaml:"S3_HOST" env-default:"https://storage.yandexcloud.net/"`
+	S3                            S3Config     `yaml:"s3"`
+	WebRTC                        WebRTCConfig `yaml:"webrtc"`
 	HTTPServer                    `yaml:"http_server"`
 	JWTSecret                     string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
 	JWTAccessExpirationInMinutes  int    `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
 	JWTRefreshExpirationInMinutes int    `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
+}
+
+type WebRTCConfig struct {
+	TurnURLs                  []string `yaml:"turn_urls" env:"TURN_URLS" env-separator:","`
+	TurnStaticAuthSecret      string   `yaml:"turn_static_auth_secret" env:"TURN_STATIC_AUTH_SECRET"`
+	TurnCredentialsTTLSeconds int      `yaml:"turn_credentials_ttl_seconds" env:"TURN_CREDENTIALS_TTL_SECONDS" env-default:"600"`
 }
 
 type S3Config struct {

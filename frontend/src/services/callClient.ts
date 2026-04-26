@@ -6,6 +6,7 @@ import type {
   VoiceUserEvent,
 } from "../types/chat";
 import { ChatSocket } from "./chatSocket";
+import { getTurnCredentials, type TurnCredentialsResponse } from "./turnApi";
 
 type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => void;
 type RemoteLeftListener = (userId: number) => void;
@@ -52,9 +53,11 @@ function isTruthy(raw: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function buildIceServers(): RTCIceServer[] {
+function buildIceServers(turnCredentials?: TurnCredentialsResponse): RTCIceServer[] {
   const stunUrls = parseUrls(import.meta.env.VITE_WEBRTC_STUN_URLS as string | undefined);
-  const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
+  const turnUrls = turnCredentials?.urls?.length
+    ? turnCredentials.urls
+    : parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
 
   const servers: RTCIceServer[] = [];
 
@@ -65,8 +68,9 @@ function buildIceServers(): RTCIceServer[] {
   }
 
   if (turnUrls.length) {
-    const username = (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
-    const credential = (import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL as string | undefined)?.trim();
+    const username = turnCredentials?.username?.trim() ?? (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
+    const credential =
+      turnCredentials?.credential?.trim() ?? (import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL as string | undefined)?.trim();
 
     if (username && credential) {
       servers.push({
@@ -99,7 +103,9 @@ export class CallClient {
 
   private currentChannelID = 0;
 
-  private readonly iceServers = buildIceServers();
+  private iceServers = buildIceServers();
+
+  private turnCredentialsPromise: Promise<void> | null = null;
 
   private readonly onRemoteStream: RemoteStreamListener;
 
@@ -136,6 +142,8 @@ export class CallClient {
 
     await this.leave();
 
+    await this.ensureTurnCredentials();
+
     this.localStream = await this.acquireLocalStream();
     // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
     this.localStream.getVideoTracks().forEach((track) => {
@@ -158,6 +166,34 @@ export class CallClient {
       const shouldInitiate = this.selfUserID < participant.user_id;
       void this.ensurePeer(participant, shouldInitiate);
     });
+  }
+
+  private hasStaticTurnCredentials(): boolean {
+    const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
+    const username = (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
+    const credential = (import.meta.env.VITE_WEBRTC_TURN_CREDENTIAL as string | undefined)?.trim();
+    return turnUrls.length > 0 && Boolean(username) && Boolean(credential);
+  }
+
+  private async ensureTurnCredentials(): Promise<void> {
+    if (!this.turnCredentialsPromise) {
+      this.turnCredentialsPromise = (async () => {
+        try {
+          const turnCredentials = await getTurnCredentials();
+          this.iceServers = buildIceServers(turnCredentials);
+        } catch (err) {
+          if (this.hasStaticTurnCredentials()) {
+            this.iceServers = buildIceServers();
+            return;
+          }
+
+          const message = err instanceof Error ? err.message : "Failed to load TURN credentials";
+          this.onError(message);
+        }
+      })();
+    }
+
+    await this.turnCredentialsPromise;
   }
 
   private async acquireLocalStream(): Promise<MediaStream> {
