@@ -851,6 +851,7 @@ func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsV
 
 	participant.FirstName = user.FirstName
 	participant.LastName = user.LastName
+	participant.AvatarURL = utils.AvatarURLFromKey(user.AvatarKey, h.s3Host)
 	return participant
 }
 

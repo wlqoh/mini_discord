@@ -26,6 +26,12 @@ export interface VoiceParticipant {
     user_id: number;
     first_name?: string;
     last_name?: string;
+    avatar_url?: string;
+}
+
+export interface VoiceChannelParticipants {
+    channel_id: number;
+    participants: VoiceParticipant[];
 }
 
 export interface OnlineUser {
@@ -67,3 +73,4 @@ export interface RTCSignalEvent {
 
 export type MessagesByChannel = Record<number, Message[]>;
 export type ChannelsByServer = Record<number, Channel[]>;
+export type VoiceParticipantsByChannel = Record<number, VoiceParticipant[]>;

@@ -4,6 +4,7 @@ import type {
   OnlineUser,
   RTCSignalEvent,
   RTCSignalPayload,
+  VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
 } from "../types/chat";
@@ -468,21 +469,53 @@ export class ChatSocket {
   }
 
   async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {
+    const state = await this.getServerChannelsState(serverId);
+    return state.channels;
+  }
+
+  async getServerChannelsState(serverId: number): Promise<{
+    channels: Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>;
+    voice_participants: VoiceChannelParticipants[];
+  }> {
     const data = await this.sendCommand("get_server_channels", { server_id: serverId });
-    const payload = data as { channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }> };
+    const payload = data as {
+      channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }>;
+      voice_participants?: Array<{
+        channel_id?: number;
+        participants?: Array<{ user_id?: number; first_name?: string; last_name?: string; avatar_url?: string }>;
+      }>;
+    };
 
-    if (!Array.isArray(payload?.channels)) {
-      return [];
-    }
+    const channels: Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }> = Array.isArray(payload?.channels)
+      ? payload.channels
+          .filter((channel) => typeof channel.id === "number" && typeof channel.server_id === "number" && typeof channel.name === "string")
+          .map((channel) => ({
+            id: channel.id as number,
+            server_id: channel.server_id as number,
+            name: channel.name as string,
+            type: channel.type === "voice" ? "voice" : "text",
+          }))
+      : [];
 
-    return payload.channels
-      .filter((channel) => typeof channel.id === "number" && typeof channel.server_id === "number" && typeof channel.name === "string")
-      .map((channel) => ({
-        id: channel.id as number,
-        server_id: channel.server_id as number,
-        name: channel.name as string,
-        type: channel.type === "voice" ? "voice" : "text",
-      }));
+    const voice_participants: VoiceChannelParticipants[] = Array.isArray(payload?.voice_participants)
+      ? payload.voice_participants
+          .filter((entry) => typeof entry?.channel_id === "number")
+          .map((entry) => ({
+            channel_id: entry.channel_id as number,
+            participants: Array.isArray(entry.participants)
+              ? entry.participants
+                  .filter((participant) => typeof participant?.user_id === "number")
+                  .map((participant) => ({
+                    user_id: participant.user_id as number,
+                    first_name: typeof participant.first_name === "string" ? participant.first_name : undefined,
+                    last_name: typeof participant.last_name === "string" ? participant.last_name : undefined,
+                    avatar_url: typeof participant.avatar_url === "string" ? participant.avatar_url : undefined,
+                  }))
+              : [],
+          }))
+      : [];
+
+    return { channels, voice_participants };
   }
 
   async getUsersOnline(serverId: number): Promise<OnlineUser[]> {
