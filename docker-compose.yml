@@ -40,7 +40,6 @@ services:
     restart: unless-stopped
     environment:
       CONFIG_PATH: ./config/prod.yaml
-      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:?TURN_STATIC_AUTH_SECRET is required}
     depends_on:
       db:
         condition: service_healthy
@@ -55,9 +54,9 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_WEBRTC_STUN_URLS: ${VITE_WEBRTC_STUN_URLS:-stun:stun.l.google.com:19302}
-        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-}
-        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-}
-        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-}
+        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-turn:turn.hyorward.tech:3478?transport=udp,turn:turn.hyorward.tech:3478?transport=tcp,turns:turn.hyorward.tech:5349?transport=tcp}
+        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-${TURN_USERNAME:-mini_discord}}
+        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-${TURN_PASSWORD:-change-me-turn-password}}
         VITE_WEBRTC_FORCE_RELAY: ${VITE_WEBRTC_FORCE_RELAY:-false}
     restart: unless-stopped
     depends_on:
