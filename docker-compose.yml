@@ -40,6 +40,7 @@ services:
     restart: unless-stopped
     environment:
       CONFIG_PATH: ./config/prod.yaml
+      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:?TURN_STATIC_AUTH_SECRET is required}
     depends_on:
       db:
         condition: service_healthy
@@ -48,54 +49,19 @@ services:
     ports:
       - "8080:8080"
 
-  turn:
-    image: coturn/coturn:4.6.3
-    restart: unless-stopped
-    command:
-      - -n
-      - --log-file=stdout
-      - --realm=${TURN_REALM:-hyorward.tech}
-      - --lt-cred-mech
-      - --user=${TURN_USERNAME:-mini_discord}:${TURN_PASSWORD:-change-me-turn-password}
-      - --external-ip=${TURN_PUBLIC_IP:-45.155.205.212}
-      - --listening-ip=0.0.0.0
-      - --listening-port=3478
-      - --tls-listening-port=${TURN_TLS_PORT:-5349}
-      - --cert=${TURN_TLS_CERT_FILE:-/etc/coturn/certs/fullchain.pem}
-      - --pkey=${TURN_TLS_KEY_FILE:-/etc/coturn/certs/privkey.pem}
-      - --no-tlsv1
-      - --no-tlsv1_1
-      - --no-multicast-peers
-      - --stale-nonce=600
-      - --total-quota=2048
-      - --bps-capacity=0
-      - --min-port=${TURN_MIN_PORT:-49160}
-      - --max-port=${TURN_MAX_PORT:-49260}
-      - --fingerprint
-      - --no-cli
-    ports:
-      - "3478:3478/tcp"
-      - "3478:3478/udp"
-      - "${TURN_TLS_PORT:-5349}:${TURN_TLS_PORT:-5349}/tcp"
-      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49260}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49260}/udp"
-      - "${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49260}:${TURN_MIN_PORT:-49160}-${TURN_MAX_PORT:-49260}/tcp"
-    volumes:
-      - ./deploy/coturn/certs:/etc/coturn/certs:ro
-
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
         VITE_WEBRTC_STUN_URLS: ${VITE_WEBRTC_STUN_URLS:-stun:stun.l.google.com:19302}
-        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-turn:${TURN_REALM:-hyorward.tech}:3478?transport=udp,turn:${TURN_REALM:-hyorward.tech}:3478?transport=tcp,turns:${TURN_REALM:-hyorward.tech}:${TURN_TLS_PORT:-5349}?transport=tcp}
-        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-${TURN_USERNAME:-mini_discord}}
-        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-${TURN_PASSWORD:-change-me-turn-password}}
+        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-}
+        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-}
+        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-}
         VITE_WEBRTC_FORCE_RELAY: ${VITE_WEBRTC_FORCE_RELAY:-false}
     restart: unless-stopped
     depends_on:
       - backend
-      - turn
     ports:
       - "127.0.0.1:8081:80"
 
