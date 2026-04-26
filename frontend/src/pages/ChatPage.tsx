@@ -8,7 +8,15 @@ import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
-import type {ChannelsByServer, Message, MessagesByChannel, OnlineUser, Server, VoiceParticipant} from "../types/chat.ts";
+import type {
+    ChannelsByServer,
+    Message,
+    MessagesByChannel,
+    OnlineUser,
+    Server,
+    VoiceParticipant,
+    VoiceParticipantsByChannel,
+} from "../types/chat.ts";
 import {getMyAvatarUrl, uploadMyAvatar} from "../services/avatarApi.ts";
 import "../styles/chat.css";
 
@@ -47,6 +55,7 @@ export default function ChatPage() {
     const [isOnlineUsersLoading, setIsOnlineUsersLoading] = useState(false);
     const [servers, setServers] = useState<Server[]>([]);
     const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
+    const [voiceParticipantsByChannel, setVoiceParticipantsByChannel] = useState<VoiceParticipantsByChannel>({});
     const [selectedServerId, setSelectedServerId] = useState<number>(0);
     const [selectedChannelId, setSelectedChannelId] = useState<number>(0);
     const [messagesByChannel, setMessagesByChannel] = useState<MessagesByChannel>({});
@@ -125,6 +134,7 @@ export default function ChatPage() {
             if (!remoteServers.length) {
                 setServers([]);
                 setChannelsByServer({});
+                setVoiceParticipantsByChannel({});
                 setSelectedServerId(0);
                 setSelectedChannelId(0);
                 setMessagesByChannel({});
@@ -134,14 +144,29 @@ export default function ChatPage() {
                 return;
             }
 
-            const channelsByServerEntries = await Promise.all(
+            const channelsStateByServerEntries = await Promise.all(
                 remoteServers.map(async (server) => {
-                    const channels = await socketRef.current!.getServerChannels(server.id);
-                    return [server.id, channels] as const;
+                    const state = await socketRef.current!.getServerChannelsState(server.id);
+                    return [server.id, state] as const;
                 }),
             );
 
-            const remoteChannelsByServer = Object.fromEntries(channelsByServerEntries) as ChannelsByServer;
+            const remoteChannelsByServer = Object.fromEntries(
+                channelsStateByServerEntries.map(([serverId, state]) => [serverId, state.channels]),
+            ) as ChannelsByServer;
+            const validChannelIds = new Set(
+                Object.values(remoteChannelsByServer)
+                    .flat()
+                    .map((channel) => channel.id),
+            );
+            const nextVoiceParticipantsByChannel: VoiceParticipantsByChannel = {};
+            channelsStateByServerEntries.forEach(([, state]) => {
+                state.voice_participants.forEach((entry) => {
+                    if (validChannelIds.has(entry.channel_id)) {
+                        nextVoiceParticipantsByChannel[entry.channel_id] = entry.participants;
+                    }
+                });
+            });
 
             const fromState = selectedServerIdRef.current;
             const activeServerId =
@@ -153,6 +178,7 @@ export default function ChatPage() {
 
             setServers(remoteServers);
             setChannelsByServer(remoteChannelsByServer);
+            setVoiceParticipantsByChannel(nextVoiceParticipantsByChannel);
             setSelectedServerId(activeServerId);
             setSelectedChannelId((prev) => {
                 if (activeChannels.some((channel) => channel.id === prev)) {
@@ -245,6 +271,44 @@ export default function ChatPage() {
             setError(text);
         });
 
+        const unsubscribeVoiceUserJoined = socket.onVoiceUserJoined((event) => {
+            setVoiceParticipantsByChannel((prev) => {
+                const current = prev[event.channel_id] ?? [];
+                if (current.some((participant) => participant.user_id === event.user.user_id)) {
+                    return prev;
+                }
+
+                return {
+                    ...prev,
+                    [event.channel_id]: [...current, event.user],
+                };
+            });
+        });
+
+        const unsubscribeVoiceUserLeft = socket.onVoiceUserLeft((event) => {
+            setVoiceParticipantsByChannel((prev) => {
+                const current = prev[event.channel_id] ?? [];
+                if (!current.length) {
+                    return prev;
+                }
+
+                const next = current.filter((participant) => participant.user_id !== event.user.user_id);
+                if (next.length === current.length) {
+                    return prev;
+                }
+
+                if (!next.length) {
+                    const {[event.channel_id]: _removed, ...rest} = prev;
+                    return rest;
+                }
+
+                return {
+                    ...prev,
+                    [event.channel_id]: next,
+                };
+            });
+        });
+
         (async () => {
             try {
                 await socket.connect();
@@ -266,6 +330,8 @@ export default function ChatPage() {
         return () => {
             unsubscribeMessage();
             unsubscribeError();
+            unsubscribeVoiceUserJoined();
+            unsubscribeVoiceUserLeft();
             callClientRef.current?.dispose();
             callClientRef.current = null;
             socketRef.current?.close();
@@ -703,6 +769,14 @@ export default function ChatPage() {
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
         currentUserProfile?.email?.[0]?.toUpperCase() ??
         "U";
+    const getParticipantDisplayName = (participant: VoiceParticipant): string => {
+        const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
+        return fullName || `User ${participant.user_id}`;
+    };
+    const getParticipantInitials = (participant: VoiceParticipant): string => {
+        const initials = `${participant.first_name?.[0] ?? ""}${participant.last_name?.[0] ?? ""}`.toUpperCase();
+        return initials || "U";
+    };
 
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
@@ -797,25 +871,53 @@ export default function ChatPage() {
                 </div>
                 <ul className="channels-list">
                     {activeChannels.map((channel) => (
-                        <li key={channel.id} className="channel-row-wrap">
-                            <button
-                                className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
-                                onClick={() => setSelectedChannelId(channel.id)}
-                                type="button"
-                            >
-                                {channel.type === "voice" ? "🔊" : "#"} {channel.name}
-                            </button>
-
-                            {isCurrentServerOwner ? (
+                        <li key={channel.id} className="channel-item">
+                            <div className="channel-row-wrap">
                                 <button
-                                    className="channels-delete-btn"
+                                    className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
+                                    onClick={() => setSelectedChannelId(channel.id)}
                                     type="button"
-                                    onClick={() => void handleDeleteChannel(channel.id)}
-                                    aria-label={`Delete channel ${channel.name}`}
-                                    title="Delete channel"
                                 >
-                                    <Trash2 size={14} aria-hidden="true"/>
+                                    {channel.type === "voice" ? "🔊" : "#"} {channel.name}
                                 </button>
+
+                                {isCurrentServerOwner ? (
+                                    <button
+                                        className="channels-delete-btn"
+                                        type="button"
+                                        onClick={() => void handleDeleteChannel(channel.id)}
+                                        aria-label={`Delete channel ${channel.name}`}
+                                        title="Delete channel"
+                                    >
+                                        <Trash2 size={14} aria-hidden="true"/>
+                                    </button>
+                                ) : null}
+                            </div>
+                            {channel.type === "voice" && (voiceParticipantsByChannel[channel.id]?.length ?? 0) > 0 ? (
+                                <ul className="voice-members-list">
+                                    {(voiceParticipantsByChannel[channel.id] ?? []).map((participant) => (
+                                        <li key={participant.user_id} className="voice-member-item">
+                                            <div className="voice-member-avatar-wrap">
+                                                {participant.avatar_url ? (
+                                                    <img
+                                                        src={participant.avatar_url}
+                                                        alt={getParticipantDisplayName(participant)}
+                                                        className="voice-member-avatar"
+                                                        onError={(e) => {
+                                                            e.currentTarget.style.display = "none";
+                                                            const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                                                            fallback?.classList.add("show");
+                                                        }}
+                                                    />
+                                                ) : null}
+                                                <span className={`voice-member-avatar-fallback ${participant.avatar_url ? "" : "show"}`}>
+                                                    {getParticipantInitials(participant)}
+                                                </span>
+                                            </div>
+                                            <span className="voice-member-name">{getParticipantDisplayName(participant)}</span>
+                                        </li>
+                                    ))}
+                                </ul>
                             ) : null}
                         </li>
                     ))}

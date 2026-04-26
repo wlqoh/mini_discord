@@ -112,7 +112,8 @@ type WsGetUsersOnlineResponse struct {
 }
 
 type WsGetChannelsResponse struct {
-	Channels []Channel `json:"channels"`
+	Channels          []Channel                    `json:"channels"`
+	VoiceParticipants []WsVoiceChannelParticipants `json:"voice_participants,omitempty"`
 }
 
 type WsJoinVoiceChannelRequest struct {
@@ -123,6 +124,7 @@ type WsVoiceParticipant struct {
 	UserID    int    `json:"user_id"`
 	FirstName string `json:"first_name,omitempty"`
 	LastName  string `json:"last_name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
 type WsJoinVoiceChannelResponse struct {
@@ -133,6 +135,11 @@ type WsJoinVoiceChannelResponse struct {
 type WsVoiceUserEvent struct {
 	ChannelID int64              `json:"channel_id"`
 	User      WsVoiceParticipant `json:"user"`
+}
+
+type WsVoiceChannelParticipants struct {
+	ChannelID    int64                `json:"channel_id"`
+	Participants []WsVoiceParticipant `json:"participants"`
 }
 
 type WsRTCSignalRequest struct {
