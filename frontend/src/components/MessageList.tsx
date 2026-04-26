@@ -25,6 +25,36 @@ function getAuthorInitials(msg: Message): string {
     return `U${msg.author_id}`;
 }
 
+function formatMessageTimestamp(isoDate: string): string {
+    const date = new Date(isoDate);
+
+    if (Number.isNaN(date.getTime())) {
+        return "";
+    }
+
+    const now = new Date();
+    const isSameDay =
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate();
+
+    const time = new Intl.DateTimeFormat("ru-RU", {
+        hour: "2-digit",
+        minute: "2-digit",
+    }).format(date);
+
+    if (isSameDay) {
+        return time;
+    }
+
+    const dayAndMonth = new Intl.DateTimeFormat("ru-RU", {
+        day: "2-digit",
+        month: "short",
+    }).format(date);
+
+    return `${dayAndMonth}, ${time}`;
+}
+
 export default function MessageList({ messages, currentUserId }: Props) {
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
@@ -58,6 +88,7 @@ export default function MessageList({ messages, currentUserId }: Props) {
                                 <div className="message-author">{getAuthorLabel(msg)}</div>
                             </div>
                             <div className="message-content">{msg.content}</div>
+                            <div className="message-timestamp">{formatMessageTimestamp(msg.created_at)}</div>
                         </div>
                     </div>
                 );
