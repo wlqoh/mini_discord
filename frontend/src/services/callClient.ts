@@ -88,6 +88,14 @@ function buildIceTransportPolicy(): RTCIceTransportPolicy {
   return isTruthy(import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined) ? "relay" : "all";
 }
 
+function hasUsableTurnServer(servers: RTCIceServer[]): boolean {
+  return servers.some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    const hasTurnURL = urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+    return hasTurnURL && Boolean(server.username) && Boolean(server.credential);
+  });
+}
+
 export class CallClient {
   private readonly socket: ChatSocket;
 
@@ -175,20 +183,39 @@ export class CallClient {
     return turnUrls.length > 0 && Boolean(username) && Boolean(credential);
   }
 
+  private isRelayOnlyMode(): boolean {
+    return buildIceTransportPolicy() === "relay";
+  }
+
+  private ensureRelayTurnReady(): void {
+    if (this.isRelayOnlyMode() && !hasUsableTurnServer(this.iceServers)) {
+      throw new Error("TURN credentials are required when relay mode is enabled");
+    }
+  }
+
   private async ensureTurnCredentials(): Promise<void> {
     if (!this.turnCredentialsPromise) {
       this.turnCredentialsPromise = (async () => {
+        if (this.hasStaticTurnCredentials()) {
+          this.iceServers = buildIceServers();
+          this.ensureRelayTurnReady();
+          return;
+        }
+
         try {
           const turnCredentials = await getTurnCredentials();
           this.iceServers = buildIceServers(turnCredentials);
+          this.ensureRelayTurnReady();
         } catch (err) {
-          if (this.hasStaticTurnCredentials()) {
-            this.iceServers = buildIceServers();
+          this.turnCredentialsPromise = null;
+          const message = err instanceof Error ? err.message : "Failed to load TURN credentials";
+
+          if (!this.isRelayOnlyMode()) {
+            this.onError(message);
             return;
           }
 
-          const message = err instanceof Error ? err.message : "Failed to load TURN credentials";
-          this.onError(message);
+          throw new Error(message);
         }
       })();
     }
