@@ -23,6 +23,11 @@
     height: 100vh;
     background: var(--bg);
     color: var(--text-primary);
+    transition: grid-template-columns 0.2s ease;
+}
+
+.chat-layout.channels-sidebar-hidden {
+    grid-template-columns: 84px 0 1fr;
 }
 
 .servers-sidebar {
@@ -65,12 +70,25 @@
     outline: 3px solid #b80606;
 }
 
+.servers-sidebar-footer {
+    margin-top: auto;
+    padding-bottom: 14px;
+}
+
 .channels-sidebar {
     border-right: 1px solid var(--line);
     background: var(--panel-2);
     display: grid;
     grid-template-rows: auto 1fr;
     min-width: 0;
+    overflow: hidden;
+    transition: opacity 0.15s ease;
+}
+
+.channels-sidebar.hidden {
+    opacity: 0;
+    pointer-events: none;
+    border-right: none;
 }
 
 .channels-header {
@@ -234,6 +252,12 @@
     gap: 12px;
 }
 
+.chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .profile-open-btn {
     border: none;
     border-radius: 50%;
@@ -321,51 +345,31 @@
 }
 
 .messages-list {
-    display: grid;
+    display: flex;
     flex-direction: column;
-    gap: 10px; }
+    gap: 12px;
+}
 
 .message-row {
     display: flex;
     gap: 10px;
     align-items: flex-start;
     width: 100%;
-}
-
-.message-row.own {
-    justify-content: flex-end;
-}
-
-.message-row.other {
     justify-content: flex-start;
 }
 
-.message-row.own .message-item {
-    order: 1;
-}
-
-.message-row.own .message-avatar-wrap {
-    order: 2;
-}
-
-.message-row.other .message-avatar-wrap {
-    order: 1;
-}
-
-.message-row.other .message-item {
-    order: 2;
-}
-
 .message-item {
-    background: var(--message-bg);
-    border-radius: 10px;
-    padding: 10px 12px;
+    background: linear-gradient(180deg, #34363d 0%, #2f3137 100%);
+    border: 1px solid #3a3c43;
+    border-radius: 14px;
+    padding: 10px 13px;
     max-width: min(72%, 760px);
     min-width: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
 }
 
 .message-item.own {
-    background: #3a3c43;
+    background: linear-gradient(180deg, #3a3f49 0%, #343944 100%);
 }
 
 .message-item.other {
@@ -415,6 +419,7 @@
 .message-content {
     margin-top: 4px;
     color: var(--text-primary);
+    line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     word-break: break-word;
@@ -609,6 +614,34 @@
 }
 
 @media (max-width: 768px) {
+    .message-row.own {
+        justify-content: flex-end;
+    }
+
+    .message-row.other {
+        justify-content: flex-start;
+    }
+
+    .message-row.own .message-item {
+        order: 1;
+    }
+
+    .message-row.own .message-avatar-wrap {
+        order: 2;
+    }
+
+    .message-row.other .message-avatar-wrap {
+        order: 1;
+    }
+
+    .message-row.other .message-item {
+        order: 2;
+    }
+
+    .message-item {
+        max-width: min(86%, 760px);
+    }
+
     .message-form {
         grid-template-columns: 1fr auto;
     }
