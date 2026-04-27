@@ -1119,14 +1119,14 @@ export default function ChatPage() {
 
                         <div className="modal-actions">
                             <button
-                                className="modal-btn modal-btn-primary"
+                                className="modal-btn modal-btn-secondary"
                                 onClick={() => setIsCreateServerModalOpen(false)}
                                 disabled={isCreatingServer}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="modal-btn modal-btn-secondary"
+                                className="modal-btn modal-btn-primary"
                                 onClick={handleAddServerSubmit}
                                 disabled={isCreatingServer}
                             >
@@ -1208,14 +1208,14 @@ export default function ChatPage() {
 
                         <div className="modal-actions">
                             <button
-                                className="modal-btn modal-btn-primary"
+                                className="modal-btn modal-btn-secondary"
                                 onClick={() => setIsCreateChannelModalOpen(false)}
                                 disabled={isCreatingChannel}
                             >
                                 Cancel
                             </button>
                             <button
-                                className="modal-btn modal-btn-secondary"
+                                className="modal-btn modal-btn-primary"
                                 onClick={handleAddChannelSubmit}
                                 disabled={isCreatingChannel}
                             >
