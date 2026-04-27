@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, PanelLeftClose, PanelLeftOpen} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -47,6 +47,7 @@ export default function ChatPage() {
     const isCreatingChannelRef = useRef(false);
     const [isCreatingChannel, setIsCreatingChannel] = useState(false);
     const [isSearchingServers, setIsSearchingServers] = useState(false);
+    const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
     const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
     const [avatarUrl, setAvatarUrl] = useState("")
@@ -298,7 +299,8 @@ export default function ChatPage() {
                 }
 
                 if (!next.length) {
-                    const {[event.channel_id]: _removed, ...rest} = prev;
+                    const rest = {...prev};
+                    delete rest[event.channel_id];
                     return rest;
                 }
 
@@ -807,7 +809,7 @@ export default function ChatPage() {
     }, [activeMessages.length, selectedChannelId]);
 
     return (
-        <div className="chat-layout">
+        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`}>
             <aside className="servers-sidebar">
                 <button
                     className="server-add-btn"
@@ -840,12 +842,36 @@ export default function ChatPage() {
                         </li>
                     ))}
                 </ul>
+                <div
+                    className="servers-sidebar-footer"
+                >
+                    {isChannelsSidebarHidden ? (
+                        <button
+                            className="channels-add-btn"
+                            type="button"
+                            onClick={() => setIsChannelsSidebarHidden(false)}
+                            aria-label="Show channels panel"
+                            title="Show channels panel"
+                        >
+                            <PanelLeftOpen size={16} aria-hidden="true"/>
+                        </button>
+                    ) : null}
+                </div>
             </aside>
 
-            <aside className="channels-sidebar">
+            <aside className={`channels-sidebar ${isChannelsSidebarHidden ? "hidden" : ""}`}>
                 <div className="channels-header">
                     <span>Server {currentServer?.name ?? "-"}</span>
                     <div className="actions">
+                        <button
+                            className="channels-add-btn"
+                            onClick={() => setIsChannelsSidebarHidden((prev) => !prev)}
+                            aria-label={isChannelsSidebarHidden ? "Show channels panel" : "Hide channels panel"}
+                            title={isChannelsSidebarHidden ? "Show channels panel" : "Hide channels panel"}
+                            type="button"
+                        >
+                            {isChannelsSidebarHidden ? <PanelLeftOpen size={16} aria-hidden="true"/> : <PanelLeftClose size={16} aria-hidden="true"/>}
+                        </button>
                         {isCurrentServerOwner ? (
                             <button
                                 className="channels-add-btn"
@@ -928,24 +954,26 @@ export default function ChatPage() {
                 <div className="chat-content" ref={chatContentRef}>
                     <div className="chat-header-row">
                         <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</div>
-                        <button
-                            className="profile-open-btn"
-                            type="button"
-                            onClick={() => setIsProfileModalOpen(true)}
-                            aria-label="Open profile"
-                            title="Profile"
-                        >
-                            {avatarUrl ? (
-                                <img
-                                    src={avatarUrl}
-                                    alt="User avatar"
-                                    className="profile-open-avatar"
-                                    onError={() => setAvatarUrl("")}
-                                />
-                            ) : (
-                                userInitial
-                            )}
-                        </button>
+                        <div className="chat-header-actions">
+                            <button
+                                className="profile-open-btn"
+                                type="button"
+                                onClick={() => setIsProfileModalOpen(true)}
+                                aria-label="Open profile"
+                                title="Profile"
+                            >
+                                {avatarUrl ? (
+                                    <img
+                                        src={avatarUrl}
+                                        alt="User avatar"
+                                        className="profile-open-avatar"
+                                        onError={() => setAvatarUrl("")}
+                                    />
+                                ) : (
+                                    userInitial
+                                )}
+                            </button>
+                        </div>
                     </div>
                     <div
                         className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}</div>

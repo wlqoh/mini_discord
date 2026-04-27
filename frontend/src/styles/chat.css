@@ -23,6 +23,11 @@
     height: 100vh;
     background: var(--bg);
     color: var(--text-primary);
+    transition: grid-template-columns 0.2s ease;
+}
+
+.chat-layout.channels-sidebar-hidden {
+    grid-template-columns: 84px 0 1fr;
 }
 
 .servers-sidebar {
@@ -65,12 +70,25 @@
     outline: 3px solid #b80606;
 }
 
+.servers-sidebar-footer {
+    margin-top: auto;
+    padding-bottom: 14px;
+}
+
 .channels-sidebar {
     border-right: 1px solid var(--line);
     background: var(--panel-2);
     display: grid;
     grid-template-rows: auto 1fr;
     min-width: 0;
+    overflow: hidden;
+    transition: opacity 0.15s ease;
+}
+
+.channels-sidebar.hidden {
+    opacity: 0;
+    pointer-events: none;
+    border-right: none;
 }
 
 .channels-header {
@@ -232,6 +250,12 @@
     justify-content: space-between;
     align-items: center;
     gap: 12px;
+}
+
+.chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .profile-open-btn {
