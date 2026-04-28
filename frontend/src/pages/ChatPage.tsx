@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, PanelLeftClose, PanelLeftOpen} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -69,6 +69,7 @@ export default function ChatPage() {
     const [newChannelName, setNewChannelName] = useState("");
     const [newChannelType, setNewChannelType] = useState<"text" | "voice">("text");
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+    const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
     const [voiceChannelId, setVoiceChannelId] = useState(0);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStreams, setRemoteStreams] = useState<Array<{
@@ -78,6 +79,8 @@ export default function ChatPage() {
     }>>([]);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [isDeafened, setIsDeafened] = useState(false);
+    const micBeforeDeafenRef = useRef(true);
     const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
     const currentUserId: number | null = getCurrentUserId();
     const [joinQuery, setJoinQuery] = useState("");
@@ -626,6 +629,7 @@ export default function ChatPage() {
             await callClientRef.current.join(selectedChannelId);
             setVoiceChannelId(selectedChannelId);
             setIsMicEnabled(true);
+            setIsDeafened(false);
             setIsCameraEnabled(false);
             setError("");
         } catch (err) {
@@ -641,6 +645,7 @@ export default function ChatPage() {
             setVoiceChannelId(0);
             setRemoteStreams([]);
             setIsMicEnabled(true);
+            setIsDeafened(false);
             setIsCameraEnabled(false);
         }
     }
@@ -742,7 +747,32 @@ export default function ChatPage() {
         }
     }
 
+    function openAvatarPreview(): void {
+        if (!avatarUrl) return;
+        setIsAvatarPreviewOpen(true);
+    }
+
+    function closeAvatarPreview(): void {
+        setIsAvatarPreviewOpen(false);
+    }
+
+    useEffect(() => {
+        if (!isAvatarPreviewOpen) return;
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                setIsAvatarPreviewOpen(false);
+            }
+        };
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [isAvatarPreviewOpen]);
+
     function toggleMicrophone(): void {
+        if (isDeafened) {
+            return;
+        }
         const next = !isMicEnabled;
         setIsMicEnabled(next);
         callClientRef.current?.setMicrophoneEnabled(next);
@@ -753,6 +783,29 @@ export default function ChatPage() {
         setIsCameraEnabled(next);
         callClientRef.current?.setCameraEnabled(next);
     }
+
+    function toggleDeafen(): void {
+        const next = !isDeafened;
+        if (next) {
+            micBeforeDeafenRef.current = isMicEnabled;
+            setIsDeafened(true);
+            setIsMicEnabled(false);
+            callClientRef.current?.setMicrophoneEnabled(false);
+        } else {
+            setIsDeafened(false);
+            const restoreMic = micBeforeDeafenRef.current;
+            setIsMicEnabled(restoreMic);
+            callClientRef.current?.setMicrophoneEnabled(restoreMic);
+        }
+    }
+
+    useEffect(() => {
+        remoteStreams.forEach(({stream}) => {
+            stream.getAudioTracks().forEach((track) => {
+                track.enabled = !isDeafened;
+            });
+        });
+    }, [remoteStreams, isDeafened]);
 
 
     const activeChannels = channelsByServer[selectedServerId] ?? [];
@@ -989,7 +1042,7 @@ export default function ChatPage() {
                                         <button className="message-send-btn" onClick={() => void handleLeaveVoice()}>
                                             Leave
                                         </button>
-                                        <button className="micam-btn" onClick={toggleMicrophone}>
+                                        <button className="micam-btn" onClick={toggleMicrophone} disabled={isDeafened}>
                                             {isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
                                                 <MicOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
@@ -997,13 +1050,22 @@ export default function ChatPage() {
                                             {isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
                                                 <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
+                                        <button className="micam-btn" onClick={toggleDeafen}>
+                                            {isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
+                                                <Volume2 size={18} aria-hidden="true"/>}
+                                        </button>
                                     </>
                                 )}
                             </div>
                             <div className="video-grid">
                                 {localStream && <VideoTile stream={localStream} label="You" muted/>}
                                 {remoteStreams.map((item) => (
-                                    <VideoTile key={item.userId} stream={item.stream} label={item.label}/>
+                                    <VideoTile
+                                        key={`${item.userId}-${isDeafened ? "deaf" : "live"}`}
+                                        stream={item.stream}
+                                        label={item.label}
+                                        muted={isDeafened}
+                                    />
                                 ))}
                             </div>
                         </div>
@@ -1032,12 +1094,20 @@ export default function ChatPage() {
                             <div className="profile-avatar-block">
                                 <div className="profile-avatar-preview-wrap">
                                     {avatarUrl ? (
-                                        <img
-                                            src={avatarUrl}
-                                            alt="Current avatar"
-                                            className="profile-avatar-preview"
-                                            onError={() => setAvatarUrl("")}
-                                        />
+                                        <button
+                                            type="button"
+                                            className="profile-avatar-preview-btn"
+                                            onClick={openAvatarPreview}
+                                            aria-label="Open avatar preview"
+                                            title="Open avatar"
+                                        >
+                                            <img
+                                                src={avatarUrl}
+                                                alt="Current avatar"
+                                                className="profile-avatar-preview"
+                                                onError={() => setAvatarUrl("")}
+                                            />
+                                        </button>
                                     ) : (
                                         <div className="profile-avatar-fallback">{userInitial}</div>
                                     )}
@@ -1101,6 +1171,27 @@ export default function ChatPage() {
                     </div>
                 </div>
             )}
+
+            {isAvatarPreviewOpen && avatarUrl && (
+                <div className="avatar-viewer-overlay" onClick={closeAvatarPreview}>
+                    <div className="avatar-viewer-content" onClick={(e) => e.stopPropagation()}>
+                        <img
+                            src={avatarUrl}
+                            alt="Avatar full size"
+                            className="avatar-viewer-image"
+                            onError={closeAvatarPreview}
+                        />
+                        <button
+                            type="button"
+                            className="avatar-viewer-close"
+                            onClick={closeAvatarPreview}
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
+
 
             {isCreateServerModalOpen && (
                 <div className="modal-overlay" onClick={() => setIsCreateServerModalOpen(false)}>

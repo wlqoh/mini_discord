@@ -16,6 +16,23 @@ export default function VideoTile({ stream, label, muted = false }: Props) {
     ref.current.srcObject = stream;
   }, [stream]);
 
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    el.muted = muted;
+    el.defaultMuted = muted;
+    el.volume = muted ? 0 : 1;
+
+    const media = el.srcObject;
+    if (media instanceof MediaStream) {
+      media.getAudioTracks().forEach((track) => {
+        track.enabled = !muted;
+      });
+    }
+  }, [muted, stream]);
+
   return (
     <div className="video-tile">
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
