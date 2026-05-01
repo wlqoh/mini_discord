@@ -302,7 +302,13 @@ export class CallClient {
     });
 
     pc.ontrack = (event) => {
-      event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+      const [incomingStream] = event.streams;
+      if (incomingStream) {
+        incomingStream.getTracks().forEach((track) => remoteStream.addTrack(track));
+      } else if (!remoteStream.getTracks().some((track) => track.id === event.track.id)) {
+        // Some browsers omit event.streams, so attach the track directly.
+        remoteStream.addTrack(event.track);
+      }
       this.onRemoteStream(user, remoteStream);
     };
 
@@ -325,6 +331,11 @@ export class CallClient {
     this.localStream?.getTracks().forEach((track) => {
       pc.addTrack(track, this.localStream as MediaStream);
     });
+
+    const hasLocalVideo = (this.localStream?.getVideoTracks().length ?? 0) > 0;
+    if (!hasLocalVideo && !pc.getTransceivers().some((transceiver) => transceiver.receiver.track?.kind === "video")) {
+      pc.addTransceiver("video", { direction: "recvonly" });
+    }
 
     this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
 
@@ -459,5 +470,4 @@ export class CallClient {
     }
   }
 }
-
 
