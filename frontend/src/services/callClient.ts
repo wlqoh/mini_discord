@@ -326,6 +326,11 @@ export class CallClient {
       pc.addTrack(track, this.localStream as MediaStream);
     });
 
+    const hasLocalVideo = (this.localStream?.getVideoTracks().length ?? 0) > 0;
+    if (!hasLocalVideo && !pc.getTransceivers().some((transceiver) => transceiver.receiver.track?.kind === "video")) {
+      pc.addTransceiver("video", { direction: "recvonly" });
+    }
+
     this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
 
     if (initiateOffer) {
@@ -459,5 +464,4 @@ export class CallClient {
     }
   }
 }
-
 
