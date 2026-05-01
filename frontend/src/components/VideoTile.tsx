@@ -4,9 +4,10 @@ type Props = {
   stream: MediaStream | null;
   label: string;
   muted?: boolean;
+  volume?: number;
 };
 
-export default function VideoTile({ stream, label, muted = false }: Props) {
+export default function VideoTile({ stream, label, muted = false, volume = 1 }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -21,17 +22,11 @@ export default function VideoTile({ stream, label, muted = false }: Props) {
     if (!el) {
       return;
     }
+    const safeVolume = Math.min(1, Math.max(0, volume));
     el.muted = muted;
     el.defaultMuted = muted;
-    el.volume = muted ? 0 : 1;
-
-    const media = el.srcObject;
-    if (media instanceof MediaStream) {
-      media.getAudioTracks().forEach((track) => {
-        track.enabled = !muted;
-      });
-    }
-  }, [muted, stream]);
+    el.volume = muted ? 0 : safeVolume;
+  }, [muted, volume, stream]);
 
   return (
     <div className="video-tile">
@@ -40,4 +35,3 @@ export default function VideoTile({ stream, label, muted = false }: Props) {
     </div>
   );
 }
-

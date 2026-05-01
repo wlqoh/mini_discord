@@ -179,8 +179,10 @@
 .voice-member-item {
     display: grid;
     grid-template-columns: 24px 1fr;
+    grid-template-rows: auto auto;
     gap: 8px;
     align-items: center;
+    cursor: pointer;
 }
 
 .voice-member-avatar-wrap {
@@ -225,6 +227,23 @@
     white-space: nowrap;
 }
 
+.voice-volume-popover {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 32px;
+}
+
+.voice-volume-popover input[type="range"] {
+    width: 120px;
+}
+
+.voice-volume-value {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
 .chat-main {
     display: grid;
     grid-template-rows: 1fr auto;
@@ -234,7 +253,7 @@
 }
 
 .chat-content {
-    padding: 18px 20px;
+    padding: 0 20px 18px;
     overflow-y: auto;
     min-height: 0;
 }
@@ -243,6 +262,16 @@
     font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
+}
+
+.chat-header-block {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    margin: 0 -20px 12px;
+    padding: 14px 20px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
 }
 
 .chat-header-row {
@@ -278,7 +307,7 @@
     font-size: 14px;
     color: var(--text-secondary);
     margin-top: 4px;
-    margin-bottom: 14px;
+    margin-bottom: 0;
 }
 
 .voice-panel {
@@ -846,5 +875,4 @@
     cursor: pointer;
     min-height: 36px;
 }
-
 

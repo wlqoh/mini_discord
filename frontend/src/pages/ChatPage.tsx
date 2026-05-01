@@ -77,6 +77,8 @@ export default function ChatPage() {
         label: string;
         stream: MediaStream
     }>>([]);
+    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>({});
+    const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
     const [isDeafened, setIsDeafened] = useState(false);
@@ -223,6 +225,12 @@ export default function ChatPage() {
                         const next = prev.filter((item) => item.userId !== participant.user_id);
                         next.push({userId: participant.user_id, label, stream});
                         return next;
+                    });
+                    setVoiceVolumeByUserId((prev) => {
+                        if (participant.user_id in prev) {
+                            return prev;
+                        }
+                        return { ...prev, [participant.user_id]: 1 };
                     });
                 },
                 (userId) => {
@@ -975,7 +983,21 @@ export default function ChatPage() {
                             {channel.type === "voice" && (voiceParticipantsByChannel[channel.id]?.length ?? 0) > 0 ? (
                                 <ul className="voice-members-list">
                                     {(voiceParticipantsByChannel[channel.id] ?? []).map((participant) => (
-                                        <li key={participant.user_id} className="voice-member-item">
+                                        <li
+                                            key={participant.user_id}
+                                            className="voice-member-item"
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() =>
+                                                setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id))
+                                            }
+                                            onKeyDown={(event) => {
+                                                if (event.key === "Enter" || event.key === " ") {
+                                                    event.preventDefault();
+                                                    setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id));
+                                                }
+                                            }}
+                                        >
                                             <div className="voice-member-avatar-wrap">
                                                 {participant.avatar_url ? (
                                                     <img
@@ -994,6 +1016,27 @@ export default function ChatPage() {
                                                 </span>
                                             </div>
                                             <span className="voice-member-name">{getParticipantDisplayName(participant)}</span>
+                                            {activeVolumeUserId === participant.user_id && (
+                                                <div className="voice-volume-popover" onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.01"
+                                                        value={voiceVolumeByUserId[participant.user_id] ?? 1}
+                                                        onChange={(e) => {
+                                                            const next = Number(e.target.value);
+                                                            setVoiceVolumeByUserId((prev) => ({
+                                                                ...prev,
+                                                                [participant.user_id]: next,
+                                                            }));
+                                                        }}
+                                                    />
+                                                    <span className="voice-volume-value">
+                                                        {Math.round((voiceVolumeByUserId[participant.user_id] ?? 1) * 100)}%
+                                                    </span>
+                                                </div>
+                                            )}
                                         </li>
                                     ))}
                                 </ul>
@@ -1005,31 +1048,34 @@ export default function ChatPage() {
 
             <section className="chat-main">
                 <div className="chat-content" ref={chatContentRef}>
-                    <div className="chat-header-row">
-                        <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</div>
-                        <div className="chat-header-actions">
-                            <button
-                                className="profile-open-btn"
-                                type="button"
-                                onClick={() => setIsProfileModalOpen(true)}
-                                aria-label="Open profile"
-                                title="Profile"
-                            >
-                                {avatarUrl ? (
-                                    <img
-                                        src={avatarUrl}
-                                        alt="User avatar"
-                                        className="profile-open-avatar"
-                                        onError={() => setAvatarUrl("")}
-                                    />
-                                ) : (
-                                    userInitial
-                                )}
-                            </button>
+                    <div className="chat-header-block">
+                        <div className="chat-header-row">
+                            <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</div>
+                            <div className="chat-header-actions">
+                                <button
+                                    className="profile-open-btn"
+                                    type="button"
+                                    onClick={() => setIsProfileModalOpen(true)}
+                                    aria-label="Open profile"
+                                    title="Profile"
+                                >
+                                    {avatarUrl ? (
+                                        <img
+                                            src={avatarUrl}
+                                            alt="User avatar"
+                                            className="profile-open-avatar"
+                                            onError={() => setAvatarUrl("")}
+                                        />
+                                    ) : (
+                                        userInitial
+                                    )}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="chat-subheader">
+                            {currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}
                         </div>
                     </div>
-                    <div
-                        className="chat-subheader">{currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}</div>
                     {isVoiceChannel && (
                         <div className="voice-panel">
                             <div className="voice-controls">
@@ -1059,14 +1105,20 @@ export default function ChatPage() {
                             </div>
                             <div className="video-grid">
                                 {localStream && <VideoTile stream={localStream} label="You" muted/>}
-                                {remoteStreams.map((item) => (
-                                    <VideoTile
-                                        key={`${item.userId}-${isDeafened ? "deaf" : "live"}`}
-                                        stream={item.stream}
-                                        label={item.label}
-                                        muted={isDeafened}
-                                    />
-                                ))}
+                                {remoteStreams.map((item) => {
+                                    const userVolume = voiceVolumeByUserId[item.userId] ?? 1;
+                                    const effectiveVolume = isDeafened ? 0 : userVolume;
+
+                                    return (
+                                        <VideoTile
+                                            key={`${item.userId}-${isDeafened ? "deaf" : "live"}`}
+                                            stream={item.stream}
+                                            label={item.label}
+                                            muted={isDeafened}
+                                            volume={effectiveVolume}
+                                        />
+                                    );
+                                })}
                             </div>
                         </div>
                     )}
