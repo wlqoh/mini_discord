@@ -20,27 +20,6 @@ type PeerState = {
   pendingCandidates: RTCIceCandidateInit[];
 };
 
-function formatMediaError(err: unknown): string {
-  if (!(err instanceof DOMException)) {
-    return "Failed to access microphone/camera";
-  }
-
-  switch (err.name) {
-    case "NotAllowedError":
-      return "Access to microphone/camera is denied in browser settings";
-    case "NotFoundError":
-      return "Microphone or camera device was not found";
-    case "NotReadableError":
-      return "Microphone/camera is already used by another app";
-    case "OverconstrainedError":
-      return "Requested media settings are not supported on this device";
-    case "SecurityError":
-      return "Media access is blocked: open the app via HTTPS or localhost";
-    default:
-      return `Failed to access microphone/camera (${err.name})`;
-  }
-}
-
 function parseUrls(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
@@ -154,7 +133,7 @@ export class CallClient {
 
     this.localStream = await this.acquireLocalStream();
     // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
-    this.localStream.getVideoTracks().forEach((track) => {
+    this.localStream?.getVideoTracks().forEach((track) => {
       track.enabled = false;
     });
     this.onLocalStream(this.localStream);
@@ -223,20 +202,20 @@ export class CallClient {
     await this.turnCredentialsPromise;
   }
 
-  private async acquireLocalStream(): Promise<MediaStream> {
+  private async acquireLocalStream(): Promise<MediaStream | null> {
     const mediaDevices = navigator.mediaDevices;
     if (!mediaDevices?.getUserMedia) {
-      throw new Error("This browser does not support microphone/camera access");
+      return null;
     }
 
     try {
       // Prefer full voice+video for channels, fallback to audio-only.
       return await mediaDevices.getUserMedia({ audio: true, video: true });
-    } catch (videoErr) {
+    } catch {
       try {
         return await mediaDevices.getUserMedia({ audio: true, video: false });
-      } catch (audioErr) {
-        throw new Error(formatMediaError(audioErr ?? videoErr));
+      } catch {
+        return null;
       }
     }
   }
@@ -331,6 +310,11 @@ export class CallClient {
     this.localStream?.getTracks().forEach((track) => {
       pc.addTrack(track, this.localStream as MediaStream);
     });
+
+    const hasLocalAudio = (this.localStream?.getAudioTracks().length ?? 0) > 0;
+    if (!hasLocalAudio && !pc.getTransceivers().some((transceiver) => transceiver.receiver.track?.kind === "audio")) {
+      pc.addTransceiver("audio", { direction: "recvonly" });
+    }
 
     const hasLocalVideo = (this.localStream?.getVideoTracks().length ?? 0) > 0;
     if (!hasLocalVideo && !pc.getTransceivers().some((transceiver) => transceiver.receiver.track?.kind === "video")) {
