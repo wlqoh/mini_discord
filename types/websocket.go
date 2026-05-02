@@ -42,15 +42,15 @@ const (
 	WsActionLeaveVoiceChannel = "leave_voice_channel"
 	WsActionRTCSignal         = "rtc_signal"
 	WsActionSearchServers     = "search_servers"
+	WsActionGetUserInfo       = "get_user_info"
 
-	WsEventAck               = "ack"
-	WsEventError             = "error"
-	WsEventMessage           = "message"
-	WsEventConnected         = "connected"
-	WsEventVoiceParticipants = "voice_participants"
-	WsEventVoiceUserJoined   = "voice_user_joined"
-	WsEventVoiceUserLeft     = "voice_user_left"
-	WsEventRTCSignal         = "rtc_signal"
+	WsEventAck             = "ack"
+	WsEventError           = "error"
+	WsEventMessage         = "message"
+	WsEventConnected       = "connected"
+	WsEventVoiceUserJoined = "voice_user_joined"
+	WsEventVoiceUserLeft   = "voice_user_left"
+	WsEventRTCSignal       = "rtc_signal"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -67,6 +67,17 @@ type WsCreateServerRequest struct {
 
 type WsDeleteServerRequest struct {
 	ServerID int64 `json:"server_id"`
+}
+
+type WsGetUserInfoRequest struct {
+	UserID int `json:"user_id"`
+}
+
+type WsGetUserInfoResponse struct {
+	UserID    int    `json:"user_id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	AvatarURL string `json:"avatar_url"`
 }
 
 type WsJoinServerRequest struct {
