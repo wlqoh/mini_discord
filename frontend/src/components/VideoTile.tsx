@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Maximize2 } from "lucide-react";
 
 type Props = {
   stream: MediaStream | null;
@@ -9,6 +10,7 @@ type Props = {
 
 export default function VideoTile({ stream, label, muted = false, volume = 1 }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const isDebugEnabled = (() => {
     try {
       return window.localStorage.getItem("webrtc_debug") === "1";
@@ -16,6 +18,18 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
       return false;
     }
   })();
+
+  const toggleFullScreen = () => {
+    const el = containerRef.current;
+    if (!el) {
+      return;
+    }
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+    void el.requestFullscreen();
+    }
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -84,9 +98,12 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
   }, [label, isDebugEnabled]);
 
   return (
-    <div className="video-tile">
+    <div className="video-tile" ref={containerRef}>
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       <div className="video-label">{label}</div>
+      <button type="button" className="video-fullscreen-btn" onClick={toggleFullScreen} aria-label="Fullscreen">
+        <Maximize2 size={18} />
+      </button>
     </div>
   );
 }
