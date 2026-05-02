@@ -20,6 +20,22 @@ type PeerState = {
   pendingCandidates: RTCIceCandidateInit[];
 };
 
+function isWebRTCDebugEnabled(): boolean {
+  try {
+    return window.localStorage.getItem("webrtc_debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function debugLog(...args: unknown[]): void {
+  if (!isWebRTCDebugEnabled()) {
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.log("[webrtc]", ...args);
+}
+
 function formatMediaError(err: unknown): string {
   if (!(err instanceof DOMException)) {
     return "Failed to access microphone/camera";
@@ -151,10 +167,12 @@ export class CallClient {
     await this.leave();
 
     await this.ensureTurnCredentials();
+    debugLog("join:start", { channelID, iceServers: this.iceServers, policy: buildIceTransportPolicy() });
 
     const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
 
     this.currentChannelID = response.channel_id;
+    debugLog("join:channel-joined", { channelID: response.channel_id, participants: response.participants.map((p) => p.user_id) });
 
     try {
       this.localStream = await this.acquireLocalStream();
@@ -167,6 +185,7 @@ export class CallClient {
       this.localStream = null;
       this.onLocalStream(null);
       const message = err instanceof Error ? err.message : "Failed to access microphone/camera";
+      debugLog("join:local-stream-failed", { message });
       this.onError(`${message}. Joined voice in listen-only mode.`);
     }
 
@@ -301,16 +320,40 @@ export class CallClient {
       iceServers: this.iceServers,
       iceTransportPolicy: buildIceTransportPolicy(),
     });
+    debugLog("peer:create", { userID: user.user_id, initiateOffer });
 
     pc.ontrack = (event) => {
+      debugLog("peer:ontrack", {
+        fromUserID: user.user_id,
+        kind: event.track.kind,
+        trackID: event.track.id,
+        muted: event.track.muted,
+        readyState: event.track.readyState,
+        streamIDs: event.streams.map((s) => s.id),
+      });
       event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
       this.onRemoteStream(user, remoteStream);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      debugLog("peer:ice-state", { userID: user.user_id, state: pc.iceConnectionState });
+    };
+    pc.onconnectionstatechange = () => {
+      debugLog("peer:connection-state", { userID: user.user_id, state: pc.connectionState });
+    };
+    pc.onsignalingstatechange = () => {
+      debugLog("peer:signaling-state", { userID: user.user_id, state: pc.signalingState });
     };
 
     pc.onicecandidate = (event) => {
       if (!event.candidate || this.currentChannelID <= 0) {
         return;
       }
+      debugLog("peer:local-candidate", {
+        toUserID: user.user_id,
+        type: event.candidate.type,
+        protocol: event.candidate.protocol,
+      });
 
       const payload: RTCSignalPayload = {
         channel_id: this.currentChannelID,
@@ -353,6 +396,7 @@ export class CallClient {
     try {
       const offer = await peer.pc.createOffer();
       await peer.pc.setLocalDescription(offer);
+      debugLog("signal:offer-send", { remoteUserID, sdpSize: offer.sdp?.length ?? 0 });
 
       await this.socket.sendRTCSignal({
         channel_id: this.currentChannelID,
@@ -399,6 +443,7 @@ export class CallClient {
 
     const participant = this.participants.get(event.from_user_id) ?? { user_id: event.from_user_id };
     this.participants.set(event.from_user_id, participant);
+    debugLog("signal:incoming", { from: event.from_user_id, type: event.signal_type });
 
     const pc = await this.ensurePeer(participant, false);
     const peer = this.peers.get(event.from_user_id);
