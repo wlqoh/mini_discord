@@ -42,15 +42,16 @@ const (
 	WsActionLeaveVoiceChannel = "leave_voice_channel"
 	WsActionRTCSignal         = "rtc_signal"
 	WsActionSearchServers     = "search_servers"
+	WsActionChangeVoiceStatus = "change_voice_status"
 
-	WsEventAck               = "ack"
-	WsEventError             = "error"
-	WsEventMessage           = "message"
-	WsEventConnected         = "connected"
-	WsEventVoiceParticipants = "voice_participants"
-	WsEventVoiceUserJoined   = "voice_user_joined"
-	WsEventVoiceUserLeft     = "voice_user_left"
-	WsEventRTCSignal         = "rtc_signal"
+	WsEventAck                = "ack"
+	WsEventError              = "error"
+	WsEventMessage            = "message"
+	WsEventConnected          = "connected"
+	WsEventVoiceUserJoined    = "voice_user_joined"
+	WsEventVoiceUserLeft      = "voice_user_left"
+	WsEventVoiceStatusChanged = "voice_status_changed"
+	WsEventRTCSignal          = "rtc_signal"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -63,6 +64,12 @@ type WsCommand struct {
 
 type WsCreateServerRequest struct {
 	Name string `json:"name"`
+}
+
+type WsChangeVoiceStatusRequest struct {
+	UserID     int  `json:"user_id"`
+	MicEnabled bool `json:"mic_enabled,omitempty"`
+	Deafened   bool `json:"deafened,omitempty"`
 }
 
 type WsDeleteServerRequest struct {
@@ -121,10 +128,12 @@ type WsJoinVoiceChannelRequest struct {
 }
 
 type WsVoiceParticipant struct {
-	UserID    int    `json:"user_id"`
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
-	AvatarURL string `json:"avatar_url,omitempty"`
+	UserID     int    `json:"user_id"`
+	FirstName  string `json:"first_name,omitempty"`
+	LastName   string `json:"last_name,omitempty"`
+	MicEnabled bool   `json:"mic_enabled"`
+	Deafened   bool   `json:"deafened"`
+	AvatarURL  string `json:"avatar_url,omitempty"`
 }
 
 type WsJoinVoiceChannelResponse struct {

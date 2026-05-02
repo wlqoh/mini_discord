@@ -28,6 +28,7 @@ type Hub struct {
 	sendMessageLimiter   *ratelimit.TokenBucket
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
+	voiceStatusByUser    map[int]voiceStatus
 
 	log *slog.Logger
 
@@ -39,6 +40,11 @@ type Hub struct {
 type wsCommandRequest struct {
 	client  *Client
 	command types.WsCommand
+}
+
+type voiceStatus struct {
+	micEnabled bool
+	deafened   bool
 }
 
 const maxServerChannelNameLen = 16
@@ -53,6 +59,7 @@ func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
 		sendMessageLimiter:   ratelimit.NewTokenBucket(1.0, 1.0),
 		voiceParticipants:    make(map[int64]map[int]struct{}),
 		userVoiceChannel:     make(map[int]int64),
+		voiceStatusByUser:    make(map[int]voiceStatus),
 		log:                  log,
 		Register:             make(chan *Client),
 		Unregister:           make(chan *Client),
@@ -113,37 +120,84 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 
 	switch req.command.Action {
 	case types.WsActionCreateServer:
-		createServer(h, req, ctx)
+		h.createServer(req, ctx)
 	case types.WsActionDeleteServer:
-		deleteServer(h, req, ctx)
+		h.deleteServer(req, ctx)
 	case types.WsActionJoinServer:
-		joinServer(h, req, ctx)
+		h.joinServer(req, ctx)
 	case types.WsActionCreateChannel:
-		createChannel(h, req, ctx)
+		h.createChannel(req, ctx)
 	case types.WsActionDeleteChannel:
-		deleteChannel(h, req, ctx)
+		h.deleteChannel(req, ctx)
 	case types.WsActionSendMessage:
-		sendMessage(h, req, ctx)
+		h.sendMessage(req, ctx)
 	case types.WsActionGetMessages:
-		getMessages(h, req, ctx)
+		h.getMessages(req, ctx)
 	case types.WsActionGetServers:
-		getServers(h, req, ctx)
+		h.getServers(req, ctx)
 	case types.WsActionGetServerChannels:
-		getServerChannels(h, req, ctx)
+		h.getServerChannels(req, ctx)
 	case types.WsActionGetUsersOnline:
-		getUsersOnline(h, req, ctx)
+		h.getUsersOnline(req, ctx)
 	case types.WsActionJoinVoiceChannel:
-		joinVoiceChannel(h, req, ctx)
+		h.joinVoiceChannel(req, ctx)
 	case types.WsActionLeaveVoiceChannel:
-		leaveVoiceChannel(h, req)
+		h.leaveVoiceChannel(req)
 	case types.WsActionRTCSignal:
-		relayRTCSignal(h, req, ctx)
+		h.relayRTCSignal(req, ctx)
 	case types.WsActionSearchServers:
-		searchServers(h, req, ctx)
+		h.searchServers(req, ctx)
+	case types.WsActionChangeVoiceStatus:
+		h.changeVoiceStatus(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
 	}
+}
+
+func (h *Hub) changeVoiceStatus(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsChangeVoiceStatusRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid change_voice_status payload")
+		return
+	}
+
+	h.mu.Lock()
+	channelID, inVoice := h.userVoiceChannel[payload.UserID]
+	if !inVoice {
+		h.mu.Unlock()
+		h.pushError(req.client, "user not in voice channel")
+		return
+	}
+
+	participants := h.voiceParticipants[channelID]
+	if participants == nil {
+		h.mu.Unlock()
+		h.pushError(req.client, "voice channel not found")
+		return
+	}
+
+	h.voiceStatusByUser[payload.UserID] = voiceStatus{
+		micEnabled: payload.MicEnabled,
+		deafened:   payload.Deafened,
+	}
+
+	notifyUsers := make([]int, 0, len(participants))
+	for userID := range participants {
+		notifyUsers = append(notifyUsers, userID)
+	}
+	h.mu.Unlock()
+
+	updatedParticipant := h.resolveVoiceParticipant(ctx, payload.UserID)
+	h.pushToUsers(notifyUsers, &types.WsEvent{
+		Event: types.WsEventVoiceStatusChanged,
+		Data: types.WsVoiceUserEvent{
+			ChannelID: channelID,
+			User:      updatedParticipant,
+		},
+	})
+
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
 
 func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
@@ -260,7 +314,7 @@ func (h *Hub) buildVoiceParticipantsSnapshot(ctx context.Context, channels []typ
 	return snapshot
 }
 
-func deleteChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) deleteChannel(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsDeleteChannelRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid delete_channel payload")
@@ -284,7 +338,7 @@ func deleteChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func deleteServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) deleteServer(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsDeleteServerRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid delete_server payload")
@@ -308,7 +362,7 @@ func deleteServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) createServer(req wsCommandRequest, ctx context.Context) {
 	if !h.createServerLimiter.Allow(strconv.Itoa(req.client.UserID)) {
 		h.pushError(req.client, "rate limit exceeded for create_server")
 		return
@@ -344,7 +398,7 @@ func createServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func joinServer(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) joinServer(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsJoinServerRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid join_server payload")
@@ -378,7 +432,7 @@ func joinServer(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) createChannel(req wsCommandRequest, ctx context.Context) {
 	if !h.createChannelLimiter.Allow(strconv.Itoa(req.client.UserID)) {
 		h.pushError(req.client, "rate limit exceeded for create_channel")
 		return
@@ -432,7 +486,7 @@ func createChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func getUsersOnline(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) getUsersOnline(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsGetUsersOnlineRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid get_users_online payload")
@@ -487,7 +541,7 @@ func getUsersOnline(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
 		h.pushError(req.client, "rate limit exceeded for send_message")
 		return
@@ -546,7 +600,7 @@ func sendMessage(h *Hub, req wsCommandRequest, ctx context.Context) {
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
 
-func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) getMessages(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsGetMessagesRequest
 
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
@@ -594,7 +648,7 @@ func getMessages(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func getServers(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) getServers(req wsCommandRequest, ctx context.Context) {
 	servers, err := h.storage.GetServersByUserID(ctx, req.client.UserID)
 	if err != nil {
 		h.pushError(req.client, "failed to get servers")
@@ -609,7 +663,7 @@ func getServers(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) getServerChannels(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsGetServerChannelsRequest
 
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
@@ -641,7 +695,7 @@ func getServerChannels(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func joinVoiceChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsJoinVoiceChannelRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid join_voice_channel payload")
@@ -686,6 +740,7 @@ func joinVoiceChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	}
 	participants[req.client.UserID] = struct{}{}
 	h.userVoiceChannel[req.client.UserID] = payload.ChannelID
+	h.voiceStatusByUser[req.client.UserID] = voiceStatus{micEnabled: true, deafened: false}
 
 	otherUserIDs := make([]int, 0, len(participants))
 	for userID := range participants {
@@ -725,11 +780,11 @@ func joinVoiceChannel(h *Hub, req wsCommandRequest, ctx context.Context) {
 	})
 }
 
-func leaveVoiceChannel(h *Hub, req wsCommandRequest) {
+func (h *Hub) leaveVoiceChannel(req wsCommandRequest) {
 	h.leaveVoiceChannelInternal(req.client, true)
 }
 
-func relayRTCSignal(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) relayRTCSignal(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsRTCSignalRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid rtc_signal payload")
@@ -797,6 +852,7 @@ func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
 	}
 
 	delete(h.userVoiceChannel, cl.UserID)
+	delete(h.voiceStatusByUser, cl.UserID)
 	participants := h.voiceParticipants[channelID]
 	if participants != nil {
 		delete(participants, cl.UserID)
@@ -841,7 +897,16 @@ func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
 }
 
 func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsVoiceParticipant {
-	participant := types.WsVoiceParticipant{UserID: userID}
+	userVoiceStatus := voiceStatus{micEnabled: true, deafened: false}
+
+	h.mu.RLock()
+	if status, ok := h.voiceStatusByUser[userID]; ok {
+		userVoiceStatus.micEnabled = status.micEnabled
+		userVoiceStatus.deafened = status.deafened
+	}
+	h.mu.RUnlock()
+
+	participant := types.WsVoiceParticipant{UserID: userID, MicEnabled: userVoiceStatus.micEnabled, Deafened: userVoiceStatus.deafened}
 	user, err := h.storage.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
 		return participant
@@ -864,7 +929,7 @@ func normalizeChannelType(raw string) string {
 	}
 }
 
-func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {
+func (h *Hub) searchServers(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsSearchServersRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
 		h.pushError(req.client, "invalid search_servers payload")
