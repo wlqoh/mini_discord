@@ -152,22 +152,23 @@ export class CallClient {
 
     await this.ensureTurnCredentials();
 
-    this.localStream = await this.acquireLocalStream();
-    // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
-    this.localStream.getVideoTracks().forEach((track) => {
-      track.enabled = false;
-    });
-    this.onLocalStream(this.localStream);
-
-    let response: JoinVoiceResponse;
-    try {
-      response = await this.socket.joinVoiceChannel(channelID);
-    } catch (err) {
-      this.stopLocalTracks();
-      throw err;
-    }
+    const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
 
     this.currentChannelID = response.channel_id;
+
+    try {
+      this.localStream = await this.acquireLocalStream();
+      // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
+      this.localStream.getVideoTracks().forEach((track) => {
+        track.enabled = false;
+      });
+      this.onLocalStream(this.localStream);
+    } catch (err) {
+      this.localStream = null;
+      this.onLocalStream(null);
+      const message = err instanceof Error ? err.message : "Failed to access microphone/camera";
+      this.onError(`${message}. Joined voice in listen-only mode.`);
+    }
 
     response.participants.forEach((participant) => {
       this.participants.set(participant.user_id, participant);
@@ -325,6 +326,14 @@ export class CallClient {
     this.localStream?.getTracks().forEach((track) => {
       pc.addTrack(track, this.localStream as MediaStream);
     });
+    const hasLocalAudio = (this.localStream?.getAudioTracks().length ?? 0) > 0;
+    const hasLocalVideo = (this.localStream?.getVideoTracks().length ?? 0) > 0;
+    if (!hasLocalAudio) {
+      pc.addTransceiver("audio", { direction: "recvonly" });
+    }
+    if (!hasLocalVideo) {
+      pc.addTransceiver("video", { direction: "recvonly" });
+    }
 
     this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
 
