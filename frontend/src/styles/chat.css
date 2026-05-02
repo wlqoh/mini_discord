@@ -356,10 +356,20 @@
 }
 
 .video-fullscreen-btn {
+    border: none;
+    border-radius: 8px;
+    width: 28px;
+    height: 28px;
+    background: #3a3c43;
+    color: var(--text-primary);
     position: absolute;
     right: 8px;
     bottom: 8px;
     z-index: 2;
+}
+
+.video-fullscreen-btn:hover {
+    background: #4a4d55;
 }
 
 .video-tile:fullscreen,

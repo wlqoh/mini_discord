@@ -101,7 +101,11 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     <div className="video-tile" ref={containerRef}>
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       <div className="video-label">{label}</div>
-      <button type="button" className="video-fullscreen-btn" onClick={toggleFullScreen} aria-label="Fullscreen">
+      <button
+          className="video-fullscreen-btn"
+          type="button"
+          onClick={toggleFullScreen}
+          aria-label="Fullscreen">
         <Maximize2 size={18} />
       </button>
     </div>
