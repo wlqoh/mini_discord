@@ -25,6 +25,7 @@ type WsEvent = {
 };
 
 type PendingCommand = {
+  action: string;
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   timeoutId: number;
@@ -196,6 +197,7 @@ export class ChatSocket {
     }, ChatSocket.COMMAND_TIMEOUT_MS);
 
     this.pending = {
+      action: next.action,
       resolve: (data) => {
         window.clearTimeout(timeoutId);
         next.resolve(data);
@@ -230,12 +232,18 @@ export class ChatSocket {
   }
 
   private handleSocketError(text: string): void {
+    const pendingAction = this.pending?.action;
+    const isUnsupportedGetUserInfo =
+      pendingAction === "get_user_info" && text.toLowerCase().includes("unknown action");
+
     if (this.pending) {
       this.pending.reject(new Error(text));
       this.pending = null;
       this.flushQueue();
     }
-    this.errorListeners.forEach((listener) => listener(text));
+    if (!isUnsupportedGetUserInfo) {
+      this.errorListeners.forEach((listener) => listener(text));
+    }
   }
 
   connect(): Promise<void> {
