@@ -5,6 +5,10 @@ import type {
   VoiceParticipant,
   VoiceUserEvent,
 } from "../types/chat";
+import { RnnoiseWorkletNode, loadRnnoise } from "@sapphi-red/web-noise-suppressor";
+import rnnoiseWorkletPath from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url";
+import rnnoiseWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
+import rnnoiseSimdWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
 import { ChatSocket } from "./chatSocket";
 import { getTurnCredentials, type TurnCredentialsResponse } from "./turnApi";
 
@@ -125,6 +129,8 @@ export class CallClient {
 
   private localStream: MediaStream | null = null;
 
+  private rawLocalStream: MediaStream | null = null;
+
   private currentChannelID = 0;
 
   private iceServers = buildIceServers();
@@ -144,6 +150,14 @@ export class CallClient {
   private readonly onError: ErrorListener;
 
   private readonly renegotiateRetryTimers = new Map<number, number>();
+
+  private rnnoiseAudioContext: AudioContext | null = null;
+
+  private rnnoiseSource: MediaStreamAudioSourceNode | null = null;
+
+  private rnnoiseNode: RnnoiseWorkletNode | null = null;
+
+  private static rnnoiseBinaryPromise: Promise<ArrayBuffer> | null = null;
 
   constructor(
     socket: ChatSocket,
@@ -319,7 +333,7 @@ export class CallClient {
       // Prefer full voice+video for channels, fallback to audio-only.
       const stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
       await this.enforceAudioProcessing(stream);
-      return stream;
+      return await this.applyRnnoiseProcessing(stream);
     } catch (videoErr) {
       try {
         const stream = await mediaDevices.getUserMedia({
@@ -331,7 +345,7 @@ export class CallClient {
           video: false,
         });
         await this.enforceAudioProcessing(stream);
-        return stream;
+        return await this.applyRnnoiseProcessing(stream);
       } catch (audioErr) {
         throw new Error(formatMediaError(audioErr ?? videoErr));
       }
@@ -373,6 +387,9 @@ export class CallClient {
 
   private stopLocalTracks(): void {
     this.localStream?.getTracks().forEach((track) => track.stop());
+    this.rawLocalStream?.getTracks().forEach((track) => track.stop());
+    this.rawLocalStream = null;
+    this.disposeRnnoiseProcessing();
     this.localStream = null;
     this.onLocalStream(null);
   }
@@ -561,6 +578,102 @@ export class CallClient {
     } catch {
       // Best-effort on browsers with partial constraint support.
     }
+  }
+
+  private async applyRnnoiseProcessing(sourceStream: MediaStream): Promise<MediaStream> {
+    const sourceAudioTrack = sourceStream.getAudioTracks()[0];
+    if (!sourceAudioTrack) {
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+
+    if (!window.isSecureContext || typeof AudioWorkletNode === "undefined") {
+      debugLog("rnnoise:unsupported", {
+        isSecureContext: window.isSecureContext,
+        hasAudioWorkletNode: typeof AudioWorkletNode !== "undefined",
+      });
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+
+    try {
+      const audioContext = new AudioContext({ sampleRate: 48000 });
+      await audioContext.audioWorklet.addModule(rnnoiseWorkletPath);
+
+      const wasmBinary = await CallClient.loadRnnoiseBinary();
+      const rnnoiseSourceStream = new MediaStream([sourceAudioTrack]);
+      const sourceNode = audioContext.createMediaStreamSource(rnnoiseSourceStream);
+      const rnnoiseNode = new RnnoiseWorkletNode(audioContext, {
+        wasmBinary,
+        maxChannels: 1,
+      });
+      const destinationNode = audioContext.createMediaStreamDestination();
+
+      sourceNode.connect(rnnoiseNode);
+      rnnoiseNode.connect(destinationNode);
+      await audioContext.resume();
+
+      const processedAudioTrack = destinationNode.stream.getAudioTracks()[0];
+      if (!processedAudioTrack) {
+        throw new Error("RNNoise did not produce processed audio track");
+      }
+
+      const processedStream = new MediaStream([processedAudioTrack]);
+      sourceStream.getVideoTracks().forEach((track) => processedStream.addTrack(track));
+
+      this.disposeRnnoiseProcessing();
+      this.rnnoiseAudioContext = audioContext;
+      this.rnnoiseSource = sourceNode;
+      this.rnnoiseNode = rnnoiseNode;
+      this.rawLocalStream = sourceStream;
+
+      debugLog("rnnoise:enabled", {
+        sampleRate: audioContext.sampleRate,
+        processedTrackID: processedAudioTrack.id,
+      });
+
+      return processedStream;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "RNNoise initialization failed";
+      debugLog("rnnoise:failed", { message });
+      this.onError(`RNNoise unavailable (${message}). Using standard microphone processing.`);
+      this.disposeRnnoiseProcessing();
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+  }
+
+  private disposeRnnoiseProcessing(): void {
+    try {
+      this.rnnoiseSource?.disconnect();
+    } catch {
+      // ignore disconnect errors during teardown
+    }
+    try {
+      this.rnnoiseNode?.disconnect();
+      this.rnnoiseNode?.destroy();
+    } catch {
+      // ignore destroy errors during teardown
+    }
+    try {
+      this.rnnoiseAudioContext?.close();
+    } catch {
+      // ignore close errors during teardown
+    }
+
+    this.rnnoiseSource = null;
+    this.rnnoiseNode = null;
+    this.rnnoiseAudioContext = null;
+  }
+
+  private static loadRnnoiseBinary(): Promise<ArrayBuffer> {
+    if (!CallClient.rnnoiseBinaryPromise) {
+      CallClient.rnnoiseBinaryPromise = loadRnnoise({
+        url: rnnoiseWasmPath,
+        simdUrl: rnnoiseSimdWasmPath,
+      });
+    }
+    return CallClient.rnnoiseBinaryPromise;
   }
 
   private handleVoiceUserJoined(event: VoiceUserEvent): void {
