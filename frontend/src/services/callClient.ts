@@ -143,6 +143,8 @@ export class CallClient {
 
   private readonly onError: ErrorListener;
 
+  private readonly renegotiateRetryTimers = new Map<number, number>();
+
   constructor(
     socket: ChatSocket,
     selfUserID: number,
@@ -315,10 +317,12 @@ export class CallClient {
         autoGainControl: true,
       };
       // Prefer full voice+video for channels, fallback to audio-only.
-      return await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+      const stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+      await this.enforceAudioProcessing(stream);
+      return stream;
     } catch (videoErr) {
       try {
-        return await mediaDevices.getUserMedia({
+        const stream = await mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
@@ -326,6 +330,8 @@ export class CallClient {
           },
           video: false,
         });
+        await this.enforceAudioProcessing(stream);
+        return stream;
       } catch (audioErr) {
         throw new Error(formatMediaError(audioErr ?? videoErr));
       }
@@ -372,6 +378,11 @@ export class CallClient {
   }
 
   private closeAllPeers(): void {
+    this.renegotiateRetryTimers.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    this.renegotiateRetryTimers.clear();
+
     this.peers.forEach((state, userID) => {
       state.pc.close();
       this.onRemoteLeft(userID);
@@ -479,6 +490,11 @@ export class CallClient {
       return;
     }
 
+    if (peer.pc.signalingState !== "stable") {
+      this.scheduleRenegotiationRetry(remoteUserID);
+      return;
+    }
+
     try {
       const offer = await peer.pc.createOffer();
       await peer.pc.setLocalDescription(offer);
@@ -493,6 +509,17 @@ export class CallClient {
     } catch {
       this.onError("Failed to create WebRTC offer");
     }
+  }
+
+  private scheduleRenegotiationRetry(remoteUserID: number): void {
+    if (this.renegotiateRetryTimers.has(remoteUserID)) {
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      this.renegotiateRetryTimers.delete(remoteUserID);
+      void this.createAndSendOffer(remoteUserID);
+    }, 250);
+    this.renegotiateRetryTimers.set(remoteUserID, timerId);
   }
 
   private async updateVideoTrackForPeers(track: MediaStreamTrack | null, stream: MediaStream | null): Promise<void> {
@@ -514,12 +541,26 @@ export class CallClient {
         pc.addTrack(track, stream);
       }
 
-      if (pc.signalingState === "stable") {
-        renegotiateTargets.push(userID);
-      }
+      renegotiateTargets.push(userID);
     }
 
     await Promise.all(renegotiateTargets.map((userID) => this.createAndSendOffer(userID)));
+  }
+
+  private async enforceAudioProcessing(stream: MediaStream): Promise<void> {
+    const audioTrack = stream.getAudioTracks()[0];
+    if (!audioTrack) {
+      return;
+    }
+    try {
+      await audioTrack.applyConstraints({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
+    } catch {
+      // Best-effort on browsers with partial constraint support.
+    }
   }
 
   private handleVoiceUserJoined(event: VoiceUserEvent): void {
@@ -568,6 +609,9 @@ export class CallClient {
       if (event.signal_type === "offer") {
         if (!event.sdp) {
           return;
+        }
+        if (pc.signalingState !== "stable") {
+          await pc.setLocalDescription({ type: "rollback" });
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
         await this.flushPendingCandidates(peer);
