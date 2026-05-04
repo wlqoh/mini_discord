@@ -212,8 +212,8 @@ export class CallClient {
 
     const displayStream = await mediaDevices.getDisplayMedia({
       video: {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
+        width: { ideal: 2560 },
+        height: { ideal: 1440 },
         frameRate: { ideal: 60 },
       },
       audio: false,
@@ -309,11 +309,23 @@ export class CallClient {
     }
 
     try {
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
       // Prefer full voice+video for channels, fallback to audio-only.
-      return await mediaDevices.getUserMedia({ audio: true, video: true });
+      return await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
     } catch (videoErr) {
       try {
-        return await mediaDevices.getUserMedia({ audio: true, video: false });
+        return await mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
       } catch (audioErr) {
         throw new Error(formatMediaError(audioErr ?? videoErr));
       }
@@ -399,6 +411,13 @@ export class CallClient {
       } else if (!remoteStream.getTracks().some((existing) => existing.id === event.track.id)) {
         remoteStream.addTrack(event.track);
       }
+      event.track.onended = () => {
+        const endedTrack = remoteStream.getTracks().find((t) => t.id === event.track.id);
+        if (endedTrack) {
+          remoteStream.removeTrack(endedTrack);
+        }
+        this.onRemoteStream(user, remoteStream);
+      };
       this.onRemoteStream(user, remoteStream);
     };
 
@@ -488,8 +507,8 @@ export class CallClient {
 
       if (sender) {
         await sender.replaceTrack(track);
-        if (videoTransceiver && track) {
-          videoTransceiver.direction = "sendrecv";
+        if (videoTransceiver) {
+          videoTransceiver.direction = track ? "sendrecv" : "recvonly";
         }
       } else if (track && stream) {
         pc.addTrack(track, stream);
