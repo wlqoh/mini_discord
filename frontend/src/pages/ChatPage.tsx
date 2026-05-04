@@ -4,6 +4,7 @@ import {Search, Trash2, Mic, MicOff, Camera, CameraOff, PanelLeftClose, PanelLef
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
+import { ShareScreen } from "../components/ShareScreen.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
@@ -72,6 +73,7 @@ export default function ChatPage() {
     const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
     const [voiceChannelId, setVoiceChannelId] = useState(0);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+    const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [remoteStreams, setRemoteStreams] = useState<Array<{
         userId: number;
         label: string;
@@ -841,6 +843,24 @@ export default function ChatPage() {
         return initials || "U";
     };
 
+    const shareScreen = async () => {
+        if (!callClientRef.current) return;
+        try {
+            if (isScreenSharing) {
+                await callClientRef.current.stopScreenShare();
+                setIsScreenSharing(false);
+                return;
+            }
+
+            await callClientRef.current.startScreenShare();
+            setIsScreenSharing(true);
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to start screen sharing";
+            setError(message);
+        }
+    }
+
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
 
@@ -1096,6 +1116,7 @@ export default function ChatPage() {
                                             {isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
                                                 <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
+                                        <ShareScreen onClick={shareScreen} isActive={isScreenSharing} />
                                         <button className="micam-btn" onClick={toggleDeafen}>
                                             {isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}

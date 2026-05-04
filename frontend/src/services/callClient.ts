@@ -131,6 +131,10 @@ export class CallClient {
 
   private turnCredentialsPromise: Promise<void> | null = null;
 
+  private screenStream: MediaStream | null = null;
+
+  private cameraTrack: MediaStreamTrack | null = null;
+
   private readonly onRemoteStream: RemoteStreamListener;
 
   private readonly onRemoteLeft: RemoteLeftListener;
@@ -195,6 +199,73 @@ export class CallClient {
       void this.ensurePeer(participant, shouldInitiate);
     });
   }
+
+  async startScreenShare(): Promise<void> {
+    if (this.screenStream) {
+      return;
+    }
+
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen sharing is not supported in this browser");
+    }
+
+    const displayStream = await mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 60 },
+      },
+      audio: false,
+    });
+    const displayTrack = displayStream.getVideoTracks()[0];
+    if (!displayTrack) {
+      throw new Error("No display video track found");
+    }
+
+    this.screenStream = displayStream;
+
+    this.cameraTrack = this.localStream?.getVideoTracks()[0] ?? null;
+
+    const previewStream = new MediaStream();
+    this.localStream?.getAudioTracks().forEach((track) => previewStream.addTrack(track));
+    previewStream.addTrack(displayTrack);
+    this.onLocalStream(previewStream);
+
+    this.peers.forEach(({ pc }) => {
+      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) {
+        void sender.replaceTrack(displayTrack);
+        return;
+      }
+      pc.addTrack(displayTrack, displayStream);
+    });
+
+    displayTrack.onended = () => {
+      void this.stopScreenShare();
+    };
+  };
+
+  async stopScreenShare(): Promise<void> {
+    if (!this.screenStream) {
+      return;
+    }
+
+    const screenTrack = this.screenStream.getVideoTracks()[0];
+    screenTrack.stop();
+    this.screenStream = null;
+
+    const fallbackTrack = this.cameraTrack ?? this.localStream?.getVideoTracks()[0] ?? null;
+
+    this.peers.forEach(({ pc }) => {
+      const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+      if (sender) {
+        void sender.replaceTrack(fallbackTrack);
+      }
+    });
+
+    this.onLocalStream(this.localStream);
+  };
 
   private hasStaticTurnCredentials(): boolean {
     const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
@@ -443,7 +514,7 @@ export class CallClient {
 
     const participant = this.participants.get(event.from_user_id) ?? { user_id: event.from_user_id };
     this.participants.set(event.from_user_id, participant);
-    debugLog("signal:incoming", { from: event.from_user_id, type: event.signal_type });
+    debugLog("signal:incoming", { from: event.from_user_id, signal_type: event.signal_type });
 
     const pc = await this.ensurePeer(participant, false);
     const peer = this.peers.get(event.from_user_id);
@@ -513,5 +584,4 @@ export class CallClient {
     }
   }
 }
-
 
