@@ -1,6 +1,6 @@
-import  { useState } from "react";
-import  { Send } from "lucide-react"
-import type {OnlineUser} from "../types/chat.ts";
+import { useState } from "react";
+import { Send } from "lucide-react";
+import type { OnlineUser } from "../types/chat.ts";
 
 type Props = {
     disabled?: boolean;
@@ -10,6 +10,7 @@ type Props = {
     onlineUsers: OnlineUser[];
     isOnlineUsersLoading: boolean;
     onlineUserAvatarByName: Record<string, string>;
+    onOpenProfile?: (userId: number) => void;
 };
 
 export default function MessageInput({
@@ -20,6 +21,7 @@ export default function MessageInput({
     onlineUsers,
     isOnlineUsersLoading,
     onlineUserAvatarByName,
+    onOpenProfile,
 }: Props) {
     const [text, setText] = useState("");
 
@@ -30,7 +32,10 @@ export default function MessageInput({
         if (initials) {
             return initials;
         }
-        return user.email.trim().slice(0, 2).toUpperCase();
+        if (user.email) {
+            return user.email.trim().slice(0, 2).toUpperCase();
+        }
+        return "U";
     }
 
     async function handleSubmit(e: React.FormEvent) {
@@ -72,16 +77,34 @@ export default function MessageInput({
                         ) : null}
                         {!isOnlineUsersLoading && onlineUsers.length > 0 ? (
                             <ul className="online-users-list">
-                                {onlineUsers.map((user) => {
+                                {onlineUsers.map((user, index) => {
                                     const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
                                     const initials = getInitials(user);
                                     const avatarKey = fullName.toLowerCase();
                                     const avatarUrl = onlineUserAvatarByName[avatarKey] ?? "";
+                                    const userId = (user as OnlineUser & { user_id?: number }).user_id;
+                                    const canOpenProfile = typeof userId === "number";
+                                    const fallbackKey = fullName || user.email || `user-${index}`;
                                     return (
-                                        <li key={user.email} className="online-users-item">
+                                        <li
+                                            key={userId ?? fallbackKey}
+                                            className="online-users-item"
+                                            role={canOpenProfile ? "button" : undefined}
+                                            tabIndex={canOpenProfile ? 0 : undefined}
+                                            onClick={() => (canOpenProfile ? onOpenProfile?.(userId as number) : undefined)}
+                                            onKeyDown={(event) => {
+                                                if (!canOpenProfile) return;
+                                                if (event.key === "Enter" || event.key === " ") {
+                                                    event.preventDefault();
+                                                    onOpenProfile?.(userId as number);
+                                                }
+                                            }}
+                                        >
                                             <div className="online-users-meta">
-                                                <div className="online-users-name">{fullName || user.email}</div>
-                                                <div className="online-users-email">{user.email}</div>
+                                                <div className="online-users-name">{fullName || user.email || "User"}</div>
+                                                {user.email ? (
+                                                    <div className="online-users-email">{user.email}</div>
+                                                ) : null}
                                             </div>
                                             <div className="online-users-avatar-wrap" aria-hidden="true">
                                                 {avatarUrl ? (

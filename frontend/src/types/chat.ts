@@ -37,7 +37,6 @@ export interface VoiceChannelParticipants {
 export interface OnlineUser {
     first_name: string;
     last_name: string;
-    email: string;
 }
 
 export interface JoinVoiceResponse {
@@ -68,6 +67,13 @@ export interface RTCSignalEvent {
     candidate?: string;
     sdp_mid?: string;
     sdp_mline_index?: number;
+}
+
+export interface UserProfile {
+    user_id: number;
+    first_name: string;
+    last_name: string;
+    avatar_url?: string;
 }
 
 
