@@ -921,11 +921,31 @@ export default function ChatPage() {
             setSelectedProfile(info);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to load user profile";
+            if (message.toLowerCase().includes("unknown action")) {
+                const messageFallback = Object.values(messagesByChannel)
+                    .flat()
+                    .find((item) => item.author_id === userId);
+                const voiceFallback = Object.values(voiceParticipantsByChannel)
+                    .flat()
+                    .find((item) => item.user_id === userId);
+
+                if (messageFallback || voiceFallback) {
+                    setSelectedProfile({
+                        user_id: userId,
+                        first_name: messageFallback?.author_first_name ?? voiceFallback?.first_name ?? "",
+                        last_name: messageFallback?.author_last_name ?? voiceFallback?.last_name ?? "",
+                        avatar_url: messageFallback?.author_avatar_url ?? voiceFallback?.avatar_url ?? "",
+                    });
+                    setSelectedProfileError("");
+                    return;
+                }
+            }
+
             setSelectedProfileError(message);
         } finally {
             setIsProfileLoading(false);
         }
-    }, [currentUserId, openSelfProfile]);
+    }, [currentUserId, openSelfProfile, messagesByChannel, voiceParticipantsByChannel]);
 
     const isSelfProfile = selectedProfileUserId === null || selectedProfileUserId === currentUserId;
     const profileAvatarUrl = isSelfProfile ? avatarUrl : (selectedProfile?.avatar_url ?? "");
