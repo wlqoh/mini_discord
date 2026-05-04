@@ -32,9 +32,6 @@ export default function MessageInput({
         if (initials) {
             return initials;
         }
-        if (user.email) {
-            return user.email.trim().slice(0, 2).toUpperCase();
-        }
         return "U";
     }
 
@@ -84,7 +81,7 @@ export default function MessageInput({
                                     const avatarUrl = onlineUserAvatarByName[avatarKey] ?? "";
                                     const userId = (user as OnlineUser & { user_id?: number }).user_id;
                                     const canOpenProfile = typeof userId === "number";
-                                    const fallbackKey = fullName || user.email || `user-${index}`;
+                                    const fallbackKey = fullName || `user-${index}`;
                                     return (
                                         <li
                                             key={userId ?? fallbackKey}
@@ -101,10 +98,7 @@ export default function MessageInput({
                                             }}
                                         >
                                             <div className="online-users-meta">
-                                                <div className="online-users-name">{fullName || user.email || "User"}</div>
-                                                {user.email ? (
-                                                    <div className="online-users-email">{user.email}</div>
-                                                ) : null}
+                                                <div className="online-users-name">{fullName || "User"}</div>
                                             </div>
                                             <div className="online-users-avatar-wrap" aria-hidden="true">
                                                 {avatarUrl ? (
