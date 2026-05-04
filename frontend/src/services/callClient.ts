@@ -390,7 +390,15 @@ export class CallClient {
         readyState: event.track.readyState,
         streamIDs: event.streams.map((s) => s.id),
       });
-      event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+      if (event.streams[0]) {
+        event.streams[0].getTracks().forEach((track) => {
+          if (!remoteStream.getTracks().some((existing) => existing.id === track.id)) {
+            remoteStream.addTrack(track);
+          }
+        });
+      } else if (!remoteStream.getTracks().some((existing) => existing.id === event.track.id)) {
+        remoteStream.addTrack(event.track);
+      }
       this.onRemoteStream(user, remoteStream);
     };
 
