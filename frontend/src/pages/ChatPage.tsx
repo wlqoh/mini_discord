@@ -15,6 +15,7 @@ import type {
     MessagesByChannel,
     OnlineUser,
     Server,
+    UserProfile,
     VoiceParticipant,
     VoiceParticipantsByChannel,
 } from "../types/chat.ts";
@@ -79,6 +80,10 @@ export default function ChatPage() {
         label: string;
         stream: MediaStream
     }>>([]);
+    const [selectedProfileUserId, setSelectedProfileUserId] = useState<number | null>(null);
+    const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
+    const [selectedProfileError, setSelectedProfileError] = useState("");
+    const [isProfileLoading, setIsProfileLoading] = useState(false);
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>({});
     const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
@@ -112,6 +117,15 @@ export default function ChatPage() {
     const loadAvatar = useCallback(async () => {
         const url = await getMyAvatarUrl();
         setAvatarUrl(url ?? "");
+    }, []);
+
+    const openSelfProfile = useCallback(() => {
+        setSelectedProfileUserId(null);
+        setSelectedProfile(null);
+        setSelectedProfileError("");
+        setIsProfileLoading(false);
+        setIsAvatarPreviewOpen(false);
+        setIsProfileModalOpen(true);
     }, []);
 
     const refreshOnlineUsers = useCallback(async () => {
@@ -829,7 +843,6 @@ export default function ChatPage() {
     const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
     const shouldHideMessageInput = isInSelectedVoiceChannel;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
-    const userDisplayName = [currentUserProfile?.first_name, currentUserProfile?.last_name].filter(Boolean).join(" ").trim();
     const userInitial =
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
         currentUserProfile?.email?.[0]?.toUpperCase() ??
@@ -883,6 +896,44 @@ export default function ChatPage() {
         return map;
     }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl]);
 
+    const openUserProfile = useCallback(async (userId: number) => {
+        if (currentUserId && userId === currentUserId) {
+            openSelfProfile();
+            return;
+        }
+
+        setSelectedProfileUserId(userId);
+        setSelectedProfile(null);
+        setSelectedProfileError("");
+        setIsProfileLoading(true);
+        setIsAvatarPreviewOpen(false);
+        setIsProfileModalOpen(true);
+
+        const socket = socketRef.current;
+        if (!socket) {
+            setSelectedProfileError("No connection");
+            setIsProfileLoading(false);
+            return;
+        }
+
+        try {
+            const info = await socket.getUserInfo(userId);
+            setSelectedProfile(info);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to load user profile";
+            setSelectedProfileError(message);
+        } finally {
+            setIsProfileLoading(false);
+        }
+    }, [currentUserId, openSelfProfile]);
+
+    const isSelfProfile = selectedProfileUserId === null || selectedProfileUserId === currentUserId;
+    const profileAvatarUrl = isSelfProfile ? avatarUrl : (selectedProfile?.avatar_url ?? "");
+    const profileFirstName = isSelfProfile ? currentUserProfile?.first_name : selectedProfile?.first_name;
+    const profileLastName = isSelfProfile ? currentUserProfile?.last_name : selectedProfile?.last_name;
+    const profileDisplayName = [profileFirstName, profileLastName].filter(Boolean).join(" ").trim();
+    const profileInitial = (profileFirstName?.[0] ?? profileLastName?.[0] ?? "U").toUpperCase();
+
     useEffect(() => {
         const el = chatContentRef.current;
         if (!el) return;
@@ -897,7 +948,8 @@ export default function ChatPage() {
                     onClick={openCreateServerModal}
                     disabled={!isConnected || isCreatingServer}
                     aria-label="Add server"
-                    title="Add server">
+                    title="Add server"
+                >
                     +
                 </button>
                 <button
@@ -923,9 +975,7 @@ export default function ChatPage() {
                         </li>
                     ))}
                 </ul>
-                <div
-                    className="servers-sidebar-footer"
-                >
+                <div className="servers-sidebar-footer">
                     {isChannelsSidebarHidden ? (
                         <button
                             className="channels-add-btn"
@@ -971,7 +1021,8 @@ export default function ChatPage() {
                             disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
                             aria-label="Create channel"
                             title="Create channel"
-                            type="button">
+                            type="button"
+                        >
                             +
                         </button>
                     </div>
@@ -1018,22 +1069,32 @@ export default function ChatPage() {
                                                 }
                                             }}
                                         >
-                                            <div className="voice-member-avatar-wrap">
+                                            <div
+                                                className="voice-member-avatar-wrap"
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openUserProfile(participant.user_id);
+                                                }}
+                                                onKeyDown={(event) => {
+                                                    if (event.key === "Enter") {
+                                                        event.stopPropagation();
+                                                        openUserProfile(participant.user_id);
+                                                    }
+                                                }}
+                                            >
                                                 {participant.avatar_url ? (
                                                     <img
                                                         src={participant.avatar_url}
                                                         alt={getParticipantDisplayName(participant)}
                                                         className="voice-member-avatar"
-                                                        onError={(e) => {
-                                                            e.currentTarget.style.display = "none";
-                                                            const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
-                                                            fallback?.classList.add("show");
-                                                        }}
                                                     />
-                                                ) : null}
-                                                <span className={`voice-member-avatar-fallback ${participant.avatar_url ? "" : "show"}`}>
-                                                    {getParticipantInitials(participant)}
-                                                </span>
+                                                ) : (
+                                                    <span className="voice-member-avatar-fallback">
+                                                        {getParticipantInitials(participant)}
+                                                    </span>
+                                                )}
                                             </div>
                                             <span className="voice-member-name">{getParticipantDisplayName(participant)}</span>
                                             {activeVolumeUserId === participant.user_id && (
@@ -1075,7 +1136,7 @@ export default function ChatPage() {
                                 <button
                                     className="profile-open-btn"
                                     type="button"
-                                    onClick={() => setIsProfileModalOpen(true)}
+                                    onClick={openSelfProfile}
                                     aria-label="Open profile"
                                     title="Profile"
                                 >
@@ -1144,7 +1205,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList messages={activeMessages} currentUserId={currentUserId}/>
+                    <MessageList messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <MessageInput
@@ -1155,6 +1216,7 @@ export default function ChatPage() {
                         onlineUsers={onlineUsers}
                         isOnlineUsersLoading={isOnlineUsersLoading}
                         onlineUserAvatarByName={onlineUserAvatarByName}
+                        onOpenProfile={openUserProfile}
                     />
                 )}
             </section>
@@ -1166,72 +1228,88 @@ export default function ChatPage() {
                         <div className="profile-modal-list">
                             <div className="profile-avatar-block">
                                 <div className="profile-avatar-preview-wrap">
-                                    {avatarUrl ? (
-                                        <button
-                                            type="button"
-                                            className="profile-avatar-preview-btn"
-                                            onClick={openAvatarPreview}
-                                            aria-label="Open avatar preview"
-                                            title="Open avatar"
-                                        >
+                                    {profileAvatarUrl ? (
+                                        isSelfProfile ? (
+                                            <button
+                                                type="button"
+                                                className="profile-avatar-preview-btn"
+                                                onClick={openAvatarPreview}
+                                                aria-label="Open avatar preview"
+                                                title="Open avatar"
+                                            >
+                                                <img
+                                                    src={profileAvatarUrl}
+                                                    alt="Current avatar"
+                                                    className="profile-avatar-preview"
+                                                    onError={() => setAvatarUrl("")}
+                                                />
+                                            </button>
+                                        ) : (
                                             <img
-                                                src={avatarUrl}
-                                                alt="Current avatar"
+                                                src={profileAvatarUrl}
+                                                alt="User avatar"
                                                 className="profile-avatar-preview"
-                                                onError={() => setAvatarUrl("")}
                                             />
-                                        </button>
+                                        )
                                     ) : (
-                                        <div className="profile-avatar-fallback">{userInitial}</div>
+                                        <div className="profile-avatar-fallback">{profileInitial}</div>
                                     )}
                                 </div>
 
-                                <div className="profile-avatar-actions">
-                                    <input
-                                        ref={avatarInputRef}
-                                        type="file"
-                                        accept="image/png,image/jpeg,image/webp"
-                                        onChange={(e) => void handleAvatarChange(e)}
-                                        style={{ display: "none" }}
-                                    />
-                                    <button
-                                        className="modal-btn modal-btn-primary"
-                                        type="button"
-                                        onClick={openAvatarPicker}
-                                        disabled={isAvatarUploading}
-                                    >
-                                        {isAvatarUploading ? "Uploading..." : "Change avatar"}
-                                    </button>
-                                </div>
+                                {isSelfProfile ? (
+                                    <div className="profile-avatar-actions">
+                                        <input
+                                            ref={avatarInputRef}
+                                            type="file"
+                                            accept="image/png,image/jpeg,image/webp"
+                                            onChange={(e) => void handleAvatarChange(e)}
+                                            style={{ display: "none" }}
+                                        />
+                                        <button
+                                            className="modal-btn modal-btn-primary"
+                                            type="button"
+                                            onClick={openAvatarPicker}
+                                            disabled={isAvatarUploading}
+                                        >
+                                            {isAvatarUploading ? "Uploading..." : "Change avatar"}
+                                        </button>
+                                    </div>
+                                ) : null}
 
-                                {avatarError ? <div className="profile-avatar-error">{avatarError}</div> : null}
+                                {isProfileLoading ? <div className="profile-avatar-error">Loading profile...</div> : null}
+                                {selectedProfileError ? <div className="profile-avatar-error">{selectedProfileError}</div> : null}
+                                {isSelfProfile && avatarError ? <div className="profile-avatar-error">{avatarError}</div> : null}
                             </div>
 
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">First name</span>
-                                <span className="profile-modal-value">{currentUserProfile?.first_name || "-"}</span>
+                                <span className="profile-modal-value">{profileFirstName || "-"}</span>
                             </div>
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Last name</span>
-                                <span className="profile-modal-value">{currentUserProfile?.last_name || "-"}</span>
+                                <span className="profile-modal-value">{profileLastName || "-"}</span>
                             </div>
-                            <div className="profile-modal-row">
-                                <span className="profile-modal-label">Email</span>
-                                <span className="profile-modal-value">{currentUserProfile?.email || "-"}</span>
-                            </div>
+                            {isSelfProfile ? (
+                                <div className="profile-modal-row">
+                                    <span className="profile-modal-label">Email</span>
+                                    <span className="profile-modal-value">{currentUserProfile?.email || "-"}</span>
+                                </div>
+                            ) : null}
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Name</span>
-                                <span className="profile-modal-value">{userDisplayName || "-"}</span>
+                                <span className="profile-modal-value">{profileDisplayName || "-"}</span>
                             </div>
                         </div>
                         <div className="modal-actions">
-                            <button
-                                className="modal-btn modal-btn-secondary"
-                                onClick={handleLogout}
-                                type="button"
-                            >
-                                Logout
-                            </button>
+                            {isSelfProfile ? (
+                                <button
+                                    className="modal-btn modal-btn-secondary"
+                                    onClick={handleLogout}
+                                    type="button"
+                                >
+                                    Logout
+                                </button>
+                            ) : null}
                             <button
                                 className="modal-btn modal-btn-primary"
                                 onClick={() => setIsProfileModalOpen(false)}
@@ -1264,7 +1342,6 @@ export default function ChatPage() {
                     </div>
                 </div>
             )}
-
 
             {isCreateServerModalOpen && (
                 <div className="modal-overlay" onClick={() => setIsCreateServerModalOpen(false)}>

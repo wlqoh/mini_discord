@@ -3,6 +3,7 @@ import type { Message } from "../types/chat.ts";
 type Props = {
     messages: Message[];
     currentUserId: number | null;
+    onOpenProfile?: (userId: number) => void;
 };
 
 function getAuthorLabel(msg: Message): string {
@@ -55,7 +56,7 @@ function formatMessageTimestamp(isoDate: string): string {
     return `${dayAndMonth}, ${time}`;
 }
 
-export default function MessageList({ messages, currentUserId }: Props) {
+export default function MessageList({ messages, currentUserId, onOpenProfile }: Props) {
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
     return (
@@ -65,7 +66,12 @@ export default function MessageList({ messages, currentUserId }: Props) {
 
                 return (
                     <div key={msg.id} className={`message-row ${isOwn ? "own" : "other"}`}>
-                        <div className="message-avatar-wrap" aria-hidden="true">
+                        <button
+                            className="message-avatar-wrap"
+                            type="button"
+                            aria-label={`Open profile for ${getAuthorLabel(msg)}`}
+                            onClick={() => onOpenProfile?.(msg.author_id)}
+                        >
                             {msg.author_avatar_url ? (
                                 <img
                                     className="message-avatar"
@@ -81,11 +87,17 @@ export default function MessageList({ messages, currentUserId }: Props) {
                             <div className={`message-avatar-fallback ${msg.author_avatar_url ? "" : "show"}`}>
                                 {getAuthorInitials(msg)}
                             </div>
-                        </div>
+                        </button>
 
                         <div className={`message-item ${isOwn ? "own" : "other"}`}>
                             <div className="message-meta">
-                                <div className="message-author">{getAuthorLabel(msg)}</div>
+                                <button
+                                    className="message-author"
+                                    type="button"
+                                    onClick={() => onOpenProfile?.(msg.author_id)}
+                                >
+                                    {getAuthorLabel(msg)}
+                                </button>
                             </div>
                             <div className="message-content">{msg.content}</div>
                             <div className="message-timestamp">{formatMessageTimestamp(msg.created_at)}</div>

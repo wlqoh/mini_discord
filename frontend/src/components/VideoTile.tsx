@@ -27,7 +27,7 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     if (document.fullscreenElement) {
       void document.exitFullscreen();
     } else {
-    void el.requestFullscreen();
+      void el.requestFullscreen();
     }
   };
 
@@ -38,7 +38,6 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     }
     el.srcObject = stream;
     if (isDebugEnabled) {
-      // eslint-disable-next-line no-console
       console.log("[webrtc][video-tile] srcObject set", {
         label,
         streamId: stream?.id ?? null,
@@ -49,7 +48,6 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     if (playPromise) {
       void playPromise.catch((err) => {
         if (isDebugEnabled) {
-          // eslint-disable-next-line no-console
           console.log("[webrtc][video-tile] play rejected", { label, err });
         }
       });
@@ -74,15 +72,12 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     }
 
     const onLoadedMetadata = () => {
-      // eslint-disable-next-line no-console
       console.log("[webrtc][video-tile] loadedmetadata", { label, width: el.videoWidth, height: el.videoHeight });
     };
     const onPlaying = () => {
-      // eslint-disable-next-line no-console
       console.log("[webrtc][video-tile] playing", { label, currentTime: el.currentTime });
     };
     const onError = () => {
-      // eslint-disable-next-line no-console
       console.log("[webrtc][video-tile] error", { label, error: el.error?.message ?? el.error?.code ?? "unknown" });
     };
 
@@ -102,10 +97,11 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       <div className="video-label">{label}</div>
       <button
-          className="video-fullscreen-btn"
-          type="button"
-          onClick={toggleFullScreen}
-          aria-label="Fullscreen">
+        className="video-fullscreen-btn"
+        type="button"
+        onClick={toggleFullScreen}
+        aria-label="Fullscreen"
+      >
         <Maximize2 size={18} />
       </button>
     </div>

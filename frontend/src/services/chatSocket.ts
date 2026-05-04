@@ -3,7 +3,7 @@ import type {
   Message,
   OnlineUser,
   RTCSignalEvent,
-  RTCSignalPayload,
+  RTCSignalPayload, UserProfile,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -520,7 +520,7 @@ export class ChatSocket {
 
   async getUsersOnline(serverId: number): Promise<OnlineUser[]> {
     const data = await this.sendCommand("get_users_online", { server_id: serverId });
-    const payload = data as { users?: Array<{ first_name?: string; last_name?: string; email?: string }> };
+    const payload = data as { users?: Array<{ first_name?: string; last_name?: string }> };
 
     if (!Array.isArray(payload?.users)) {
       return [];
@@ -530,13 +530,11 @@ export class ChatSocket {
       .filter(
         (user) =>
           typeof user.first_name === "string" &&
-          typeof user.last_name === "string" &&
-          typeof user.email === "string",
+          typeof user.last_name === "string",
       )
       .map((user) => ({
         first_name: user.first_name as string,
         last_name: user.last_name as string,
-        email: user.email as string,
       }));
   }
 
@@ -590,6 +588,17 @@ export class ChatSocket {
     return payload.servers
       .filter((server) => typeof server.id === "number" && typeof server.name === "string")
       .map((server) => ({ id: server.id as number, name: server.name as string }));
+  }
+
+  async getUserInfo(userId: number): Promise<UserProfile> {
+    const data = await this.sendCommand("get_user_info", { user_id: userId });
+    const payload = data as { user_id?: number; first_name?: string; last_name?: string; avatar_url?: string };
+    return {
+      user_id: typeof payload.user_id === "number" ? payload.user_id : userId,
+      first_name: typeof payload.first_name === "string" ? payload.first_name : "",
+      last_name: typeof payload.last_name === "string" ? payload.last_name : "",
+      avatar_url: typeof payload.avatar_url === "string" ? payload.avatar_url : "",
+    };
   }
 }
 

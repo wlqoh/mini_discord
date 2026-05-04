@@ -140,6 +140,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		relayRTCSignal(h, req, ctx)
 	case types.WsActionSearchServers:
 		searchServers(h, req, ctx)
+	case types.WsActionGetUserInfo:
+		h.getUserInfo(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -889,5 +891,38 @@ func searchServers(h *Hub, req wsCommandRequest, ctx context.Context) {
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,
 		Data:  types.WsSearchServersResponse{Servers: servers},
+	})
+}
+
+func (h *Hub) getUserInfo(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsGetUserInfoRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid get_users_online payload")
+		return
+	}
+	if payload.UserID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	user, err := h.storage.GetUserByID(ctx, payload.UserID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve user info")
+		return
+	}
+
+	if user == nil {
+		h.pushError(req.client, "user not found")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data: types.WsGetUserInfoResponse{
+			UserID:    user.ID,
+			FirstName: user.FirstName,
+			LastName:  user.LastName,
+			AvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
+		},
 	})
 }

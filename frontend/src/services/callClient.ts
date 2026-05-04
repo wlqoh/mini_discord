@@ -36,7 +36,6 @@ function debugLog(...args: unknown[]): void {
   if (!isWebRTCDebugEnabled()) {
     return;
   }
-  // eslint-disable-next-line no-console
   console.log("[webrtc]", ...args);
 }
 
