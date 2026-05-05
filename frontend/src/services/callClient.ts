@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   JoinVoiceResponse,
   RTCSignalEvent,
   RTCSignalPayload,
@@ -16,6 +16,7 @@ type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => voi
 type RemoteLeftListener = (userId: number) => void;
 type LocalStreamListener = (stream: MediaStream | null) => void;
 type ErrorListener = (message: string) => void;
+type CameraFacingMode = "user" | "environment";
 
 type PeerState = {
   pc: RTCPeerConnection;
@@ -135,6 +136,9 @@ export class CallClient {
   private iceServers = buildIceServers();
 
   private turnCredentialsPromise: Promise<void> | null = null;
+  private preferredFacingMode: CameraFacingMode = "user";
+  private switchCameraPromise: Promise<void> | null = null;
+  private screenSharePromise: Promise<boolean> | null = null;
 
   private screenStream: MediaStream | null = null;
 
@@ -216,7 +220,7 @@ export class CallClient {
   }
 
   async startScreenShare(): Promise<void> {
-    if (this.screenStream) {
+    if (this.isScreenShareActive()) {
       return;
     }
 
@@ -255,11 +259,16 @@ export class CallClient {
   };
 
   async stopScreenShare(): Promise<void> {
-    if (!this.screenStream) {
+    if (!this.isScreenShareActive()) {
       return;
     }
 
-    const screenTrack = this.screenStream.getVideoTracks()[0];
+    const activeScreenStream = this.screenStream;
+    if (!activeScreenStream) {
+      return;
+    }
+
+    const screenTrack = activeScreenStream.getVideoTracks()[0];
     screenTrack.stop();
     this.screenStream = null;
 
@@ -330,7 +339,12 @@ export class CallClient {
         autoGainControl: true,
       };
       // Prefer full voice+video for channels, fallback to audio-only.
-      const stream = await mediaDevices.getUserMedia({ audio: audioConstraints, video: true });
+      const stream = await mediaDevices.getUserMedia({
+        audio: audioConstraints,
+        video: {
+          facingMode: { ideal: this.preferredFacingMode },
+        },
+      });
       await this.enforceAudioProcessing(stream);
       return await this.applyRnnoiseProcessing(stream);
     } catch (videoErr) {
@@ -384,10 +398,125 @@ export class CallClient {
     });
   }
 
+  isScreenShareActive(): boolean {
+    return Boolean(this.screenStream && this.screenStream.getVideoTracks()[0]?.readyState !== "ended");
+  }
+
+  async toggleScreenShare(): Promise<boolean> {
+    if (!this.localStream) {
+      throw new Error("Join voice channel before sharing screen");
+    }
+
+    if (this.screenSharePromise) {
+      return this.screenSharePromise;
+    }
+
+    this.screenSharePromise = (async () => {
+      if (this.isScreenShareActive()) {
+        await this.stopScreenShare();
+        return false;
+      }
+      await this.startScreenShare();
+      return true;
+    })().finally(() => {
+      this.screenSharePromise = null;
+    });
+
+    return this.screenSharePromise;
+  }
+
+  async toggleCameraFacingMode(): Promise<void> {
+    if (!this.localStream) {
+      throw new Error("Join voice channel before switching camera");
+    }
+    if (this.isScreenShareActive()) {
+      throw new Error("Stop screen sharing before switching camera");
+    }
+    if (this.switchCameraPromise) {
+      return this.switchCameraPromise;
+    }
+
+    this.switchCameraPromise = this.switchCameraFacingMode().finally(() => {
+      this.switchCameraPromise = null;
+    });
+
+    return this.switchCameraPromise;
+  }
+
+  private async switchCameraFacingMode(): Promise<void> {
+    const currentLocalStream = this.localStream;
+    if (!currentLocalStream) {
+      throw new Error("Join voice channel before switching camera");
+    }
+
+    const currentVideoTrack = currentLocalStream.getVideoTracks()[0];
+    if (!currentVideoTrack) {
+      throw new Error("No camera track available in this call");
+    }
+
+    const nextFacingMode: CameraFacingMode = this.preferredFacingMode === "user" ? "environment" : "user";
+    const replacementTrack = await this.acquireVideoTrack(nextFacingMode);
+    replacementTrack.enabled = currentVideoTrack.enabled;
+
+    const nextLocalStream = new MediaStream([...currentLocalStream.getAudioTracks(), replacementTrack]);
+
+    try {
+      await this.updateVideoTrackForPeers(replacementTrack, nextLocalStream);
+    } catch {
+      replacementTrack.stop();
+      throw new Error("Failed to switch camera");
+    }
+
+    this.localStream = nextLocalStream;
+    this.preferredFacingMode = nextFacingMode;
+    this.onLocalStream(nextLocalStream);
+    currentVideoTrack.stop();
+  }
+
+  private async acquireVideoTrack(facingMode: CameraFacingMode): Promise<MediaStreamTrack> {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getUserMedia) {
+      throw new Error("This browser does not support camera switching");
+    }
+
+    const attempts: MediaStreamConstraints[] = [
+      { audio: false, video: { facingMode: { exact: facingMode } } },
+      { audio: false, video: { facingMode: { ideal: facingMode } } },
+      { audio: false, video: true },
+    ];
+
+    for (const constraints of attempts) {
+      try {
+        const stream = await mediaDevices.getUserMedia(constraints);
+        const track = stream.getVideoTracks()[0];
+        stream.getAudioTracks().forEach((audioTrack) => audioTrack.stop());
+        if (track) {
+          stream.getVideoTracks().forEach((videoTrack) => {
+            if (videoTrack.id !== track.id) {
+              videoTrack.stop();
+            }
+          });
+          return track;
+        }
+        stream.getTracks().forEach((streamTrack) => streamTrack.stop());
+      } catch {
+        // Try the next constraints profile.
+      }
+    }
+
+    throw new Error("Failed to access another camera on this device");
+  }
+
   private stopLocalTracks(): void {
     this.localStream?.getTracks().forEach((track) => track.stop());
     this.rawLocalStream?.getTracks().forEach((track) => track.stop());
+    this.screenStream?.getTracks().forEach((track) => track.stop());
+    this.cameraTrack?.stop();
     this.rawLocalStream = null;
+    this.screenStream = null;
+    this.cameraTrack = null;
+    this.switchCameraPromise = null;
+    this.screenSharePromise = null;
     this.disposeRnnoiseProcessing();
     this.localStream = null;
     this.onLocalStream(null);
@@ -782,4 +911,5 @@ export class CallClient {
     }
   }
 }
+
 
