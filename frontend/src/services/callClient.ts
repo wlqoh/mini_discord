@@ -12,6 +12,7 @@ type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => voi
 type RemoteLeftListener = (userId: number) => void;
 type LocalStreamListener = (stream: MediaStream | null) => void;
 type ErrorListener = (message: string) => void;
+type CameraFacingMode = "user" | "environment";
 
 type PeerState = {
   pc: RTCPeerConnection;
@@ -66,6 +67,18 @@ function parseUrls(raw: string | undefined): string[] {
 function isTruthy(raw: string | undefined): boolean {
   const normalized = (raw ?? "").trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+const SCREEN_SHARE_TARGET_WIDTH = 2560;
+const SCREEN_SHARE_TARGET_HEIGHT = 1440;
+const SCREEN_SHARE_TARGET_FPS = 60;
+
+function buildScreenShareVideoConstraints(): MediaTrackConstraints {
+  return {
+    width: { ideal: SCREEN_SHARE_TARGET_WIDTH },
+    height: { ideal: SCREEN_SHARE_TARGET_HEIGHT },
+    frameRate: { ideal: SCREEN_SHARE_TARGET_FPS },
+  };
 }
 
 function buildIceServers(turnCredentials?: TurnCredentialsResponse): RTCIceServer[] {
@@ -129,6 +142,11 @@ export class CallClient {
   private iceServers = buildIceServers();
 
   private turnCredentialsPromise: Promise<void> | null = null;
+  private preferredFacingMode: CameraFacingMode = "user";
+  private switchCameraPromise: Promise<void> | null = null;
+  private screenSharePromise: Promise<boolean> | null = null;
+  private screenShareTrack: MediaStreamTrack | null = null;
+  private cameraTrackBeforeScreenShare: MediaStreamTrack | null = null;
 
   private readonly onRemoteStream: RemoteStreamListener;
 
@@ -250,7 +268,12 @@ export class CallClient {
 
     try {
       // Prefer full voice+video for channels, fallback to audio-only.
-      return await mediaDevices.getUserMedia({ audio: true, video: true });
+      return await mediaDevices.getUserMedia({
+        audio: true,
+        video: {
+          facingMode: { ideal: this.preferredFacingMode },
+        },
+      });
     } catch (videoErr) {
       try {
         return await mediaDevices.getUserMedia({ audio: true, video: false });
@@ -293,8 +316,261 @@ export class CallClient {
     });
   }
 
+  isScreenShareActive(): boolean {
+    return Boolean(this.screenShareTrack && this.screenShareTrack.readyState !== "ended");
+  }
+
+  async toggleCameraFacingMode(): Promise<void> {
+    if (!this.localStream) {
+      throw new Error("Join voice channel before switching camera");
+    }
+    if (this.isScreenShareActive()) {
+      throw new Error("Stop screen sharing before switching camera");
+    }
+
+    if (this.switchCameraPromise) {
+      return this.switchCameraPromise;
+    }
+
+    this.switchCameraPromise = this.switchCameraFacingMode().finally(() => {
+      this.switchCameraPromise = null;
+    });
+
+    return this.switchCameraPromise;
+  }
+
+  async toggleScreenShare(): Promise<boolean> {
+    if (!this.localStream) {
+      throw new Error("Join voice channel before sharing screen");
+    }
+
+    if (this.screenSharePromise) {
+      return this.screenSharePromise;
+    }
+
+    this.screenSharePromise = (this.isScreenShareActive() ? this.stopScreenShare() : this.startScreenShare()).finally(() => {
+      this.screenSharePromise = null;
+    });
+
+    return this.screenSharePromise;
+  }
+
+  private async startScreenShare(): Promise<boolean> {
+    const mediaDevices = navigator.mediaDevices as MediaDevices & {
+      getDisplayMedia?: (constraints?: MediaStreamConstraints) => Promise<MediaStream>;
+    };
+    if (!mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen sharing is not supported in this browser");
+    }
+
+    const currentLocalStream = this.localStream;
+    if (!currentLocalStream) {
+      throw new Error("Join voice channel before sharing screen");
+    }
+
+    const videoConstraints = buildScreenShareVideoConstraints();
+    const displayStream = await mediaDevices.getDisplayMedia({
+      audio: false,
+      video: videoConstraints,
+    });
+    const displayTrack = displayStream.getVideoTracks()[0];
+    if (!displayTrack) {
+      displayStream.getTracks().forEach((track) => track.stop());
+      throw new Error("Failed to start screen sharing");
+    }
+
+    displayTrack.contentHint = "detail";
+    try {
+      await displayTrack.applyConstraints(videoConstraints);
+    } catch {
+      debugLog("screen-share:constraints-not-fully-applied", videoConstraints);
+    }
+    debugLog("screen-share:active-settings", displayTrack.getSettings());
+
+    const currentVideoTrack = currentLocalStream.getVideoTracks()[0] ?? null;
+    this.cameraTrackBeforeScreenShare = currentVideoTrack;
+    displayTrack.enabled = currentVideoTrack?.enabled ?? true;
+    displayTrack.onended = () => {
+      if (this.screenShareTrack?.id === displayTrack.id) {
+        void this.stopScreenShareOnEnded();
+      }
+    };
+
+    try {
+      await this.replaceVideoTrackForPeers(displayTrack);
+    } catch {
+      displayStream.getTracks().forEach((track) => track.stop());
+      this.cameraTrackBeforeScreenShare = null;
+      throw new Error("Failed to start screen sharing");
+    }
+
+    this.localStream = new MediaStream([...currentLocalStream.getAudioTracks(), displayTrack]);
+    this.screenShareTrack = displayTrack;
+    this.onLocalStream(this.localStream);
+    return true;
+  }
+
+  private async stopScreenShare(): Promise<boolean> {
+    return this.stopScreenShareInternal(false);
+  }
+
+  private async stopScreenShareOnEnded(): Promise<void> {
+    try {
+      await this.stopScreenShareInternal(true);
+    } catch {
+      // Best-effort restore on native picker stop.
+    }
+  }
+
+  private async stopScreenShareInternal(fromEndedEvent: boolean): Promise<boolean> {
+    const activeScreenTrack = this.screenShareTrack;
+    if (!activeScreenTrack) {
+      return false;
+    }
+
+    const currentLocalStream = this.localStream;
+    if (!currentLocalStream) {
+      this.screenShareTrack = null;
+      this.cameraTrackBeforeScreenShare = null;
+      return false;
+    }
+
+    let cameraTrack = this.cameraTrackBeforeScreenShare;
+    if (!cameraTrack || cameraTrack.readyState === "ended") {
+      try {
+        cameraTrack = await this.acquireVideoTrack(this.preferredFacingMode);
+      } catch {
+        cameraTrack = null;
+      }
+    }
+
+    if (cameraTrack) {
+      cameraTrack.enabled = activeScreenTrack.enabled;
+    }
+
+    try {
+      await this.replaceVideoTrackForPeers(cameraTrack ?? null);
+    } catch {
+      if (!fromEndedEvent) {
+        throw new Error("Failed to stop screen sharing");
+      }
+
+      // Fallback: screen-share track is already ended, keep call alive in audio-only mode.
+      this.localStream = new MediaStream([...currentLocalStream.getAudioTracks()]);
+      this.onLocalStream(this.localStream);
+      this.screenShareTrack = null;
+      this.cameraTrackBeforeScreenShare = null;
+      return false;
+    }
+
+    this.localStream = cameraTrack
+      ? new MediaStream([...currentLocalStream.getAudioTracks(), cameraTrack])
+      : new MediaStream([...currentLocalStream.getAudioTracks()]);
+    this.onLocalStream(this.localStream);
+
+    if (activeScreenTrack.readyState !== "ended") {
+      activeScreenTrack.stop();
+    }
+    this.screenShareTrack = null;
+    this.cameraTrackBeforeScreenShare = null;
+    return false;
+  }
+
+  private async replaceVideoTrackForPeers(track: MediaStreamTrack | null): Promise<void> {
+    for (const peerState of this.peers.values()) {
+      const directSender = peerState.pc.getSenders().find((sender) => sender.track?.kind === "video");
+      const fallbackSender =
+        peerState.pc
+          .getTransceivers()
+          .find((transceiver) => transceiver.receiver?.track?.kind === "video")?.sender ?? null;
+      const sender = directSender ?? fallbackSender;
+      if (!sender) {
+        continue;
+      }
+      await sender.replaceTrack(track);
+    }
+  }
+
+  private async switchCameraFacingMode(): Promise<void> {
+    const currentLocalStream = this.localStream;
+    if (!currentLocalStream) {
+      throw new Error("Join voice channel before switching camera");
+    }
+
+    const currentVideoTrack = currentLocalStream.getVideoTracks()[0];
+    if (!currentVideoTrack) {
+      throw new Error("No camera track available in this call");
+    }
+
+    const nextFacingMode: CameraFacingMode = this.preferredFacingMode === "user" ? "environment" : "user";
+    const replacementTrack = await this.acquireVideoTrack(nextFacingMode);
+    replacementTrack.enabled = currentVideoTrack.enabled;
+
+    const nextLocalStream = new MediaStream([
+      ...currentLocalStream.getAudioTracks(),
+      replacementTrack,
+    ]);
+
+    try {
+      await this.replaceVideoTrackForPeers(replacementTrack);
+    } catch {
+      replacementTrack.stop();
+      throw new Error("Failed to switch camera");
+    }
+
+    this.localStream = nextLocalStream;
+    this.preferredFacingMode = nextFacingMode;
+    this.onLocalStream(nextLocalStream);
+    currentVideoTrack.stop();
+  }
+
+  private async acquireVideoTrack(facingMode: CameraFacingMode): Promise<MediaStreamTrack> {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getUserMedia) {
+      throw new Error("This browser does not support camera switching");
+    }
+
+    const attempts: MediaStreamConstraints[] = [
+      { audio: false, video: { facingMode: { exact: facingMode } } },
+      { audio: false, video: { facingMode: { ideal: facingMode } } },
+      { audio: false, video: true },
+    ];
+
+    for (const constraints of attempts) {
+      try {
+        const stream = await mediaDevices.getUserMedia(constraints);
+        const track = stream.getVideoTracks()[0];
+        stream.getAudioTracks().forEach((audioTrack) => audioTrack.stop());
+        if (track) {
+          stream.getVideoTracks().forEach((videoTrack) => {
+            if (videoTrack.id !== track.id) {
+              videoTrack.stop();
+            }
+          });
+          return track;
+        }
+        stream.getTracks().forEach((streamTrack) => streamTrack.stop());
+      } catch {
+        // Try the next constraints profile.
+      }
+    }
+
+    throw new Error("Failed to access another camera on this device");
+  }
+
   private stopLocalTracks(): void {
+    const activeTrackIDs = new Set(this.localStream?.getTracks().map((track) => track.id) ?? []);
     this.localStream?.getTracks().forEach((track) => track.stop());
+    if (this.cameraTrackBeforeScreenShare && !activeTrackIDs.has(this.cameraTrackBeforeScreenShare.id)) {
+      this.cameraTrackBeforeScreenShare.stop();
+    }
+    if (this.screenShareTrack && !activeTrackIDs.has(this.screenShareTrack.id)) {
+      this.screenShareTrack.stop();
+    }
+    this.screenSharePromise = null;
+    this.switchCameraPromise = null;
+    this.cameraTrackBeforeScreenShare = null;
+    this.screenShareTrack = null;
     this.localStream = null;
     this.onLocalStream(null);
   }
