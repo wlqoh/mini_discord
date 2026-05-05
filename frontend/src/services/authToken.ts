@@ -29,6 +29,32 @@ function normalizeToken(raw: string): string {
   return normalized;
 }
 
+function decodeJwtPayloadObject(token: string): Record<string, unknown> | null {
+  if (!isJwtLike(token)) {
+    return null;
+  }
+
+  const payload = token.split(".")[1];
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const decoded = window.atob(padded);
+    const parsed = JSON.parse(decoded);
+
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export function clearAuthStorage(): void {
   localStorage.removeItem("token");
   localStorage.removeItem("refresh_token");
@@ -45,6 +71,16 @@ export function getValidAccessToken(): string | null {
   if (!normalized || !isJwtLike(normalized)) {
     clearAuthStorage();
     return null;
+  }
+
+  const payload = decodeJwtPayloadObject(normalized);
+  const exp = typeof payload?.exp === "number" ? payload.exp : null;
+  if (exp !== null) {
+    const now = Math.floor(Date.now() / 1000);
+    if (exp <= now) {
+      clearAuthStorage();
+      return null;
+    }
   }
 
   if (normalized !== token) {
@@ -82,36 +118,22 @@ function parseStoredProfile(raw: string | null): CurrentUserProfile | null {
 }
 
 function decodeJwtPayload(token: string): CurrentUserProfile | null {
-  if (!isJwtLike(token)) {
+  const parsed = decodeJwtPayloadObject(token) as CurrentUserProfile | null;
+  if (!parsed) {
     return null;
   }
 
-  const segments = token.split(".");
-  const payload = segments[1];
-  if (!payload) {
+  const profile: CurrentUserProfile = {
+    first_name: typeof parsed.first_name === "string" ? parsed.first_name : undefined,
+    last_name: typeof parsed.last_name === "string" ? parsed.last_name : undefined,
+    email: typeof parsed.email === "string" ? parsed.email : undefined,
+  };
+
+  if (!profile.first_name && !profile.last_name && !profile.email) {
     return null;
   }
 
-  try {
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const decoded = window.atob(padded);
-    const parsed = JSON.parse(decoded) as CurrentUserProfile;
-
-    const profile: CurrentUserProfile = {
-      first_name: typeof parsed.first_name === "string" ? parsed.first_name : undefined,
-      last_name: typeof parsed.last_name === "string" ? parsed.last_name : undefined,
-      email: typeof parsed.email === "string" ? parsed.email : undefined,
-    };
-
-    if (!profile.first_name && !profile.last_name && !profile.email) {
-      return null;
-    }
-
-    return profile;
-  } catch {
-    return null;
-  }
+  return profile;
 }
 
 export function getCurrentUserProfile(): CurrentUserProfile | null {
@@ -135,30 +157,24 @@ export function getCurrentUserProfile(): CurrentUserProfile | null {
 
 export function getCurrentUserId(): number | null {
   const token = getValidAccessToken();
-  if (!token || !isJwtLike(token)) {
+  if (!token) {
     return null;
   }
 
-  try {
-    const payload = token.split(".")[1];
-    if (!payload) return null;
-
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const decoded = window.atob(padded);
-    const parsed = JSON.parse(decoded) as { user_id?: unknown };
-    if (typeof parsed.user_id === "number") {
-      return parsed.user_id;
-    }
-
-    if (typeof parsed.user_id === "string") {
-      const asNumber = Number(parsed.user_id);
-      return Number.isInteger(asNumber) && asNumber > 0 ? asNumber : null;
-    }
-
-    return null;
-  } catch {
+  const parsed = decodeJwtPayloadObject(token) as { user_id?: unknown } | null;
+  if (!parsed) {
     return null;
   }
+
+  if (typeof parsed.user_id === "number") {
+    return parsed.user_id;
+  }
+
+  if (typeof parsed.user_id === "string") {
+    const asNumber = Number(parsed.user_id);
+    return Number.isInteger(asNumber) && asNumber > 0 ? asNumber : null;
+  }
+
+  return null;
 }
 

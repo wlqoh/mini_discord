@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -88,10 +88,23 @@ export default function ChatPage() {
     const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
+    const [isScreenSharing, setIsScreenSharing] = useState(false);
+    const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
     const [isDeafened, setIsDeafened] = useState(false);
     const micBeforeDeafenRef = useRef(true);
     const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
     const currentUserId: number | null = getCurrentUserId();
+    const isMobileDevice = useMemo(() => {
+        if (typeof navigator === "undefined" || typeof window === "undefined") {
+            return false;
+        }
+
+        const ua = navigator.userAgent || "";
+        const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+        const isTouchViewport = navigator.maxTouchPoints > 1 && window.matchMedia("(max-width: 1024px)").matches;
+        return isMobileUA || isTouchViewport;
+    }, []);
     const [joinQuery, setJoinQuery] = useState("");
     const [joinResults, setJoinResults] = useState<Array<{ id: number; name: string }>>([]);
     const [avatarError, setAvatarError] = useState("");
@@ -254,8 +267,14 @@ export default function ChatPage() {
                 },
                 (stream) => {
                     setLocalStream(stream);
+                    const hasVideoTrack = Boolean(stream?.getVideoTracks()[0]);
+                    const isVideoEnabled = stream?.getVideoTracks()[0]?.enabled ?? false;
+                    setIsCameraEnabled(hasVideoTrack && isVideoEnabled);
+                    setIsScreenSharing(callClientRef.current?.isScreenShareActive() ?? false);
                     if (!stream) {
                         setRemoteStreams([]);
+                        setIsSwitchingCamera(false);
+                        setIsTogglingScreenShare(false);
                     }
                 },
                 (message) => setError(message),
@@ -348,7 +367,11 @@ export default function ChatPage() {
                 await syncServersAndChannels(persistedSelectedServer > 0 ? persistedSelectedServer : undefined);
             } catch (err) {
                 const message = err instanceof Error ? err.message : "Failed to connect to chat";
-                if (message.toLowerCase().includes("re-entry required") || message.toLowerCase().includes("permission denied")) {
+                if (
+                    message.toLowerCase().includes("re-entry required") ||
+                    message.toLowerCase().includes("re-login required") ||
+                    message.toLowerCase().includes("permission denied")
+                ) {
                     handleAuthFailure("Session expired, please log in again");
                     return;
                 }
@@ -655,6 +678,9 @@ export default function ChatPage() {
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
+            setIsSwitchingCamera(false);
+            setIsScreenSharing(false);
+            setIsTogglingScreenShare(false);
             setError("");
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to join voice channel";
@@ -671,6 +697,9 @@ export default function ChatPage() {
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
+            setIsSwitchingCamera(false);
+            setIsScreenSharing(false);
+            setIsTogglingScreenShare(false);
         }
     }
 
@@ -803,9 +832,51 @@ export default function ChatPage() {
     }
 
     function toggleCamera(): void {
+        const videoTrack = localStream?.getVideoTracks()[0];
+        if (!videoTrack) {
+            setIsCameraEnabled(false);
+            setError("Camera is unavailable on this device");
+            return;
+        }
+
         const next = !isCameraEnabled;
         setIsCameraEnabled(next);
         callClientRef.current?.setCameraEnabled(next);
+    }
+
+    async function switchCameraFacingMode(): Promise<void> {
+        if (!callClientRef.current || isSwitchingCamera) {
+            return;
+        }
+
+        try {
+            setIsSwitchingCamera(true);
+            setError("");
+            await callClientRef.current.toggleCameraFacingMode();
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to switch camera";
+            setError(message);
+        } finally {
+            setIsSwitchingCamera(false);
+        }
+    }
+
+    async function toggleScreenShare(): Promise<void> {
+        if (!callClientRef.current || isTogglingScreenShare || isSwitchingCamera) {
+            return;
+        }
+
+        try {
+            setIsTogglingScreenShare(true);
+            setError("");
+            const nextState = await callClientRef.current.toggleScreenShare();
+            setIsScreenSharing(nextState);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to toggle screen sharing";
+            setError(message);
+        } finally {
+            setIsTogglingScreenShare(false);
+        }
     }
 
     function toggleDeafen(): void {
@@ -1197,7 +1268,28 @@ export default function ChatPage() {
                                             {isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
                                                 <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
-                                        <ShareScreen onClick={shareScreen} isActive={isScreenSharing} />
+                                        {isMobileDevice ? (
+                                            <button
+                                                className="micam-btn"
+                                                onClick={() => void switchCameraFacingMode()}
+                                                disabled={isSwitchingCamera || !localStream}
+                                                title="Switch camera"
+                                                aria-label="Switch camera"
+                                            >
+                                                <RefreshCw size={18} aria-hidden="true"/>
+                                            </button>
+                                        ) : (
+                                            <button
+                                                className="micam-btn"
+                                                onClick={() => void toggleScreenShare()}
+                                                disabled={!localStream || isTogglingScreenShare || isSwitchingCamera}
+                                                title={isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                                                aria-label={isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                                            >
+                                                {isScreenSharing ? <MonitorOff size={18} aria-hidden="true"/> :
+                                                    <Monitor size={18} aria-hidden="true"/>}
+                                            </button>
+                                        )}
                                         <button className="micam-btn" onClick={toggleDeafen}>
                                             {isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}
