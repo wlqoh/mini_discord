@@ -5,6 +5,10 @@ import type {
   VoiceParticipant,
   VoiceUserEvent,
 } from "../types/chat";
+import { RnnoiseWorkletNode, loadRnnoise } from "@sapphi-red/web-noise-suppressor";
+import rnnoiseWorkletPath from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url";
+import rnnoiseWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
+import rnnoiseSimdWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
 import { ChatSocket } from "./chatSocket";
 import { getTurnCredentials, type TurnCredentialsResponse } from "./turnApi";
 
@@ -137,6 +141,8 @@ export class CallClient {
 
   private localStream: MediaStream | null = null;
 
+  private rawLocalStream: MediaStream | null = null;
+
   private currentChannelID = 0;
 
   private iceServers = buildIceServers();
@@ -148,6 +154,10 @@ export class CallClient {
   private screenShareTrack: MediaStreamTrack | null = null;
   private cameraTrackBeforeScreenShare: MediaStreamTrack | null = null;
 
+  private screenStream: MediaStream | null = null;
+
+  private cameraTrack: MediaStreamTrack | null = null;
+
   private readonly onRemoteStream: RemoteStreamListener;
 
   private readonly onRemoteLeft: RemoteLeftListener;
@@ -155,6 +165,16 @@ export class CallClient {
   private readonly onLocalStream: LocalStreamListener;
 
   private readonly onError: ErrorListener;
+
+  private readonly renegotiateRetryTimers = new Map<number, number>();
+
+  private rnnoiseAudioContext: AudioContext | null = null;
+
+  private rnnoiseSource: MediaStreamAudioSourceNode | null = null;
+
+  private rnnoiseNode: RnnoiseWorkletNode | null = null;
+
+  private static rnnoiseBinaryPromise: Promise<ArrayBuffer> | null = null;
 
   constructor(
     socket: ChatSocket,
@@ -213,6 +233,61 @@ export class CallClient {
     });
   }
 
+  async startScreenShare(): Promise<void> {
+    if (this.screenStream) {
+      return;
+    }
+
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getDisplayMedia) {
+      throw new Error("Screen sharing is not supported in this browser");
+    }
+
+    const displayStream = await mediaDevices.getDisplayMedia({
+      video: {
+        width: { ideal: 2560 },
+        height: { ideal: 1440 },
+        frameRate: { ideal: 60 },
+      },
+      audio: false,
+    });
+    const displayTrack = displayStream.getVideoTracks()[0];
+    if (!displayTrack) {
+      throw new Error("No display video track found");
+    }
+
+    this.screenStream = displayStream;
+
+    this.cameraTrack = this.localStream?.getVideoTracks()[0] ?? null;
+
+    const previewStream = new MediaStream();
+    this.localStream?.getAudioTracks().forEach((track) => previewStream.addTrack(track));
+    previewStream.addTrack(displayTrack);
+    this.onLocalStream(previewStream);
+
+    await this.updateVideoTrackForPeers(displayTrack, displayStream);
+
+    displayTrack.onended = () => {
+      void this.stopScreenShare();
+    };
+  };
+
+  async stopScreenShare(): Promise<void> {
+    if (!this.screenStream) {
+      return;
+    }
+
+    const screenTrack = this.screenStream.getVideoTracks()[0];
+    screenTrack.stop();
+    this.screenStream = null;
+
+    const fallbackTrack = this.cameraTrack ?? this.localStream?.getVideoTracks()[0] ?? null;
+
+    await this.updateVideoTrackForPeers(fallbackTrack, this.localStream);
+
+    this.onLocalStream(this.localStream);
+  };
+
   private hasStaticTurnCredentials(): boolean {
     const turnUrls = parseUrls(import.meta.env.VITE_WEBRTC_TURN_URLS as string | undefined);
     const username = (import.meta.env.VITE_WEBRTC_TURN_USERNAME as string | undefined)?.trim();
@@ -267,16 +342,32 @@ export class CallClient {
     }
 
     try {
+      const audioConstraints: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
       // Prefer full voice+video for channels, fallback to audio-only.
-      return await mediaDevices.getUserMedia({
-        audio: true,
+      const stream = await mediaDevices.getUserMedia({
+        audio: audioConstraints,
         video: {
           facingMode: { ideal: this.preferredFacingMode },
         },
       });
+      await this.enforceAudioProcessing(stream);
+      return await this.applyRnnoiseProcessing(stream);
     } catch (videoErr) {
       try {
-        return await mediaDevices.getUserMedia({ audio: true, video: false });
+        const stream = await mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+        await this.enforceAudioProcessing(stream);
+        return await this.applyRnnoiseProcessing(stream);
       } catch (audioErr) {
         throw new Error(formatMediaError(audioErr ?? videoErr));
       }
@@ -571,11 +662,19 @@ export class CallClient {
     this.switchCameraPromise = null;
     this.cameraTrackBeforeScreenShare = null;
     this.screenShareTrack = null;
+    this.rawLocalStream?.getTracks().forEach((track) => track.stop());
+    this.rawLocalStream = null;
+    this.disposeRnnoiseProcessing();
     this.localStream = null;
     this.onLocalStream(null);
   }
 
   private closeAllPeers(): void {
+    this.renegotiateRetryTimers.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    this.renegotiateRetryTimers.clear();
+
     this.peers.forEach((state, userID) => {
       state.pc.close();
       this.onRemoteLeft(userID);
@@ -606,7 +705,22 @@ export class CallClient {
         readyState: event.track.readyState,
         streamIDs: event.streams.map((s) => s.id),
       });
-      event.streams[0]?.getTracks().forEach((track) => remoteStream.addTrack(track));
+      if (event.streams[0]) {
+        event.streams[0].getTracks().forEach((track) => {
+          if (!remoteStream.getTracks().some((existing) => existing.id === track.id)) {
+            remoteStream.addTrack(track);
+          }
+        });
+      } else if (!remoteStream.getTracks().some((existing) => existing.id === event.track.id)) {
+        remoteStream.addTrack(event.track);
+      }
+      event.track.onended = () => {
+        const endedTrack = remoteStream.getTracks().find((t) => t.id === event.track.id);
+        if (endedTrack) {
+          remoteStream.removeTrack(endedTrack);
+        }
+        this.onRemoteStream(user, remoteStream);
+      };
       this.onRemoteStream(user, remoteStream);
     };
 
@@ -668,6 +782,11 @@ export class CallClient {
       return;
     }
 
+    if (peer.pc.signalingState !== "stable") {
+      this.scheduleRenegotiationRetry(remoteUserID);
+      return;
+    }
+
     try {
       const offer = await peer.pc.createOffer();
       await peer.pc.setLocalDescription(offer);
@@ -682,6 +801,154 @@ export class CallClient {
     } catch {
       this.onError("Failed to create WebRTC offer");
     }
+  }
+
+  private scheduleRenegotiationRetry(remoteUserID: number): void {
+    if (this.renegotiateRetryTimers.has(remoteUserID)) {
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      this.renegotiateRetryTimers.delete(remoteUserID);
+      void this.createAndSendOffer(remoteUserID);
+    }, 250);
+    this.renegotiateRetryTimers.set(remoteUserID, timerId);
+  }
+
+  private async updateVideoTrackForPeers(track: MediaStreamTrack | null, stream: MediaStream | null): Promise<void> {
+    const renegotiateTargets: number[] = [];
+
+    for (const [userID, { pc }] of this.peers) {
+      const videoTransceiver = pc
+        .getTransceivers()
+        .find((t) => t.sender.track?.kind === "video" || t.receiver.track?.kind === "video");
+
+      const sender = videoTransceiver?.sender ?? pc.getSenders().find((s) => s.track?.kind === "video");
+
+      if (sender) {
+        await sender.replaceTrack(track);
+        if (videoTransceiver) {
+          videoTransceiver.direction = track ? "sendrecv" : "recvonly";
+        }
+      } else if (track && stream) {
+        pc.addTrack(track, stream);
+      }
+
+      renegotiateTargets.push(userID);
+    }
+
+    await Promise.all(renegotiateTargets.map((userID) => this.createAndSendOffer(userID)));
+  }
+
+  private async enforceAudioProcessing(stream: MediaStream): Promise<void> {
+    const audioTrack = stream.getAudioTracks()[0];
+    if (!audioTrack) {
+      return;
+    }
+    try {
+      await audioTrack.applyConstraints({
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      });
+    } catch {
+      // Best-effort on browsers with partial constraint support.
+    }
+  }
+
+  private async applyRnnoiseProcessing(sourceStream: MediaStream): Promise<MediaStream> {
+    const sourceAudioTrack = sourceStream.getAudioTracks()[0];
+    if (!sourceAudioTrack) {
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+
+    if (!window.isSecureContext || typeof AudioWorkletNode === "undefined") {
+      debugLog("rnnoise:unsupported", {
+        isSecureContext: window.isSecureContext,
+        hasAudioWorkletNode: typeof AudioWorkletNode !== "undefined",
+      });
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+
+    try {
+      const audioContext = new AudioContext({ sampleRate: 48000 });
+      await audioContext.audioWorklet.addModule(rnnoiseWorkletPath);
+
+      const wasmBinary = await CallClient.loadRnnoiseBinary();
+      const rnnoiseSourceStream = new MediaStream([sourceAudioTrack]);
+      const sourceNode = audioContext.createMediaStreamSource(rnnoiseSourceStream);
+      const rnnoiseNode = new RnnoiseWorkletNode(audioContext, {
+        wasmBinary,
+        maxChannels: 1,
+      });
+      const destinationNode = audioContext.createMediaStreamDestination();
+
+      sourceNode.connect(rnnoiseNode);
+      rnnoiseNode.connect(destinationNode);
+      await audioContext.resume();
+
+      const processedAudioTrack = destinationNode.stream.getAudioTracks()[0];
+      if (!processedAudioTrack) {
+        throw new Error("RNNoise did not produce processed audio track");
+      }
+
+      const processedStream = new MediaStream([processedAudioTrack]);
+      sourceStream.getVideoTracks().forEach((track) => processedStream.addTrack(track));
+
+      this.disposeRnnoiseProcessing();
+      this.rnnoiseAudioContext = audioContext;
+      this.rnnoiseSource = sourceNode;
+      this.rnnoiseNode = rnnoiseNode;
+      this.rawLocalStream = sourceStream;
+
+      debugLog("rnnoise:enabled", {
+        sampleRate: audioContext.sampleRate,
+        processedTrackID: processedAudioTrack.id,
+      });
+
+      return processedStream;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "RNNoise initialization failed";
+      debugLog("rnnoise:failed", { message });
+      this.onError(`RNNoise unavailable (${message}). Using standard microphone processing.`);
+      this.disposeRnnoiseProcessing();
+      this.rawLocalStream = sourceStream;
+      return sourceStream;
+    }
+  }
+
+  private disposeRnnoiseProcessing(): void {
+    try {
+      this.rnnoiseSource?.disconnect();
+    } catch {
+      // ignore disconnect errors during teardown
+    }
+    try {
+      this.rnnoiseNode?.disconnect();
+      this.rnnoiseNode?.destroy();
+    } catch {
+      // ignore destroy errors during teardown
+    }
+    try {
+      this.rnnoiseAudioContext?.close();
+    } catch {
+      // ignore close errors during teardown
+    }
+
+    this.rnnoiseSource = null;
+    this.rnnoiseNode = null;
+    this.rnnoiseAudioContext = null;
+  }
+
+  private static loadRnnoiseBinary(): Promise<ArrayBuffer> {
+    if (!CallClient.rnnoiseBinaryPromise) {
+      CallClient.rnnoiseBinaryPromise = loadRnnoise({
+        url: rnnoiseWasmPath,
+        simdUrl: rnnoiseSimdWasmPath,
+      });
+    }
+    return CallClient.rnnoiseBinaryPromise;
   }
 
   private handleVoiceUserJoined(event: VoiceUserEvent): void {
@@ -718,7 +985,7 @@ export class CallClient {
 
     const participant = this.participants.get(event.from_user_id) ?? { user_id: event.from_user_id };
     this.participants.set(event.from_user_id, participant);
-    debugLog("signal:incoming", { from: event.from_user_id, type: event.signal_type });
+    debugLog("signal:incoming", { from: event.from_user_id, signal_type: event.signal_type });
 
     const pc = await this.ensurePeer(participant, false);
     const peer = this.peers.get(event.from_user_id);
@@ -730,6 +997,9 @@ export class CallClient {
       if (event.signal_type === "offer") {
         if (!event.sdp) {
           return;
+        }
+        if (pc.signalingState !== "stable") {
+          await pc.setLocalDescription({ type: "rollback" });
         }
         await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
         await this.flushPendingCandidates(peer);
