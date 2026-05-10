@@ -162,8 +162,10 @@ func (h *Hub) changeVoiceStatus(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	userID := req.client.UserID
+
 	h.mu.Lock()
-	channelID, inVoice := h.userVoiceChannel[payload.UserID]
+	channelID, inVoice := h.userVoiceChannel[userID]
 	if !inVoice {
 		h.mu.Unlock()
 		h.pushError(req.client, "user not in voice channel")
@@ -177,7 +179,7 @@ func (h *Hub) changeVoiceStatus(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	h.voiceStatusByUser[payload.UserID] = voiceStatus{
+	h.voiceStatusByUser[userID] = voiceStatus{
 		micEnabled: payload.MicEnabled,
 		deafened:   payload.Deafened,
 	}
@@ -188,7 +190,7 @@ func (h *Hub) changeVoiceStatus(req wsCommandRequest, ctx context.Context) {
 	}
 	h.mu.Unlock()
 
-	updatedParticipant := h.resolveVoiceParticipant(ctx, payload.UserID)
+	updatedParticipant := h.resolveVoiceParticipant(ctx, userID)
 	h.pushToUsers(notifyUsers, &types.WsEvent{
 		Event: types.WsEventVoiceStatusChanged,
 		Data: types.WsVoiceUserEvent{
