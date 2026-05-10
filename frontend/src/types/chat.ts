@@ -27,6 +27,8 @@ export interface VoiceParticipant {
     first_name?: string;
     last_name?: string;
     avatar_url?: string;
+    mic_enabled?: boolean;
+    deafened?: boolean
 }
 
 export interface VoiceChannelParticipants {

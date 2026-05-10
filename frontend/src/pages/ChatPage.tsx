@@ -355,6 +355,31 @@ export default function ChatPage() {
             });
         });
 
+        const unsubscribeVoiceStatusChanged = socket.onVoiceStatusChanged((event) => {
+            setVoiceParticipantsByChannel((prev) => {
+                const current = prev[event.channel_id] ?? [];
+                if (!current.length) {
+                    return prev;
+                }
+
+                const index = current.findIndex((participant) => participant.user_id === event.user.user_id);
+                if (index === -1) {
+                    return prev;
+                }
+
+                const next = [...current];
+                next[index] = {
+                    ...current[index],
+                    ...event.user,
+                };
+
+                return {
+                    ...prev,
+                    [event.channel_id]: next,
+                };
+            });
+        });
+
         (async () => {
             try {
                 await socket.connect();
@@ -382,6 +407,7 @@ export default function ChatPage() {
             unsubscribeError();
             unsubscribeVoiceUserJoined();
             unsubscribeVoiceUserLeft();
+            unsubscribeVoiceStatusChanged();
             callClientRef.current?.dispose();
             callClientRef.current = null;
             socketRef.current?.close();
@@ -827,6 +853,10 @@ export default function ChatPage() {
         const next = !isMicEnabled;
         setIsMicEnabled(next);
         callClientRef.current?.setMicrophoneEnabled(next);
+
+        if (currentUserId && voiceChannelId > 0 && socketRef.current) {
+            void socketRef.current.changeVoiceStatus(currentUserId, next, isDeafened);
+        }
     }
 
     function toggleCamera(): void {
@@ -884,11 +914,19 @@ export default function ChatPage() {
             setIsDeafened(true);
             setIsMicEnabled(false);
             callClientRef.current?.setMicrophoneEnabled(false);
+
+            if (currentUserId && voiceChannelId > 0 && socketRef.current) {
+                void socketRef.current.changeVoiceStatus(currentUserId, false, true);
+            }
         } else {
             setIsDeafened(false);
             const restoreMic = micBeforeDeafenRef.current;
             setIsMicEnabled(restoreMic);
             callClientRef.current?.setMicrophoneEnabled(restoreMic);
+
+            if (currentUserId && voiceChannelId > 0 && socketRef.current) {
+                void socketRef.current.changeVoiceStatus(currentUserId, restoreMic, false);
+            }
         }
     }
 
@@ -924,6 +962,18 @@ export default function ChatPage() {
         const initials = `${participant.first_name?.[0] ?? ""}${participant.last_name?.[0] ?? ""}`.toUpperCase();
         return initials || "U";
     };
+
+    const voiceParticipantsInChannel = useMemo(
+        () => voiceParticipantsByChannel[voiceChannelId] ?? [],
+        [voiceParticipantsByChannel, voiceChannelId],
+    );
+    const voiceParticipantById = useMemo(() => {
+        const map = new Map<number, VoiceParticipant>();
+        voiceParticipantsInChannel.forEach((participant) => {
+            map.set(participant.user_id, participant);
+        });
+        return map;
+    }, [voiceParticipantsInChannel]);
 
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
@@ -1167,7 +1217,15 @@ export default function ChatPage() {
                                                     </span>
                                                 )}
                                             </div>
-                                            <span className="voice-member-name">{getParticipantDisplayName(participant)}</span>
+                                            <div className="voice-member-meta">
+                                                <span className="voice-member-name">{getParticipantDisplayName(participant)}</span>
+                                                <span className="voice-member-status">
+                                                    {participant.mic_enabled === false ? (
+                                                        <MicOff size={14} aria-hidden="true" />
+                                                    ) : null}
+                                                    {participant.deafened ? <VolumeOff size={14} aria-hidden="true" /> : null}
+                                                </span>
+                                            </div>
                                             {activeVolumeUserId === participant.user_id && (
                                                 <div className="voice-volume-popover" onClick={(e) => e.stopPropagation()}>
                                                     <input
@@ -1278,8 +1336,17 @@ export default function ChatPage() {
                                 )}
                             </div>
                             <div className="video-grid">
-                                {localStream && <VideoTile stream={localStream} label="You" muted/>}
+                                {localStream && (
+                                    <VideoTile
+                                        stream={localStream}
+                                        label="You"
+                                        muted
+                                        micEnabled={isMicEnabled}
+                                        deafened={isDeafened}
+                                    />
+                                )}
                                 {remoteStreams.map((item) => {
+                                    const participant = voiceParticipantById.get(item.userId);
                                     const userVolume = voiceVolumeByUserId[item.userId] ?? 1;
                                     const effectiveVolume = isDeafened ? 0 : userVolume;
 
@@ -1290,6 +1357,8 @@ export default function ChatPage() {
                                             label={item.label}
                                             muted={isDeafened}
                                             volume={effectiveVolume}
+                                            micEnabled={participant?.mic_enabled}
+                                            deafened={participant?.deafened}
                                         />
                                     );
                                 })}

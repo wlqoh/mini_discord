@@ -1,14 +1,16 @@
 import { useEffect, useRef } from "react";
-import { Maximize2 } from "lucide-react";
+import { Maximize2, MicOff, VolumeOff } from "lucide-react";
 
 type Props = {
   stream: MediaStream | null;
   label: string;
   muted?: boolean;
   volume?: number;
+  micEnabled?: boolean;
+  deafened?: boolean;
 };
 
-export default function VideoTile({ stream, label, muted = false, volume = 1 }: Props) {
+export default function VideoTile({ stream, label, muted = false, volume = 1, micEnabled, deafened }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isDebugEnabled = (() => {
@@ -96,6 +98,12 @@ export default function VideoTile({ stream, label, muted = false, volume = 1 }: 
     <div className="video-tile" ref={containerRef}>
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       <div className="video-label">{label}</div>
+      {micEnabled === false || deafened ? (
+        <div className="video-status">
+          {micEnabled === false ? <MicOff size={14} aria-hidden="true" /> : null}
+          {deafened ? <VolumeOff size={14} aria-hidden="true" /> : null}
+        </div>
+      ) : null}
       <button
         className="video-fullscreen-btn"
         type="button"

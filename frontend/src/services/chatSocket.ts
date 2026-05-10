@@ -19,7 +19,8 @@ type WsEvent = {
     | "voice_participants"
     | "voice_user_joined"
     | "voice_user_left"
-    | "rtc_signal";
+    | "rtc_signal"
+    | "voice_status_changed";
   error?: string;
   data?: unknown;
 };
@@ -172,6 +173,8 @@ export class ChatSocket {
 
   private readonly voiceUserLeftListeners = new Set<VoiceUserListener>();
 
+  private readonly voiceStatusChangedListeners = new Set<VoiceUserListener>();
+
   private readonly rtcSignalListeners = new Set<RTCSignalListener>();
 
   private flushQueue(): void {
@@ -315,6 +318,21 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "voice_status_changed") {
+          const payload = parsed.data as VoiceUserEvent;
+
+          if (
+              payload &&
+              typeof payload.channel_id === "number" &&
+              payload.user &&
+              typeof payload.user.user_id === "number"
+          ) {
+            this.voiceStatusChangedListeners.forEach((listener) => listener(payload));
+          }
+
+          return;
+        }
+
         if (parsed.event === "rtc_signal") {
           const payload = parsed.data as RTCSignalEvent;
           if (
@@ -381,6 +399,11 @@ export class ChatSocket {
   onVoiceUserLeft(listener: VoiceUserListener): () => void {
     this.voiceUserLeftListeners.add(listener);
     return () => this.voiceUserLeftListeners.delete(listener);
+  }
+
+  onVoiceStatusChanged(listener: VoiceUserListener): () => void {
+    this.voiceStatusChangedListeners.add(listener);
+    return () => this.voiceStatusChangedListeners.delete(listener);
   }
 
   onRTCSignal(listener: RTCSignalListener): () => void {
@@ -490,7 +513,14 @@ export class ChatSocket {
       channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }>;
       voice_participants?: Array<{
         channel_id?: number;
-        participants?: Array<{ user_id?: number; first_name?: string; last_name?: string; avatar_url?: string }>;
+        participants?: Array<{
+          user_id?: number;
+          first_name?: string;
+          last_name?: string;
+          avatar_url?: string;
+          mic_enabled?: boolean;
+          deafened?: boolean;
+        }>;
       }>;
     };
 
@@ -518,6 +548,8 @@ export class ChatSocket {
                     first_name: typeof participant.first_name === "string" ? participant.first_name : undefined,
                     last_name: typeof participant.last_name === "string" ? participant.last_name : undefined,
                     avatar_url: typeof participant.avatar_url === "string" ? participant.avatar_url : undefined,
+                    mic_enabled: typeof participant.mic_enabled === "boolean" ? participant.mic_enabled : undefined,
+                    deafened: typeof participant.deafened === "boolean" ? participant.deafened : undefined,
                   }))
               : [],
           }))
@@ -557,6 +589,14 @@ export class ChatSocket {
 
   async leaveVoiceChannel(): Promise<void> {
     await this.sendCommand("leave_voice_channel", {});
+  }
+
+  async changeVoiceStatus(userId: number, micEnabled: boolean, deafened: boolean): Promise<void> {
+    await this.sendCommand("change_voice_status", {
+      user_id: userId,
+      mic_enabled: micEnabled,
+      deafened,
+    });
   }
 
   async sendRTCSignal(payload: RTCSignalPayload): Promise<void> {
