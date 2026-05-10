@@ -146,7 +146,7 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 	case types.WsActionRTCSignal:
 		h.relayRTCSignal(req, ctx)
 	case types.WsActionSearchServers:
-		searchServers(h, req, ctx)
+		h.searchServers(req, ctx)
 	case types.WsActionGetUserInfo:
 		h.getUserInfo(req, ctx)
 	case types.WsActionChangeVoiceStatus:
