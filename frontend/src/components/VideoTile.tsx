@@ -1,12 +1,15 @@
 import { useEffect, useRef } from "react";
+import { MicOff, VolumeOff } from "lucide-react";
 
 type Props = {
   stream: MediaStream | null;
   label: string;
   muted?: boolean;
+  micEnabled?: boolean;
+  deafened?: boolean;
 };
 
-export default function VideoTile({ stream, label, muted = false }: Props) {
+export default function VideoTile({ stream, label, muted = false, micEnabled, deafened }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -37,7 +40,12 @@ export default function VideoTile({ stream, label, muted = false }: Props) {
     <div className="video-tile">
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       <div className="video-label">{label}</div>
+      {micEnabled === false || deafened ? (
+        <div className="video-status">
+          {micEnabled === false ? <MicOff size={14} aria-hidden="true" /> : null}
+          {deafened ? <VolumeOff size={14} aria-hidden="true" /> : null}
+        </div>
+      ) : null}
     </div>
   );
 }
-

@@ -225,6 +225,19 @@
     white-space: nowrap;
 }
 
+.voice-member-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.voice-member-status {
+    display: inline-flex;
+    gap: 6px;
+    color: #b80606;
+}
+
 .chat-main {
     display: grid;
     grid-template-rows: 1fr auto;
@@ -847,4 +860,14 @@
     min-height: 36px;
 }
 
-
+.video-status {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    display: inline-flex;
+    gap: 6px;
+    color: #b80606;
+    background: rgba(0, 0, 0, 0.45);
+    padding: 4px 6px;
+    border-radius: 6px;
+}
