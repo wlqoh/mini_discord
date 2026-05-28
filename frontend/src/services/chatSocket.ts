@@ -74,6 +74,20 @@ function resolveWsUrl(): string {
   return wsUrl.toString();
 }
 
+function parseAttachments(raw: unknown): Message["attachments"] {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  return raw
+    .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
+    .map((item) => ({
+      url: typeof item.url === "string" ? item.url : "",
+      file_name: typeof item.file_name === "string" ? item.file_name : "",
+      content_type: typeof item.content_type === "string" ? item.content_type : "",
+    }))
+    .filter((item) => Boolean(item.url));
+}
+
 function toMessage(raw: unknown): Message | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -96,6 +110,7 @@ function toMessage(raw: unknown): Message | null {
       firstName?: unknown;
       lastName?: unknown;
     } | unknown;
+    attachments?: unknown;
   };
 
   const candidate = raw as RawMessage;
@@ -148,6 +163,7 @@ function toMessage(raw: unknown): Message | null {
     author_last_name: authorLastName,
     author_avatar_url: authorAvatarUrl,
     content: candidate.content,
+    attachments: parseAttachments(candidate.attachments),
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
 }
@@ -454,8 +470,12 @@ export class ChatSocket {
     await this.sendCommand("join_server", { server_id: serverId });
   }
 
-  async sendMessage(channelId: number, content: string): Promise<void> {
-    await this.sendCommand("send_message", { channel_id: channelId, content });
+  async sendMessage(channelId: number, content: string, attachmentIds?: number[]): Promise<void> {
+    const payload: Record<string, unknown> = { channel_id: channelId, content };
+    if (attachmentIds && attachmentIds.length > 0) {
+      payload.attachment_ids = attachmentIds;
+    }
+    await this.sendCommand("send_message", payload);
   }
 
   async getMessages(channelId: number, limit = 100): Promise<Message[]> {

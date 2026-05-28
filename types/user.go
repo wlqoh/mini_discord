@@ -11,17 +11,19 @@ type UserStorage interface {
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
 	SaveUserAvatar(ctx context.Context, userID int, avatarKey string) error
+	GetOrCreateAttachmentFolderKey(ctx context.Context, userID int) (string, error)
 }
 
 type User struct {
-	ID        int       `json:"id"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	Email     string    `json:"email"`
-	AvatarKey string    `json:"avatar_key,omitempty"`
-	Password  string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                  int       `json:"id"`
+	FirstName           string    `json:"first_name"`
+	LastName            string    `json:"last_name"`
+	Email               string    `json:"email"`
+	AvatarKey           string    `json:"avatar_key,omitempty"`
+	AttachmentFolderKey string    `json:"attachment_folder_key,omitempty"`
+	Password            string    `json:"-"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 type UserResponse struct {
 	FirstName string `json:"first_name"`

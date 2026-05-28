@@ -67,3 +67,26 @@ func (s3Client *S3Client) PutAvatar(ctx context.Context, key string, data []byte
 
 	return utils.AvatarURLFromKey(key, s3Client.cfg.S3HOST), nil
 }
+
+func (s3Client *S3Client) PutAttachment(ctx context.Context, key string, data []byte, filename string, contentType string, uniqueSuffix string) (string, error) {
+	if contentType == "" {
+		contentType = mime.TypeByExtension(filepath.Ext(filename))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+	}
+
+	s3Key := fmt.Sprintf("attachments/%s/%s_%s", key, uniqueSuffix, filename)
+
+	_, err := s3Client.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s3Client.cfg.S3.Bucket),
+		Key:         aws.String(s3Key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return utils.AvatarURLFromKey(s3Key, s3Client.cfg.S3HOST), nil
+}

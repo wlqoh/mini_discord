@@ -641,14 +641,14 @@ export default function ChatPage() {
         }
     }
 
-    async function handleSend(text: string) {
+    async function handleSend(text: string, attachmentIds?: number[]) {
         if (!socketRef.current || !isConnected || selectedChannelId <= 0) {
             return;
         }
 
         try {
             setError("");
-            await socketRef.current.sendMessage(selectedChannelId, text);
+            await socketRef.current.sendMessage(selectedChannelId, text, attachmentIds);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to send message";
             setError(message);

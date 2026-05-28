@@ -20,21 +20,25 @@ import (
 )
 
 type Handler struct {
-	storage  types.UserStorage
-	cfg      *config.Config
-	log      *slog.Logger
-	s3Client types.S3ClientStorage
+	storage       types.UserStorage
+	serverStorage types.ServerStorage
+	cfg           *config.Config
+	log           *slog.Logger
+	s3Client      types.S3ClientStorage
 }
 
-func NewHandler(storage types.UserStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
-	return &Handler{storage: storage, cfg: cfg, log: log, s3Client: s3Client}
+func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
+	return &Handler{storage: storage, serverStorage: serverStorage, cfg: cfg, log: log, s3Client: s3Client}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
 	limiterMW := limiter.FiberRateLimitMiddleware()
+	uploadLimiter := ratelimit.NewTokenBucket(10.0/60.0, 5)
+	uploadLimiterMW := uploadLimiter.FiberRateLimitMiddleware()
 	router.Get("/getAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetImage)
 	router.Post("/setAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleSetImage)
+	router.Post("/upload", uploadLimiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleUpload)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
 	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
@@ -371,4 +375,109 @@ func (h *Handler) turnURLs() []string {
 	}
 
 	return urls
+}
+
+func isAllowedMediaType(contentType string) bool {
+	switch {
+	case contentType == "image/jpeg",
+		contentType == "image/png",
+		contentType == "image/gif",
+		contentType == "image/webp",
+		contentType == "image/avif",
+		contentType == "video/mp4",
+		contentType == "video/webm",
+		contentType == "video/quicktime",
+		contentType == "audio/mpeg",
+		contentType == "audio/ogg",
+		contentType == "audio/wav",
+		contentType == "audio/webm",
+		contentType == "audio/mp4":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) handleUpload(c *fiber.Ctx) error {
+	const maxUploadSizeBytes int64 = 10 * 1024 * 1024
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		return utils.WriteError(c, fiber.StatusBadRequest, "file is required")
+	}
+
+	if file.Size > maxUploadSizeBytes {
+		return utils.WriteError(c, fiber.StatusBadRequest, "file is too large (max 10MB)")
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif",
+		".mp4", ".webm", ".mov",
+		".mp3", ".ogg", ".wav", ".m4a":
+	default:
+		return utils.WriteError(c, fiber.StatusBadRequest, "unsupported file type")
+	}
+
+	src, err := file.Open()
+	if err != nil {
+		h.log.Error("upload: failed to open file", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to open file")
+	}
+	defer func() { _ = src.Close() }()
+
+	raw, err := io.ReadAll(io.LimitReader(src, maxUploadSizeBytes+1))
+	if err != nil {
+		h.log.Error("upload: failed to read file", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to read file")
+	}
+
+	if int64(len(raw)) > maxUploadSizeBytes {
+		return utils.WriteError(c, fiber.StatusBadRequest, "file is too large (max 10MB)")
+	}
+
+	contentType := http.DetectContentType(raw)
+	if !isAllowedMediaType(contentType) {
+		return utils.WriteError(c, fiber.StatusBadRequest, "unsupported content type: "+contentType)
+	}
+
+	folderKey, err := h.storage.GetOrCreateAttachmentFolderKey(c.Context(), clientID)
+	if err != nil {
+		h.log.Error("upload: failed to get user folder key", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to get user folder")
+	}
+
+	fileSuffix := uuid.NewString()[:8]
+	url, err := h.s3Client.PutAttachment(c.Context(), folderKey, raw, file.Filename, contentType, fileSuffix)
+	if err != nil {
+		h.log.Error("upload: failed to upload to s3", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload file")
+	}
+
+	s3Key := fmt.Sprintf("attachments/%s/%s_%s", folderKey, fileSuffix, file.Filename)
+	pa := types.PendingAttachment{
+		UserID:      clientID,
+		FolderKey:   folderKey,
+		FileKey:     s3Key,
+		FileName:    file.Filename,
+		ContentType: contentType,
+		SizeBytes:   int64(len(raw)),
+	}
+
+	attachmentID, err := h.serverStorage.CreatePendingAttachment(c.Context(), pa)
+	if err != nil {
+		h.log.Error("upload: failed to create pending attachment", "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to create attachment")
+	}
+
+	return c.Status(fiber.StatusOK).JSON(types.UploadResponse{
+		AttachmentID: attachmentID,
+		URL:          url,
+	})
 }

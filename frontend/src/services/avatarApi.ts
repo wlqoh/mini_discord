@@ -104,3 +104,23 @@ export async function uploadMyAvatar(file: File): Promise<string> {
         throw new Error(extractApiError(err, "Failed to upload avatar"));
     }
 }
+
+export type AttachmentUploadResponse = {
+    attachment_id: number;
+    url: string;
+};
+
+export async function uploadAttachment(file: File): Promise<AttachmentUploadResponse> {
+    const form = new FormData();
+    form.append("file", file, file.name);
+
+    try {
+        const { data } = await API.postForm<AttachmentUploadResponse>("/upload", form);
+        if (typeof data.attachment_id !== "number" || typeof data.url !== "string") {
+            throw new Error("Invalid upload response");
+        }
+        return data;
+    } catch (err) {
+        throw new Error(extractApiError(err, "Failed to upload attachment"));
+    }
+}

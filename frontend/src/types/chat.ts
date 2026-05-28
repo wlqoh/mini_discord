@@ -11,6 +11,15 @@ export interface Server {
     owner_id: number;
 }
 
+export interface Attachment {
+    id?: number;
+    message_id?: number;
+    url: string;
+    file_name: string;
+    content_type: string;
+    size_bytes?: number;
+}
+
 export interface Message {
     id: number;
     channel_id: number;
@@ -19,6 +28,7 @@ export interface Message {
     author_last_name?: string;
     author_avatar_url?: string;
     content: string;
+    attachments?: Attachment[];
     created_at: string;
 }
 
