@@ -153,6 +153,8 @@ export class CallClient {
   private readonly onError: ErrorListener;
 
   private readonly renegotiateRetryTimers = new Map<number, number>();
+  private readonly iceRestartTimers = new Map<number, number>();
+  private readonly iceRestartAttempts = new Map<number, number>();
 
   private rnnoiseAudioContext: AudioContext | null = null;
 
@@ -527,6 +529,11 @@ export class CallClient {
       window.clearTimeout(timerId);
     });
     this.renegotiateRetryTimers.clear();
+    this.iceRestartTimers.forEach((timerId) => {
+      window.clearTimeout(timerId);
+    });
+    this.iceRestartTimers.clear();
+    this.iceRestartAttempts.clear();
 
     this.peers.forEach((state, userID) => {
       state.pc.close();
@@ -579,6 +586,14 @@ export class CallClient {
 
     pc.oniceconnectionstatechange = () => {
       debugLog("peer:ice-state", { userID: user.user_id, state: pc.iceConnectionState });
+      const state = pc.iceConnectionState;
+      if (state === "failed") {
+        this.scheduleIceRestart(user.user_id, "failed");
+      } else if (state === "disconnected") {
+        this.scheduleIceRestart(user.user_id, "disconnected");
+      } else if (state === "connected" || state === "completed") {
+        this.clearIceRestart(user.user_id);
+      }
     };
     pc.onconnectionstatechange = () => {
       debugLog("peer:connection-state", { userID: user.user_id, state: pc.connectionState });
@@ -629,7 +644,7 @@ export class CallClient {
     return pc;
   }
 
-  private async createAndSendOffer(remoteUserID: number): Promise<void> {
+  private async createAndSendOffer(remoteUserID: number, options?: { iceRestart?: boolean }): Promise<void> {
     const peer = this.peers.get(remoteUserID);
     if (!peer || this.currentChannelID <= 0) {
       return;
@@ -641,9 +656,9 @@ export class CallClient {
     }
 
     try {
-      const offer = await peer.pc.createOffer();
+      const offer = await peer.pc.createOffer({ iceRestart: options?.iceRestart });
       await peer.pc.setLocalDescription(offer);
-      debugLog("signal:offer-send", { remoteUserID, sdpSize: offer.sdp?.length ?? 0 });
+      debugLog("signal:offer-send", { remoteUserID, sdpSize: offer.sdp?.length ?? 0, iceRestart: Boolean(options?.iceRestart) });
 
       await this.socket.sendRTCSignal({
         channel_id: this.currentChannelID,
@@ -654,6 +669,56 @@ export class CallClient {
     } catch {
       this.onError("Failed to create WebRTC offer");
     }
+  }
+
+  private clearIceRestart(remoteUserID: number): void {
+    const timerId = this.iceRestartTimers.get(remoteUserID);
+    if (timerId) {
+      window.clearTimeout(timerId);
+      this.iceRestartTimers.delete(remoteUserID);
+    }
+    this.iceRestartAttempts.delete(remoteUserID);
+  }
+
+  private scheduleIceRestart(remoteUserID: number, reason: "failed" | "disconnected"): void {
+    if (this.iceRestartTimers.has(remoteUserID)) {
+      return;
+    }
+
+    const attempt = (this.iceRestartAttempts.get(remoteUserID) ?? 0) + 1;
+    if (attempt > 3) {
+      this.iceRestartAttempts.set(remoteUserID, attempt);
+      return;
+    }
+
+    const delayMs = reason === "failed" ? 1500 : 4000;
+    const timerId = window.setTimeout(() => {
+      this.iceRestartTimers.delete(remoteUserID);
+      void this.restartIce(remoteUserID);
+    }, delayMs);
+
+    this.iceRestartTimers.set(remoteUserID, timerId);
+    this.iceRestartAttempts.set(remoteUserID, attempt);
+  }
+
+  private async restartIce(remoteUserID: number): Promise<void> {
+    const peer = this.peers.get(remoteUserID);
+    if (!peer || this.currentChannelID <= 0) {
+      return;
+    }
+
+    if (peer.pc.signalingState !== "stable") {
+      this.scheduleRenegotiationRetry(remoteUserID);
+      return;
+    }
+
+    try {
+      peer.pc.restartIce();
+    } catch {
+      // restartIce is best-effort; fallback to offer-based restart.
+    }
+
+    await this.createAndSendOffer(remoteUserID, { iceRestart: true });
   }
 
   private scheduleRenegotiationRetry(remoteUserID: number): void {
@@ -825,6 +890,13 @@ export class CallClient {
     if (!state) {
       return;
     }
+
+    const timerId = this.iceRestartTimers.get(event.user.user_id);
+    if (timerId) {
+      window.clearTimeout(timerId);
+      this.iceRestartTimers.delete(event.user.user_id);
+    }
+    this.iceRestartAttempts.delete(event.user.user_id);
 
     state.pc.close();
     this.peers.delete(event.user.user_id);
