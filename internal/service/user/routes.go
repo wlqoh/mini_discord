@@ -187,9 +187,6 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	accessToken, accessClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
-		u.Email,
-		u.FirstName,
-		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
 	)
 	if err != nil {
@@ -200,9 +197,6 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	refreshToken, refreshClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
-		u.Email,
-		u.FirstName,
-		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
@@ -299,9 +293,6 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	accessToken, accessClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
-		u.Email,
-		u.FirstName,
-		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
 	)
 	if err != nil {
@@ -312,9 +303,6 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	refreshToken, refreshClaims, err := auth.CreateJWT(
 		secret,
 		u.ID,
-		u.Email,
-		u.FirstName,
-		u.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
@@ -353,9 +341,6 @@ func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
 	accessToken, accessClaims, err := auth.CreateJWT(
 		[]byte(h.cfg.JWTSecret),
 		refreshClaims.UserID,
-		refreshClaims.Email,
-		refreshClaims.FirstName,
-		refreshClaims.LastName,
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
