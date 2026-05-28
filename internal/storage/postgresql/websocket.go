@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
@@ -195,7 +198,12 @@ func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64)
 	return userIDs, nil
 }
 
-func (s *Storage) SaveMessage(ctx context.Context, msg types.WsMessage) error {
+func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
+	content := msg.Content
+	if content == "" {
+		content = " "
+	}
+
 	query := `
 	INSERT INTO messages (channel_id, author_id, content)
 	VALUES ($1,$2,$3)
@@ -207,7 +215,7 @@ func (s *Storage) SaveMessage(ctx context.Context, msg types.WsMessage) error {
 		query,
 		msg.ChannelID,
 		msg.AuthorID,
-		msg.Content,
+		content,
 	).Scan(&msg.ID, &msg.CreatedAt)
 
 	return err
@@ -268,6 +276,9 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		if avatarKey.Valid {
 			msg.AuthorAvatarURL = utils.AvatarURLFromKey(avatarKey.String, s3Host)
 		}
+		if msg.Content == " " {
+			msg.Content = ""
+		}
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
@@ -294,7 +305,138 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 
+	if len(messages) > 0 {
+		msgIDs := make([]int64, len(messages))
+		for i, m := range messages {
+			msgIDs[i] = m.ID
+		}
+		atts, err := s.GetAttachmentsByMessageIDs(ctx, msgIDs, s3Host)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		for i := range messages {
+			if a, ok := atts[messages[i].ID]; ok {
+				messages[i].Attachments = a
+			}
+		}
+	}
+
 	return messages, nextCursor, hasMore, nil
+}
+
+func (s *Storage) DeleteMessage(ctx context.Context, messageID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
+	return err
+}
+
+func (s *Storage) CreatePendingAttachment(ctx context.Context, pa types.PendingAttachment) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`INSERT INTO pending_attachments (user_id, folder_key, file_key, file_name, content_type, size_bytes)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		pa.UserID, pa.FolderKey, pa.FileKey, pa.FileName, pa.ContentType, pa.SizeBytes,
+	).Scan(&id)
+	return id, err
+}
+
+func (s *Storage) GetPendingAttachmentByID(ctx context.Context, id int64) (*types.PendingAttachment, error) {
+	var pa types.PendingAttachment
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, user_id, folder_key, file_key, file_name, content_type, size_bytes FROM pending_attachments WHERE id = $1`,
+		id,
+	).Scan(&pa.ID, &pa.UserID, &pa.FolderKey, &pa.FileKey, &pa.FileName, &pa.ContentType, &pa.SizeBytes)
+	if err != nil {
+		return nil, err
+	}
+	return &pa, nil
+}
+
+func (s *Storage) DeletePendingAttachment(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM pending_attachments WHERE id = $1`, id)
+	return err
+}
+
+func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, attachments []types.Attachment) error {
+	if len(attachments) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	const batchSize = 100
+	for i := 0; i < len(attachments); i += batchSize {
+		end := i + batchSize
+		if end > len(attachments) {
+			end = len(attachments)
+		}
+		batch := attachments[i:end]
+
+		var sb strings.Builder
+		sb.WriteString("INSERT INTO message_attachments (message_id, file_key, file_name, content_type, size_bytes) VALUES ")
+		args := make([]any, 0, len(batch)*5)
+		for j, a := range batch {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5))
+			args = append(args, messageID, a.FileKey, a.FileName, a.ContentType, a.SizeBytes)
+		}
+
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]types.Attachment, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+
+	args := make([]any, len(messageIDs))
+	placeholders := make([]string, len(messageIDs))
+	for i, id := range messageIDs {
+		args[i] = id
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	query := fmt.Sprintf(
+		`SELECT id, message_id, file_key, file_name, content_type, size_bytes, created_at
+		 FROM message_attachments
+		 WHERE message_id IN (%s)
+		 ORDER BY id`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]types.Attachment)
+	for rows.Next() {
+		var a types.Attachment
+		var createdAt time.Time
+		var fileKey string
+		if err := rows.Scan(&a.ID, &a.MessageID, &fileKey, &a.FileName, &a.ContentType, &a.SizeBytes, &createdAt); err != nil {
+			return nil, err
+		}
+		a.URL = utils.AvatarURLFromKey(fileKey, s3Host)
+		a.CreatedAt = createdAt.Format(time.RFC3339)
+		result[a.MessageID] = append(result[a.MessageID], a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID int64) error {

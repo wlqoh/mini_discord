@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Send } from "lucide-react";
-import type { OnlineUser } from "../types/chat.ts";
+import { useCallback, useRef, useState } from "react";
+import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
+import type { AttachmentUploadResponse } from "../services/avatarApi.ts";
+import { uploadAttachment } from "../services/avatarApi.ts";
 
 type Props = {
     disabled?: boolean;
-    onSend: (text: string) => Promise<void> | void;
+    onSend: (text: string, attachmentIds?: number[]) => Promise<void> | void;
     isOnlinePanelOpen: boolean;
     onToggleOnlinePanel: () => void;
     onlineUsers: OnlineUser[];
@@ -12,6 +13,35 @@ type Props = {
     onlineUserAvatarByName: Record<string, string>;
     onOpenProfile?: (userId: number) => void;
 };
+
+interface OnlineUser {
+    first_name?: string;
+    last_name?: string;
+    user_id?: number;
+}
+
+const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_TYPES = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+    "audio/mp4",
+]);
+
+function formatRecordingDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 export default function MessageInput({
     disabled,
@@ -24,6 +54,92 @@ export default function MessageInput({
     onOpenProfile,
 }: Props) {
     const [text, setText] = useState("");
+    const [pendingAttachments, setPendingAttachments] = useState<AttachmentUploadResponse[]>([]);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadError, setUploadError] = useState("");
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingDuration, setRecordingDuration] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<Blob[]>([]);
+    const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+
+    const stopRecording = useCallback(() => {
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+        }
+        const recorder = mediaRecorderRef.current;
+        if (recorder && recorder.state !== "inactive") {
+            recorder.stop();
+        }
+        setIsRecording(false);
+    }, []);
+
+    async function startRecording() {
+        setUploadError("");
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            streamRef.current = stream;
+            chunksRef.current = [];
+
+            const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+                ? "audio/webm;codecs=opus"
+                : MediaRecorder.isTypeSupported("audio/webm")
+                  ? "audio/webm"
+                  : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+                    ? "audio/ogg;codecs=opus"
+                    : "audio/mp4";
+
+            const recorder = new MediaRecorder(stream, { mimeType });
+            mediaRecorderRef.current = recorder;
+
+            recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    chunksRef.current.push(e.data);
+                }
+            };
+
+            recorder.onstop = async () => {
+                streamRef.current?.getTracks().forEach((t) => t.stop());
+                streamRef.current = null;
+
+                const blob = new Blob(chunksRef.current, { type: mimeType });
+                chunksRef.current = [];
+
+                const ext = mimeType.startsWith("audio/webm") ? "webm" : mimeType.startsWith("audio/ogg") ? "ogg" : "m4a";
+                const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+                const file = new File([blob], `voice_${id}.${ext}`, { type: mimeType });
+
+                if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+                    setUploadError("Voice message is too long (max 10MB)");
+                    return;
+                }
+
+                setIsUploading(true);
+                try {
+                    const uploaded = await uploadAttachment(file);
+                    setPendingAttachments((prev) => [...prev, uploaded]);
+                } catch (err) {
+                    const message = err instanceof Error ? err.message : "Upload failed";
+                    setUploadError(message);
+                } finally {
+                    setIsUploading(false);
+                }
+            };
+
+            recorder.start(250);
+            setIsRecording(true);
+            setRecordingDuration(0);
+            timerRef.current = window.setInterval(() => {
+                setRecordingDuration((prev) => prev + 1);
+            }, 1000);
+        } catch {
+            setUploadError("Microphone access denied");
+        }
+    }
 
     function getInitials(user: OnlineUser): string {
         const first = user.first_name?.trim()?.[0] ?? "";
@@ -35,26 +151,147 @@ export default function MessageInput({
         return "U";
     }
 
+    async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const files = e.target.files;
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        setUploadError("");
+
+        for (const file of Array.from(files)) {
+            if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+                setUploadError(`File "${file.name}" is too large (max 10MB)`);
+                continue;
+            }
+
+            if (!ALLOWED_TYPES.has(file.type)) {
+                setUploadError(`File "${file.name}" has unsupported type`);
+                continue;
+            }
+
+            setIsUploading(true);
+            try {
+                const uploaded = await uploadAttachment(file);
+                setPendingAttachments((prev) => [...prev, uploaded]);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : "Upload failed";
+                setUploadError(message);
+            } finally {
+                setIsUploading(false);
+            }
+        }
+
+        e.target.value = "";
+    }
+
+    function removeAttachment(attachmentId: number) {
+        setPendingAttachments((prev) => prev.filter((a) => a.attachment_id !== attachmentId));
+    }
+
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         const value = text.trim();
-        if (!value || disabled) return;
+        if (!value && pendingAttachments.length === 0) {
+            return;
+        }
+        if (disabled) return;
 
-        await onSend(value);
+        const attachmentIds = pendingAttachments.length > 0
+            ? pendingAttachments.map((a) => a.attachment_id)
+            : undefined;
+
+        await onSend(value, attachmentIds);
         setText("");
+        setPendingAttachments([]);
+        setUploadError("");
     }
+
+    function openFilePicker() {
+        fileInputRef.current?.click();
+    }
+
+    const canSend = !disabled && !isUploading && !isRecording && (text.trim().length > 0 || pendingAttachments.length > 0);
 
     return (
         <form className="message-form" onSubmit={handleSubmit}>
+            {pendingAttachments.length > 0 && (
+                <div className="message-attachments-preview">
+                    {pendingAttachments.map((att) => (
+                        <div key={att.attachment_id} className="attachment-preview-item">
+                            <span className="attachment-preview-name">{att.url.split("/").pop()}</span>
+                            <button
+                                type="button"
+                                className="attachment-preview-remove"
+                                onClick={() => removeAttachment(att.attachment_id)}
+                                aria-label="Remove attachment"
+                            >
+                                <X size={12} />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {uploadError && (
+                <div className="message-upload-error">{uploadError}</div>
+            )}
+            {isRecording && (
+                <div className="voice-recording-bar">
+                    <span className="voice-recording-dot" />
+                    <span className="voice-recording-timer">{formatRecordingDuration(recordingDuration)}</span>
+                    <button
+                        type="button"
+                        className="voice-recording-stop"
+                        onClick={stopRecording}
+                        aria-label="Stop recording"
+                    >
+                        <MicOff size={18} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
+            {!isRecording && (
+                <>
+                    <input
+                        className="message-input"
+                        placeholder={isUploading ? "Uploading..." : "Write a message"}
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        disabled={disabled || isUploading}
+                    />
+                    <button
+                        className="message-voice-btn"
+                        type="button"
+                        onClick={startRecording}
+                        disabled={disabled || isUploading}
+                        aria-label="Record voice message"
+                    >
+                        <Mic size={20} aria-hidden="true" />
+                    </button>
+                </>
+            )}
+            <button
+                className="message-attach-btn"
+                type="button"
+                onClick={openFilePicker}
+                disabled={disabled || isUploading || isRecording}
+                aria-label="Attach file"
+            >
+                <Paperclip size={20} aria-hidden="true" />
+            </button>
             <input
-                className="message-input"
-                placeholder="Write a message"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                disabled={disabled}
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,video/*,audio/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={handleFileChange}
             />
-            <button className="message-send-btn" type="submit" disabled={disabled || !text.trim()}>
-                <Send size={24} aria-hidden="true"/>
+            <button
+                className="message-send-btn"
+                type="submit"
+                disabled={!canSend}
+            >
+                <Send size={24} aria-hidden="true" />
             </button>
             <div className="message-actions-wrap">
                 <button
@@ -79,7 +316,7 @@ export default function MessageInput({
                                     const initials = getInitials(user);
                                     const avatarKey = fullName.toLowerCase();
                                     const avatarUrl = onlineUserAvatarByName[avatarKey] ?? "";
-                                    const userId = (user as OnlineUser & { user_id?: number }).user_id;
+                                    const userId = user.user_id;
                                     const canOpenProfile = typeof userId === "number";
                                     const fallbackKey = fullName || `user-${index}`;
                                     return (
@@ -114,7 +351,7 @@ export default function MessageInput({
                                                     />
                                                 ) : null}
                                                 <div className={`online-users-avatar-fallback ${avatarUrl ? "" : "show"}`}>{initials}</div>
-                                                <span className="online-users-status"/>
+                                                <span className="online-users-status" />
                                             </div>
                                         </li>
                                     );

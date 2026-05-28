@@ -1,4 +1,4 @@
-import type { Message } from "../types/chat.ts";
+import type { Attachment, Message } from "../types/chat.ts";
 
 type Props = {
     messages: Message[];
@@ -56,6 +56,63 @@ function formatMessageTimestamp(isoDate: string): string {
     return `${dayAndMonth}, ${time}`;
 }
 
+function isImageType(contentType: string): boolean {
+    return contentType.startsWith("image/");
+}
+
+function isVideoType(contentType: string): boolean {
+    return contentType.startsWith("video/");
+}
+
+function isAudioType(contentType: string): boolean {
+    return contentType.startsWith("audio/");
+}
+
+function formatFileSize(bytes?: number): string {
+    if (!bytes) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAttachment(att: Attachment) {
+    if (isImageType(att.content_type)) {
+        return (
+            <a key={att.url} href={att.url} target="_blank" rel="noopener noreferrer" className="message-attachment image-attachment">
+                <img src={att.url} alt={att.file_name} className="message-attachment-img" loading="lazy" />
+            </a>
+        );
+    }
+
+    if (isVideoType(att.content_type)) {
+        return (
+            <video key={att.url} src={att.url} controls className="message-attachment video-attachment">
+                <track kind="captions" />
+            </video>
+        );
+    }
+
+    if (isAudioType(att.content_type)) {
+        return (
+            <audio key={att.url} src={att.url} controls className="message-attachment audio-attachment">
+                <track kind="captions" />
+            </audio>
+        );
+    }
+
+    return (
+        <a key={att.url} href={att.url} download={att.file_name} className="message-attachment file-attachment">
+            <span className="file-attachment-icon">📎</span>
+            <span className="file-attachment-info">
+                <span className="file-attachment-name">{att.file_name}</span>
+                {att.size_bytes ? (
+                    <span className="file-attachment-size">{formatFileSize(att.size_bytes)}</span>
+                ) : null}
+            </span>
+        </a>
+    );
+}
+
 export default function MessageList({ messages, currentUserId, onOpenProfile }: Props) {
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
@@ -99,7 +156,12 @@ export default function MessageList({ messages, currentUserId, onOpenProfile }: 
                                     {getAuthorLabel(msg)}
                                 </button>
                             </div>
-                            <div className="message-content">{msg.content}</div>
+                            {msg.content && <div className="message-content">{msg.content}</div>}
+                            {msg.attachments && msg.attachments.length > 0 && (
+                                <div className="message-attachments">
+                                    {msg.attachments.map(renderAttachment)}
+                                </div>
+                            )}
                             <div className="message-timestamp">{formatMessageTimestamp(msg.created_at)}</div>
                         </div>
                     </div>

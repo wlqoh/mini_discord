@@ -48,6 +48,7 @@ type voiceStatus struct {
 }
 
 const maxServerChannelNameLen = 16
+const maxAttachmentsPerMessage = 10
 
 func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
 	return &Hub{
@@ -557,8 +558,12 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 	payload.Content = strings.TrimSpace(payload.Content)
-	if payload.ChannelID <= 0 || payload.Content == "" {
-		h.pushError(req.client, "channel_id and content are required")
+	if payload.ChannelID <= 0 {
+		h.pushError(req.client, "channel_id is required")
+		return
+	}
+	if payload.Content == "" && len(payload.AttachmentIDs) == 0 {
+		h.pushError(req.client, "content or attachment_ids are required")
 		return
 	}
 
@@ -570,6 +575,26 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	if !canAccess {
 		h.pushError(req.client, "access denied")
 		return
+	}
+
+	var pendingAtts []*types.PendingAttachment
+	if len(payload.AttachmentIDs) > 0 {
+		if len(payload.AttachmentIDs) > maxAttachmentsPerMessage {
+			h.pushError(req.client, "too many attachments (max 10)")
+			return
+		}
+		for _, id := range payload.AttachmentIDs {
+			pa, err := h.storage.GetPendingAttachmentByID(ctx, id)
+			if err != nil || pa == nil {
+				h.pushError(req.client, "attachment not found: "+strconv.FormatInt(id, 10))
+				return
+			}
+			if pa.UserID != req.client.UserID {
+				h.pushError(req.client, "attachment not owned by you: "+strconv.FormatInt(id, 10))
+				return
+			}
+			pendingAtts = append(pendingAtts, pa)
+		}
 	}
 
 	recipientUserIDs, err := h.storage.ListChannelMemberUserIDs(ctx, payload.ChannelID)
@@ -584,18 +609,57 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	msg := types.WsMessage{
+	content := payload.Content
+	if content == "" {
+		content = " "
+	}
+
+	msg := &types.WsMessage{
 		ChannelID:       payload.ChannelID,
 		AuthorID:        req.client.UserID,
 		AuthorFirstName: user.FirstName,
 		AuthorLastName:  user.LastName,
 		AuthorAvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
-		Content:         payload.Content,
+		Content:         content,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.storage.SaveMessage(ctx, msg); err != nil {
 		h.pushError(req.client, "failed to save message")
 		return
+	}
+
+	if len(pendingAtts) > 0 {
+		var attachments []types.Attachment
+		for _, pa := range pendingAtts {
+			attachments = append(attachments, types.Attachment{
+				MessageID:   msg.ID,
+				FileKey:     pa.FileKey,
+				FileName:    pa.FileName,
+				ContentType: pa.ContentType,
+				SizeBytes:   pa.SizeBytes,
+			})
+		}
+		if err := h.storage.SaveMessageAttachments(ctx, msg.ID, attachments); err != nil {
+			h.log.Error("failed to save attachments, deleting message", "message_id", msg.ID, "error", err.Error())
+			if delErr := h.storage.DeleteMessage(ctx, msg.ID); delErr != nil {
+				h.log.Error("failed to delete message after attachment save failure", "message_id", msg.ID, "error", delErr.Error())
+			}
+			h.pushError(req.client, "failed to save attachments")
+			return
+		}
+		for i, pa := range pendingAtts {
+			url := utils.AvatarURLFromKey(pa.FileKey, h.s3Host)
+			attachments[i].URL = url
+			attachments[i].ID = 0
+			if err := h.storage.DeletePendingAttachment(ctx, pa.ID); err != nil {
+				h.log.Warn("failed to delete pending attachment", "attachment_id", pa.ID, "error", err.Error())
+			}
+		}
+		msg.Attachments = attachments
+	}
+
+	if msg.Content == " " {
+		msg.Content = ""
 	}
 
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}

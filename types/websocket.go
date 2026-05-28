@@ -19,12 +19,18 @@ type ServerStorage interface {
 	CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error)
 	ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error)
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
-	SaveMessage(ctx context.Context, msg WsMessage) error
+	SaveMessage(ctx context.Context, msg *WsMessage) error
+	DeleteMessage(ctx context.Context, messageID int64) error
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
 	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
+	CreatePendingAttachment(ctx context.Context, pa PendingAttachment) (int64, error)
+	GetPendingAttachmentByID(ctx context.Context, id int64) (*PendingAttachment, error)
+	DeletePendingAttachment(ctx context.Context, id int64) error
+	SaveMessageAttachments(ctx context.Context, messageID int64, attachments []Attachment) error
+	GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]Attachment, error)
 }
 
 const (
@@ -103,8 +109,9 @@ type WsDeleteChannelRequest struct {
 }
 
 type WsSendMessageRequest struct {
-	ChannelID int64  `json:"channel_id"`
-	Content   string `json:"content"`
+	ChannelID     int64   `json:"channel_id"`
+	Content       string  `json:"content"`
+	AttachmentIDs []int64 `json:"attachment_ids,omitempty"`
 }
 
 type WsGetMessagesRequest struct {
@@ -237,15 +244,16 @@ type WsEvent struct {
 }
 
 type WsMessage struct {
-	ID              int64      `json:"id"`
-	ChannelID       int64      `json:"channel_id"`
-	AuthorID        int        `json:"author_id"`
-	AuthorFirstName string     `json:"author_first_name"`
-	AuthorLastName  string     `json:"author_last_name"`
-	AuthorAvatarURL string     `json:"author_avatar_url,omitempty"`
-	Content         string     `json:"content"`
-	CreatedAt       time.Time  `json:"created_at"`
-	EditedAt        *time.Time `json:"edited_at,omitempty"`
+	ID              int64        `json:"id"`
+	ChannelID       int64        `json:"channel_id"`
+	AuthorID        int          `json:"author_id"`
+	AuthorFirstName string       `json:"author_first_name"`
+	AuthorLastName  string       `json:"author_last_name"`
+	AuthorAvatarURL string       `json:"author_avatar_url,omitempty"`
+	Content         string       `json:"content"`
+	Attachments     []Attachment `json:"attachments,omitempty"`
+	CreatedAt       time.Time    `json:"created_at"`
+	EditedAt        *time.Time   `json:"edited_at,omitempty"`
 }
 
 type Server struct {
