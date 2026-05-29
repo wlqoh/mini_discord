@@ -734,15 +734,10 @@ export default function ChatPage() {
                         deafened: false,
                     };
 
-                    const existing = next[response.channel_id] ?? [];
-                    const withoutSelf = existing.filter((p) => p.user_id !== selfParticipant.user_id);
-                    const merged = [...withoutSelf, selfParticipant];
-                    response.participants.forEach((p) => {
-                        if (!merged.some((e) => e.user_id === p.user_id)) {
-                            merged.push(p);
-                        }
-                    });
-                    next[response.channel_id] = merged;
+                    const serverParticipants = response.participants.filter(
+                        (p) => p.user_id !== selfParticipant.user_id,
+                    );
+                    next[response.channel_id] = [selfParticipant, ...serverParticipants];
 
                     return next;
                 });
@@ -1059,13 +1054,6 @@ export default function ChatPage() {
         () => voiceParticipantsByChannel[voiceChannelId] ?? [],
         [voiceParticipantsByChannel, voiceChannelId],
     );
-    const voiceParticipantById = useMemo(() => {
-        const map = new Map<number, VoiceParticipant>();
-        voiceParticipantsInChannel.forEach((participant) => {
-            map.set(participant.user_id, participant);
-        });
-        return map;
-    }, [voiceParticipantsInChannel]);
 
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
@@ -1437,23 +1425,27 @@ export default function ChatPage() {
                                         deafened={isDeafened}
                                     />
                                 )}
-                                {remoteStreams.map((item) => {
-                                    const participant = voiceParticipantById.get(item.userId);
-                                    const userVolume = voiceVolumeByUserId[item.userId] ?? 1;
-                                    const effectiveVolume = isDeafened ? 0 : userVolume;
+                                {voiceParticipantsInChannel
+                                    .filter((p) => p.user_id !== currentUserId)
+                                    .map((participant) => {
+                                        const remoteItem = remoteStreams.find((r) => r.userId === participant.user_id);
+                                        const stream = remoteItem?.stream ?? null;
+                                        const label = remoteItem?.label ?? getParticipantDisplayName(participant);
+                                        const userVolume = voiceVolumeByUserId[participant.user_id] ?? 1;
+                                        const effectiveVolume = isDeafened ? 0 : userVolume;
 
-                                    return (
-                                        <VideoTile
-                                            key={`${item.userId}-${isDeafened ? "deaf" : "live"}`}
-                                            stream={item.stream}
-                                            label={item.label}
-                                            muted={isDeafened}
-                                            volume={effectiveVolume}
-                                            micEnabled={participant?.mic_enabled}
-                                            deafened={participant?.deafened}
-                                        />
-                                    );
-                                })}
+                                        return (
+                                            <VideoTile
+                                                key={`${participant.user_id}-${isDeafened ? "deaf" : "live"}`}
+                                                stream={stream}
+                                                label={label}
+                                                muted={isDeafened}
+                                                volume={effectiveVolume}
+                                                micEnabled={participant.mic_enabled}
+                                                deafened={participant.deafened}
+                                            />
+                                        );
+                                    })}
                             </div>
                         </div>
                     )}
