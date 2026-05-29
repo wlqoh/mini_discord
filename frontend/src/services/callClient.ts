@@ -184,9 +184,12 @@ export class CallClient {
     this.unsubscribers.push(this.socket.onRTCSignal((event) => void this.handleRTCSignal(event)));
   }
 
-  async join(channelID: number): Promise<void> {
+  async join(channelID: number): Promise<JoinVoiceResponse> {
     if (this.currentChannelID === channelID) {
-      return;
+      return {
+        channel_id: channelID,
+        participants: Array.from(this.participants.values()),
+      };
     }
 
     await this.leave();
@@ -219,6 +222,8 @@ export class CallClient {
       const shouldInitiate = this.selfUserID < participant.user_id;
       void this.ensurePeer(participant, shouldInitiate);
     });
+
+    return response;
   }
 
   async startScreenShare(): Promise<void> {
