@@ -7,6 +7,7 @@ import (
 
 type UserStorage interface {
 	CreateUser(context.Context, User) error
+	UpdateUser(ctx context.Context, userID int, user UpdateUserRequest) error
 	DeleteUser(context.Context, int) error
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByID(ctx context.Context, id int) (*User, error)
@@ -18,6 +19,7 @@ type User struct {
 	ID                  int       `json:"id"`
 	FirstName           string    `json:"first_name"`
 	LastName            string    `json:"last_name"`
+	Nickname            string    `json:"nickname"`
 	Email               string    `json:"email"`
 	AvatarKey           string    `json:"avatar_key,omitempty"`
 	AttachmentFolderKey string    `json:"attachment_folder_key,omitempty"`
@@ -28,6 +30,7 @@ type User struct {
 type UserResponse struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	Nickname  string `json:"nickname"`
 	AvatarURL string `json:"avatar_url"`
 	Email     string `json:"email"`
 }
@@ -35,8 +38,15 @@ type UserResponse struct {
 type RegisterUserRequest struct {
 	FirstName string `json:"first_name" validate:"required"`
 	LastName  string `json:"last_name" validate:"required"`
+	Nickname  string `json:"nickname" validate:"required"`
 	Email     string `json:"email" validate:"required,email"`
 	Password  string `json:"password" validate:"required,min=6,max=130"`
+}
+
+type UpdateUserRequest struct {
+	FirstName string `json:"first_name" validate:"required,min=1"`
+	LastName  string `json:"last_name" validate:"required,min=1"`
+	Nickname  string `json:"nickname" validate:"required,min=1"`
 }
 
 type DeleteUserRequest struct {
