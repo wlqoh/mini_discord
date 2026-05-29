@@ -696,9 +696,11 @@ export default function ChatPage() {
             return;
         }
 
+        const previousChannelId = voiceChannelId;
+
         try {
-            await callClientRef.current.join(selectedChannelId);
-            setVoiceChannelId(selectedChannelId);
+            const response = await callClientRef.current.join(selectedChannelId);
+            setVoiceChannelId(response.channel_id);
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
@@ -706,6 +708,40 @@ export default function ChatPage() {
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
             setError("");
+
+            if (currentUserId) {
+                setVoiceParticipantsByChannel((prev) => {
+                    const next = { ...prev };
+
+                    if (previousChannelId > 0 && previousChannelId !== response.channel_id) {
+                        const prevChannel = next[previousChannelId];
+                        if (prevChannel) {
+                            const filtered = prevChannel.filter((p) => p.user_id !== currentUserId);
+                            if (filtered.length === 0) {
+                                delete next[previousChannelId];
+                            } else {
+                                next[previousChannelId] = filtered;
+                            }
+                        }
+                    }
+
+                    const selfParticipant: VoiceParticipant = {
+                        user_id: currentUserId,
+                        first_name: currentUserProfile?.first_name || undefined,
+                        last_name: currentUserProfile?.last_name || undefined,
+                        avatar_url: avatarUrl || undefined,
+                        mic_enabled: true,
+                        deafened: false,
+                    };
+
+                    const serverParticipants = response.participants.filter(
+                        (p) => p.user_id !== selfParticipant.user_id,
+                    );
+                    next[response.channel_id] = [selfParticipant, ...serverParticipants];
+
+                    return next;
+                });
+            }
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to join voice channel";
             setError(message);
@@ -713,6 +749,8 @@ export default function ChatPage() {
     }
 
     async function handleLeaveVoice(): Promise<void> {
+        const channelId = voiceChannelId;
+
         try {
             await callClientRef.current?.leave();
         } finally {
@@ -724,6 +762,19 @@ export default function ChatPage() {
             setIsSwitchingCamera(false);
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
+
+            if (channelId > 0 && currentUserId) {
+                setVoiceParticipantsByChannel((prev) => {
+                    const current = prev[channelId] ?? [];
+                    const next = current.filter((p) => p.user_id !== currentUserId);
+                    if (!next.length) {
+                        const rest = { ...prev };
+                        delete rest[channelId];
+                        return rest;
+                    }
+                    return { ...prev, [channelId]: next };
+                });
+            }
         }
     }
 
@@ -857,6 +908,18 @@ export default function ChatPage() {
         if (currentUserId && voiceChannelId > 0 && socketRef.current) {
             void socketRef.current.changeVoiceStatus(currentUserId, next, isDeafened);
         }
+
+        if (currentUserId && voiceChannelId > 0) {
+            setVoiceParticipantsByChannel((prev) => {
+                const channel = prev[voiceChannelId];
+                if (!channel) return prev;
+                const idx = channel.findIndex((p) => p.user_id === currentUserId);
+                if (idx === -1) return prev;
+                const updated = [...channel];
+                updated[idx] = { ...updated[idx], mic_enabled: next };
+                return { ...prev, [voiceChannelId]: updated };
+            });
+        }
     }
 
     function toggleCamera(): void {
@@ -918,6 +981,18 @@ export default function ChatPage() {
             if (currentUserId && voiceChannelId > 0 && socketRef.current) {
                 void socketRef.current.changeVoiceStatus(currentUserId, false, true);
             }
+
+            if (currentUserId && voiceChannelId > 0) {
+                setVoiceParticipantsByChannel((prev) => {
+                    const channel = prev[voiceChannelId];
+                    if (!channel) return prev;
+                    const idx = channel.findIndex((p) => p.user_id === currentUserId);
+                    if (idx === -1) return prev;
+                    const updated = [...channel];
+                    updated[idx] = { ...updated[idx], mic_enabled: false, deafened: true };
+                    return { ...prev, [voiceChannelId]: updated };
+                });
+            }
         } else {
             setIsDeafened(false);
             const restoreMic = micBeforeDeafenRef.current;
@@ -926,6 +1001,18 @@ export default function ChatPage() {
 
             if (currentUserId && voiceChannelId > 0 && socketRef.current) {
                 void socketRef.current.changeVoiceStatus(currentUserId, restoreMic, false);
+            }
+
+            if (currentUserId && voiceChannelId > 0) {
+                setVoiceParticipantsByChannel((prev) => {
+                    const channel = prev[voiceChannelId];
+                    if (!channel) return prev;
+                    const idx = channel.findIndex((p) => p.user_id === currentUserId);
+                    if (idx === -1) return prev;
+                    const updated = [...channel];
+                    updated[idx] = { ...updated[idx], mic_enabled: restoreMic, deafened: false };
+                    return { ...prev, [voiceChannelId]: updated };
+                });
             }
         }
     }
@@ -967,13 +1054,6 @@ export default function ChatPage() {
         () => voiceParticipantsByChannel[voiceChannelId] ?? [],
         [voiceParticipantsByChannel, voiceChannelId],
     );
-    const voiceParticipantById = useMemo(() => {
-        const map = new Map<number, VoiceParticipant>();
-        voiceParticipantsInChannel.forEach((participant) => {
-            map.set(participant.user_id, participant);
-        });
-        return map;
-    }, [voiceParticipantsInChannel]);
 
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
@@ -1345,23 +1425,27 @@ export default function ChatPage() {
                                         deafened={isDeafened}
                                     />
                                 )}
-                                {remoteStreams.map((item) => {
-                                    const participant = voiceParticipantById.get(item.userId);
-                                    const userVolume = voiceVolumeByUserId[item.userId] ?? 1;
-                                    const effectiveVolume = isDeafened ? 0 : userVolume;
+                                {voiceParticipantsInChannel
+                                    .filter((p) => p.user_id !== currentUserId)
+                                    .map((participant) => {
+                                        const remoteItem = remoteStreams.find((r) => r.userId === participant.user_id);
+                                        const stream = remoteItem?.stream ?? null;
+                                        const label = remoteItem?.label ?? getParticipantDisplayName(participant);
+                                        const userVolume = voiceVolumeByUserId[participant.user_id] ?? 1;
+                                        const effectiveVolume = isDeafened ? 0 : userVolume;
 
-                                    return (
-                                        <VideoTile
-                                            key={`${item.userId}-${isDeafened ? "deaf" : "live"}`}
-                                            stream={item.stream}
-                                            label={item.label}
-                                            muted={isDeafened}
-                                            volume={effectiveVolume}
-                                            micEnabled={participant?.mic_enabled}
-                                            deafened={participant?.deafened}
-                                        />
-                                    );
-                                })}
+                                        return (
+                                            <VideoTile
+                                                key={`${participant.user_id}-${isDeafened ? "deaf" : "live"}`}
+                                                stream={stream}
+                                                label={label}
+                                                muted={isDeafened}
+                                                volume={effectiveVolume}
+                                                micEnabled={participant.mic_enabled}
+                                                deafened={participant.deafened}
+                                            />
+                                        );
+                                    })}
                             </div>
                         </div>
                     )}
