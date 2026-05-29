@@ -19,6 +19,7 @@ import type {
     VoiceParticipantsByChannel,
 } from "../types/chat.ts";
 import {getMyAvatarUrl, uploadMyAvatar} from "../services/avatarApi.ts";
+import {playJoinSound, playLeaveSound} from "../services/sounds.ts";
 import "../styles/chat.css";
 
 const CHAT_SERVERS_KEY = "chat_servers";
@@ -709,6 +710,8 @@ export default function ChatPage() {
             setIsTogglingScreenShare(false);
             setError("");
 
+            playJoinSound();
+
             if (currentUserId) {
                 setVoiceParticipantsByChannel((prev) => {
                     const next = { ...prev };
@@ -753,6 +756,7 @@ export default function ChatPage() {
 
         try {
             await callClientRef.current?.leave();
+            playLeaveSound();
         } finally {
             setVoiceChannelId(0);
             setRemoteStreams([]);
@@ -1034,8 +1038,9 @@ export default function ChatPage() {
         currentServer.owner_id === currentUserId;
     const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
     const isVoiceChannel = currentChannel?.type === "voice";
+    const isInVoiceCall = voiceChannelId > 0;
     const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
-    const shouldHideMessageInput = isInSelectedVoiceChannel;
+    const shouldHideMessageInput = isVoiceChannel;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
     const userInitial =
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
@@ -1366,14 +1371,10 @@ export default function ChatPage() {
                             {currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}
                         </div>
                     </div>
-                    {isVoiceChannel && (
+                    {(isInVoiceCall || isVoiceChannel) && (
                         <div className="voice-panel">
                             <div className="voice-controls">
-                                {!isInSelectedVoiceChannel ? (
-                                    <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
-                                        Join
-                                    </button>
-                                ) : (
+                                {isInVoiceCall ? (
                                     <>
                                         <button className="message-send-btn" onClick={() => void handleLeaveVoice()}>
                                             Leave
@@ -1412,9 +1413,19 @@ export default function ChatPage() {
                                             {isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}
                                         </button>
+                                        {isVoiceChannel && !isInSelectedVoiceChannel && (
+                                            <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
+                                                Switch
+                                            </button>
+                                        )}
                                     </>
+                                ) : (
+                                    <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
+                                        Join
+                                    </button>
                                 )}
                             </div>
+                            {isInVoiceCall && (
                             <div className="video-grid">
                                 {localStream && (
                                     <VideoTile
@@ -1447,6 +1458,7 @@ export default function ChatPage() {
                                         );
                                     })}
                             </div>
+                            )}
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
