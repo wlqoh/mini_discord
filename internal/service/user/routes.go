@@ -293,39 +293,10 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
-	secret := []byte(h.cfg.JWTSecret)
-	accessToken, accessClaims, err := auth.CreateJWT(
-		secret,
-		u.ID,
-		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
-	)
-	if err != nil {
-		h.log.Error(op, "error", err.Error())
-		return utils.WriteError(c, fiber.StatusBadRequest, "auth error")
+	res := types.UserResponse{
+		FirstName: u.FirstName,
+		LastName:  u.LastName,
 	}
-
-	refreshToken, refreshClaims, err := auth.CreateJWT(
-		secret,
-		u.ID,
-		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
-	)
-	if err != nil {
-		h.log.Error(op, "error", err.Error())
-		return utils.WriteError(c, fiber.StatusBadRequest, "auth error")
-	}
-
-	res := types.LoginUserResponse{
-		AccessToken:           accessToken,
-		RefreshToken:          refreshToken,
-		AccessTokenExpiresAt:  accessClaims.RegisteredClaims.ExpiresAt.Time,
-		RefreshTokenExpiresAt: refreshClaims.RegisteredClaims.ExpiresAt.Time,
-		User: types.UserResponse{
-			FirstName: u.FirstName,
-			LastName:  u.LastName,
-			Email:     u.Email,
-		},
-	}
-
 	return c.Status(fiber.StatusOK).JSON(res)
 }
 
