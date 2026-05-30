@@ -26,6 +26,7 @@ export interface Message {
     author_id: number;
     author_first_name?: string;
     author_last_name?: string;
+    author_nickname?: string;
     author_avatar_url?: string;
     content: string;
     attachments?: Attachment[];
@@ -36,6 +37,7 @@ export interface VoiceParticipant {
     user_id: number;
     first_name?: string;
     last_name?: string;
+    nickname?: string;
     avatar_url?: string;
     mic_enabled?: boolean;
     deafened?: boolean
@@ -47,8 +49,12 @@ export interface VoiceChannelParticipants {
 }
 
 export interface OnlineUser {
-    first_name: string;
-    last_name: string;
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    user_id?: number;
+    avatar_url?: string;
+    email?: string;
 }
 
 export interface JoinVoiceResponse {
@@ -85,6 +91,7 @@ export interface UserProfile {
     user_id: number;
     first_name: string;
     last_name: string;
+    nickname?: string;
     avatar_url?: string;
 }
 

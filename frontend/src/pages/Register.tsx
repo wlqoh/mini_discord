@@ -12,6 +12,7 @@ interface RegisterFormData {
   email: string;
   password: string;
   confirmPassword: string;
+  nickname: string;
 }
 
 export default function Register(): React.JSX.Element {
@@ -23,6 +24,7 @@ export default function Register(): React.JSX.Element {
     email: "",
     password: "",
     confirmPassword: "",
+    nickname: "",
   });
 
   const [error, setError] = useState<string>("");
@@ -43,9 +45,10 @@ export default function Register(): React.JSX.Element {
       !formData.lastName ||
       !formData.email ||
       !formData.password ||
-      !formData.confirmPassword
+      !formData.confirmPassword ||
+      !formData.nickname
     ) {
-      setError("Please gap all fields");
+      setError("Please fill all fields");
       return false;
     }
 
@@ -61,6 +64,11 @@ export default function Register(): React.JSX.Element {
 
     if (formData.password !== formData.confirmPassword) {
       setError("The passwords don't match");
+      return false;
+    }
+
+    if (formData.nickname.length < 5) {
+      setError("The nickname must be at least 5 characters long");
       return false;
     }
 
@@ -82,6 +90,7 @@ export default function Register(): React.JSX.Element {
         last_name: formData.lastName,
         email: formData.email,
         password: formData.password,
+        nickname: formData.nickname,
       });
 
       if (response.status === 200 || response.status === 201) {
@@ -165,6 +174,19 @@ export default function Register(): React.JSX.Element {
               value={formData.confirmPassword}
               onChange={handleChange}
               placeholder="Re-enter password"
+              disabled={loading}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="nickname">Nickname</label>
+            <input
+              type="text"
+              id="nickname"
+              name="nickname"
+              value={formData.nickname}
+              onChange={handleChange}
+              placeholder="Minimum 5 characters long."
               disabled={loading}
             />
           </div>

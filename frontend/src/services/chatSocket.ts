@@ -96,10 +96,11 @@ function toMessage(raw: unknown): Message | null {
   type RawMessage = Partial<Message> & {
     author_first_name?: unknown;
     author_last_name?: unknown;
-    author_avatar_url?: unknown;
+    author_nickname?: unknown;
     auuthor_avatar_url?: unknown;
     authorAvatarUrl?: unknown;
     avatar_url?: unknown;
+    nickname?: unknown;
     first_name?: unknown;
     last_name?: unknown;
     authorFirstName?: unknown;
@@ -107,8 +108,10 @@ function toMessage(raw: unknown): Message | null {
     author?: {
       first_name?: unknown;
       last_name?: unknown;
+      nickname?: unknown;
       firstName?: unknown;
       lastName?: unknown;
+      nickName?: unknown;
     } | unknown;
     attachments?: unknown;
   };
@@ -127,8 +130,10 @@ function toMessage(raw: unknown): Message | null {
       ? (candidate.author as {
           first_name?: unknown;
           last_name?: unknown;
+          nickname?: unknown;
           firstName?: unknown;
           lastName?: unknown;
+          nickName?: unknown;
         })
       : null;
 
@@ -148,6 +153,13 @@ function toMessage(raw: unknown): Message | null {
     (typeof candidate.authorLastName === "string" && candidate.authorLastName) ||
     "";
 
+  const authorNickname =
+    (typeof candidate.author_nickname === "string" && candidate.author_nickname) ||
+    (authorObject && typeof authorObject.nickname === "string" ? authorObject.nickname : "") ||
+    (authorObject && typeof authorObject.nickName === "string" ? authorObject.nickName : "") ||
+    (typeof candidate.nickname === "string" && candidate.nickname) ||
+    "";
+
   const authorAvatarUrl =
     (typeof candidate.author_avatar_url === "string" && candidate.author_avatar_url) ||
     (typeof candidate.auuthor_avatar_url === "string" && candidate.auuthor_avatar_url) ||
@@ -161,6 +173,7 @@ function toMessage(raw: unknown): Message | null {
     author_id: candidate.author_id,
     author_first_name: authorFirstName,
     author_last_name: authorLastName,
+    author_nickname: authorNickname,
     author_avatar_url: authorAvatarUrl,
     content: candidate.content,
     attachments: parseAttachments(candidate.attachments),
@@ -537,6 +550,7 @@ export class ChatSocket {
           user_id?: number;
           first_name?: string;
           last_name?: string;
+          nickname?: string;
           avatar_url?: string;
           mic_enabled?: boolean;
           deafened?: boolean;
@@ -567,6 +581,7 @@ export class ChatSocket {
                     user_id: participant.user_id as number,
                     first_name: typeof participant.first_name === "string" ? participant.first_name : undefined,
                     last_name: typeof participant.last_name === "string" ? participant.last_name : undefined,
+                    nickname: typeof participant.nickname === "string" ? participant.nickname : undefined,
                     avatar_url: typeof participant.avatar_url === "string" ? participant.avatar_url : undefined,
                     mic_enabled: typeof participant.mic_enabled === "boolean" ? participant.mic_enabled : undefined,
                     deafened: typeof participant.deafened === "boolean" ? participant.deafened : undefined,
@@ -580,7 +595,16 @@ export class ChatSocket {
 
   async getUsersOnline(serverId: number): Promise<OnlineUser[]> {
     const data = await this.sendCommand("get_users_online", { server_id: serverId });
-    const payload = data as { users?: Array<{ first_name?: string; last_name?: string }> };
+    const payload = data as {
+      users?: Array<{
+        first_name?: string;
+        last_name?: string;
+        nickname?: string;
+        user_id?: number;
+        avatar_url?: string;
+        email?: string;
+      }>;
+    };
 
     if (!Array.isArray(payload?.users)) {
       return [];
@@ -589,12 +613,18 @@ export class ChatSocket {
     return payload.users
       .filter(
         (user) =>
-          typeof user.first_name === "string" &&
-          typeof user.last_name === "string",
+          typeof user.nickname === "string" ||
+          typeof user.first_name === "string" ||
+          typeof user.last_name === "string" ||
+          typeof user.email === "string",
       )
       .map((user) => ({
-        first_name: user.first_name as string,
-        last_name: user.last_name as string,
+        first_name: typeof user.first_name === "string" ? user.first_name : undefined,
+        last_name: typeof user.last_name === "string" ? user.last_name : undefined,
+        nickname: typeof user.nickname === "string" ? user.nickname : undefined,
+        user_id: typeof user.user_id === "number" ? user.user_id : undefined,
+        avatar_url: typeof user.avatar_url === "string" ? user.avatar_url : undefined,
+        email: typeof user.email === "string" ? user.email : undefined,
       }));
   }
 
@@ -660,13 +690,13 @@ export class ChatSocket {
 
   async getUserInfo(userId: number): Promise<UserProfile> {
     const data = await this.sendCommand("get_user_info", { user_id: userId });
-    const payload = data as { user_id?: number; first_name?: string; last_name?: string; avatar_url?: string };
+    const payload = data as { user_id?: number; first_name?: string; last_name?: string; nickname?: string; avatar_url?: string };
     return {
       user_id: typeof payload.user_id === "number" ? payload.user_id : userId,
       first_name: typeof payload.first_name === "string" ? payload.first_name : "",
       last_name: typeof payload.last_name === "string" ? payload.last_name : "",
+      nickname: typeof payload.nickname === "string" ? payload.nickname : undefined,
       avatar_url: typeof payload.avatar_url === "string" ? payload.avatar_url : "",
     };
   }
 }
-

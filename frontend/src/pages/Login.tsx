@@ -20,6 +20,7 @@ interface LoginResponse {
     first_name?: string;
     last_name?: string;
     email?: string;
+    nickname?: string;
   };
 }
 
@@ -57,7 +58,7 @@ export default function Login(): React.JSX.Element {
 
   const validateForm = (): boolean => {
     if (!formData.email || !formData.password) {
-      setError("Please gap all fields.");
+      setError("Please fill all fields.");
       return false;
     }
 

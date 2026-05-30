@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE email = $1", email)
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE email = $1", email)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -30,6 +30,7 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 		&u.ID,
 		&u.FirstName,
 		&u.LastName,
+		&u.Nickname,
 		&u.Email,
 		&avatarKey,
 		&folderKey,
@@ -55,7 +56,7 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 }
 
 func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE id = $1", id)
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE id = $1", id)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -102,8 +103,14 @@ func (s *Storage) GetOrCreateAttachmentFolderKey(ctx context.Context, userID int
 }
 
 func (s *Storage) CreateUser(ctx context.Context, user types.User) error {
-	return s.db.QueryRowContext(ctx, "INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id",
-		user.FirstName, user.LastName, user.Email, user.Password).Scan(&user.ID)
+	return s.db.QueryRowContext(ctx, "INSERT INTO users (first_name, last_name, nickname, email, password) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+		user.FirstName, user.LastName, user.Nickname, user.Email, user.Password).Scan(&user.ID)
+}
+
+func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateUserRequest) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE users SET first_name = $1, last_name = $2, nickname = $3, updated_at = NOW() WHERE id = $4",
+		user.FirstName, user.LastName, user.Nickname, userID)
+	return err
 }
 
 func (s *Storage) DeleteUser(ctx context.Context, userID int) error {

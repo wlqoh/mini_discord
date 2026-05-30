@@ -91,6 +91,7 @@ type WsGetUserInfoResponse struct {
 	UserID    int    `json:"user_id"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
+	Nickname  string `json:"nickname,omitempty"`
 	AvatarURL string `json:"avatar_url"`
 }
 
@@ -150,6 +151,7 @@ type WsVoiceParticipant struct {
 	UserID     int    `json:"user_id"`
 	FirstName  string `json:"first_name,omitempty"`
 	LastName   string `json:"last_name,omitempty"`
+	Nickname   string `json:"nickname,omitempty"`
 	MicEnabled bool   `json:"mic_enabled"`
 	Deafened   bool   `json:"deafened"`
 	AvatarURL  string `json:"avatar_url,omitempty"`
@@ -249,6 +251,7 @@ type WsMessage struct {
 	AuthorID        int          `json:"author_id"`
 	AuthorFirstName string       `json:"author_first_name"`
 	AuthorLastName  string       `json:"author_last_name"`
+	AuthorNickname  string       `json:"author_nickname,omitempty"`
 	AuthorAvatarURL string       `json:"author_avatar_url,omitempty"`
 	Content         string       `json:"content"`
 	Attachments     []Attachment `json:"attachments,omitempty"`

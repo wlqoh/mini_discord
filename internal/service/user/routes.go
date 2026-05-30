@@ -41,6 +41,7 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/upload", uploadLimiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleUpload)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
+	router.Post("/updateUser", auth.WithJWTAuth(h.storage, h.log, false), h.handleUpdateUser)
 	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {
@@ -216,6 +217,7 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 		User: types.UserResponse{
 			FirstName: u.FirstName,
 			LastName:  u.LastName,
+			Nickname:  u.Nickname,
 			AvatarURL: utils.AvatarURLFromKey(u.AvatarKey, h.cfg.S3HOST),
 			Email:     u.Email,
 		},
@@ -241,6 +243,45 @@ func (h *Handler) handleDeleteUser(c *fiber.Ctx) error {
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{})
+}
+
+func (h *Handler) handleUpdateUser(c *fiber.Ctx) error {
+	const op = "service.user.handleUpdateUser"
+
+	rawUserID := c.Locals("user_id")
+	clientID, ok := rawUserID.(int)
+
+	if !ok || clientID <= 0 {
+		return utils.PermissionDenied(c)
+	}
+
+	var payload types.UpdateUserRequest
+
+	err := c.BodyParser(&payload)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := utils.Validate.Struct(payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
+	}
+
+	err = h.storage.UpdateUser(c.Context(), clientID, types.UpdateUserRequest{
+		FirstName: payload.FirstName,
+		LastName:  payload.LastName,
+		Nickname:  payload.Nickname,
+	})
+
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to update user")
+	}
+
+	c.Status(fiber.StatusOK)
+
+	return nil
 }
 
 func (h *Handler) handleRegister(c *fiber.Ctx) error {
@@ -275,6 +316,7 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 		c.Context(), types.User{
 			FirstName: payload.FirstName,
 			LastName:  payload.LastName,
+			Nickname:  payload.Nickname,
 			Email:     payload.Email,
 			Password:  hashedPassword,
 		})
@@ -296,6 +338,7 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	res := types.UserResponse{
 		FirstName: u.FirstName,
 		LastName:  u.LastName,
+		Nickname:  u.Nickname,
 	}
 	return c.Status(fiber.StatusOK).JSON(res)
 }

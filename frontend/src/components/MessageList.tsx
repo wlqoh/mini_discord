@@ -7,6 +7,11 @@ type Props = {
 };
 
 function getAuthorLabel(msg: Message): string {
+    const nickname = msg.author_nickname?.trim() ?? "";
+    if (nickname) {
+        return nickname;
+    }
+
     const firstName = msg.author_first_name?.trim() ?? "";
     const lastName = msg.author_last_name?.trim() ?? "";
     const fullName = `${firstName} ${lastName}`.trim();
@@ -15,6 +20,18 @@ function getAuthorLabel(msg: Message): string {
 }
 
 function getAuthorInitials(msg: Message): string {
+    const nickname = msg.author_nickname?.trim() ?? "";
+    if (nickname) {
+        const initials = nickname
+            .split(/\s+/)
+            .filter(Boolean)
+            .map((part) => part[0] ?? "")
+            .join("")
+            .slice(0, 2)
+            .toUpperCase();
+        return initials || nickname[0]?.toUpperCase() || "U";
+    }
+
     const first = msg.author_first_name?.trim()?.[0] ?? "";
     const last = msg.author_last_name?.trim()?.[0] ?? "";
     const initials = `${first}${last}`.toUpperCase();
