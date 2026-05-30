@@ -26,9 +26,6 @@ type ServerStorage interface {
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
 	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
-	CreatePendingAttachment(ctx context.Context, pa PendingAttachment) (int64, error)
-	GetPendingAttachmentByID(ctx context.Context, id int64) (*PendingAttachment, error)
-	DeletePendingAttachment(ctx context.Context, id int64) error
 	SaveMessageAttachments(ctx context.Context, messageID int64, attachments []Attachment) error
 	GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]Attachment, error)
 }

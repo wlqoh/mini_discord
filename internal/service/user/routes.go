@@ -22,13 +22,14 @@ import (
 type Handler struct {
 	storage       types.UserStorage
 	serverStorage types.ServerStorage
+	pendingStore  types.PendingAttachmentStore
 	cfg           *config.Config
 	log           *slog.Logger
 	s3Client      types.S3ClientStorage
 }
 
-func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
-	return &Handler{storage: storage, serverStorage: serverStorage, cfg: cfg, log: log, s3Client: s3Client}
+func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, pendingStore types.PendingAttachmentStore, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
+	return &Handler{storage: storage, serverStorage: serverStorage, pendingStore: pendingStore, cfg: cfg, log: log, s3Client: s3Client}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
@@ -476,19 +477,13 @@ func (h *Handler) handleUpload(c *fiber.Ctx) error {
 
 	s3Key := fmt.Sprintf("attachments/%s/%s_%s", folderKey, fileSuffix, file.Filename)
 	pa := types.PendingAttachment{
-		UserID:      clientID,
-		FolderKey:   folderKey,
-		FileKey:     s3Key,
-		FileName:    file.Filename,
-		ContentType: contentType,
-		SizeBytes:   int64(len(raw)),
+		UserID:    clientID,
+		FolderKey: folderKey,
+		FileKey:   s3Key,
+		SizeBytes: int64(len(raw)),
 	}
 
-	attachmentID, err := h.serverStorage.CreatePendingAttachment(c.Context(), pa)
-	if err != nil {
-		h.log.Error("upload: failed to create pending attachment", "error", err.Error())
-		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to create attachment")
-	}
+	attachmentID := h.pendingStore.StorePendingAttachment(pa)
 
 	return c.Status(fiber.StatusOK).JSON(types.UploadResponse{
 		AttachmentID: attachmentID,
