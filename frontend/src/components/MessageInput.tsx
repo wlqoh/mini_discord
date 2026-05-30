@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import type { AttachmentUploadResponse } from "../services/avatarApi.ts";
 import { uploadAttachment } from "../services/avatarApi.ts";
+import type { OnlineUser } from "../types/chat.ts";
 
 type Props = {
     disabled?: boolean;
@@ -13,12 +14,6 @@ type Props = {
     onlineUserAvatarByName: Record<string, string>;
     onOpenProfile?: (userId: number) => void;
 };
-
-interface OnlineUser {
-    first_name?: string;
-    last_name?: string;
-    user_id?: number;
-}
 
 const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set([
@@ -142,13 +137,19 @@ export default function MessageInput({
     }
 
     function getInitials(user: OnlineUser): string {
-        const first = user.first_name?.trim()?.[0] ?? "";
-        const last = user.last_name?.trim()?.[0] ?? "";
-        const initials = `${first}${last}`.toUpperCase();
-        if (initials) {
-            return initials;
+        const nickname = user.nickname?.trim() ?? "";
+        if (nickname) {
+            const initials = nickname
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((part) => part[0] ?? "")
+                .join("")
+                .slice(0, 2)
+                .toUpperCase();
+            return initials || nickname[0]?.toUpperCase() || "U";
         }
-        return "U";
+        const initials = `${user.first_name?.[0] ?? ""}${user.last_name?.[0] ?? ""}`.toUpperCase();
+        return initials || "U";
     }
 
     async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -312,13 +313,15 @@ export default function MessageInput({
                         {!isOnlineUsersLoading && onlineUsers.length > 0 ? (
                             <ul className="online-users-list">
                                 {onlineUsers.map((user, index) => {
-                                    const fullName = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
+                                    const nickname = user.nickname?.trim() || "";
+                                    const displayName = nickname || "User";
                                     const initials = getInitials(user);
-                                    const avatarKey = fullName.toLowerCase();
-                                    const avatarUrl = onlineUserAvatarByName[avatarKey] ?? "";
+                                    const avatarKey = displayName.toLowerCase();
+                                    const directAvatarUrl = user.avatar_url?.trim() || "";
+                                    const avatarUrl = directAvatarUrl || (onlineUserAvatarByName[avatarKey] ?? "");
                                     const userId = user.user_id;
                                     const canOpenProfile = typeof userId === "number";
-                                    const fallbackKey = fullName || `user-${index}`;
+                                    const fallbackKey = displayName || `user-${index}`;
                                     return (
                                         <li
                                             key={userId ?? fallbackKey}
@@ -335,7 +338,7 @@ export default function MessageInput({
                                             }}
                                         >
                                             <div className="online-users-meta">
-                                                <div className="online-users-name">{fullName || "User"}</div>
+                                                <div className="online-users-name">{displayName}</div>
                                             </div>
                                             <div className="online-users-avatar-wrap" aria-hidden="true">
                                                 {avatarUrl ? (

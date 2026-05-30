@@ -530,6 +530,7 @@ func (h *Hub) getUsersOnline(req wsCommandRequest, ctx context.Context) {
 			onlineUsers = append(onlineUsers, types.UserResponse{
 				FirstName: user.FirstName,
 				LastName:  user.LastName,
+				Nickname:  user.Nickname,
 				AvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 				Email:     user.Email,
 			})
@@ -619,6 +620,7 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		AuthorID:        req.client.UserID,
 		AuthorFirstName: user.FirstName,
 		AuthorLastName:  user.LastName,
+		AuthorNickname:  user.Nickname,
 		AuthorAvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 		Content:         content,
 		CreatedAt:       time.Now().UTC(),
@@ -982,6 +984,7 @@ func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsV
 
 	participant.FirstName = user.FirstName
 	participant.LastName = user.LastName
+	participant.Nickname = user.Nickname
 	participant.AvatarURL = utils.AvatarURLFromKey(user.AvatarKey, h.s3Host)
 	return participant
 }
@@ -1053,6 +1056,7 @@ func (h *Hub) getUserInfo(req wsCommandRequest, ctx context.Context) {
 			UserID:    user.ID,
 			FirstName: user.FirstName,
 			LastName:  user.LastName,
+			Nickname:  user.Nickname,
 			AvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 		},
 	})

@@ -4,6 +4,7 @@ const USER_PROFILE_KEY = "current_user";
 export interface CurrentUserProfile {
   first_name?: string;
   last_name?: string;
+  nickname?: string;
   email?: string;
 }
 
@@ -104,10 +105,11 @@ function parseStoredProfile(raw: string | null): CurrentUserProfile | null {
     const profile: CurrentUserProfile = {
       first_name: typeof parsed.first_name === "string" ? parsed.first_name : undefined,
       last_name: typeof parsed.last_name === "string" ? parsed.last_name : undefined,
+      nickname: typeof parsed.nickname === "string" ? parsed.nickname : undefined,
       email: typeof parsed.email === "string" ? parsed.email : undefined,
     };
 
-    if (!profile.first_name && !profile.last_name && !profile.email) {
+    if (!profile.first_name && !profile.last_name && !profile.nickname && !profile.email) {
       return null;
     }
 
@@ -126,10 +128,11 @@ function decodeJwtPayload(token: string): CurrentUserProfile | null {
   const profile: CurrentUserProfile = {
     first_name: typeof parsed.first_name === "string" ? parsed.first_name : undefined,
     last_name: typeof parsed.last_name === "string" ? parsed.last_name : undefined,
+    nickname: typeof parsed.nickname === "string" ? parsed.nickname : undefined,
     email: typeof parsed.email === "string" ? parsed.email : undefined,
   };
 
-  if (!profile.first_name && !profile.last_name && !profile.email) {
+  if (!profile.first_name && !profile.last_name && !profile.nickname && !profile.email) {
     return null;
   }
 
@@ -177,4 +180,3 @@ export function getCurrentUserId(): number | null {
 
   return null;
 }
-

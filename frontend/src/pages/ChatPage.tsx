@@ -4,6 +4,8 @@ import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, Ref
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
+import API from "../api";
+import { extractApiError } from "../services/apiError";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
@@ -82,16 +84,21 @@ export default function ChatPage() {
     const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
     const [selectedProfileError, setSelectedProfileError] = useState("");
     const [isProfileLoading, setIsProfileLoading] = useState(false);
-    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>({});
-    const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
-    const [isMicEnabled, setIsMicEnabled] = useState(true);
-    const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [nicknameDraft, setNicknameDraft] = useState("");
+    const [profileUpdateError, setProfileUpdateError] = useState("");
+    const [isSavingNickname, setIsSavingNickname] = useState(false);
     const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
     const [isDeafened, setIsDeafened] = useState(false);
+    const [isMicEnabled, setIsMicEnabled] = useState(true);
+    const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>({});
+    const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const micBeforeDeafenRef = useRef(true);
-    const currentUserProfile: CurrentUserProfile | null = getCurrentUserProfile();
+    const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfile | null>(
+        () => getCurrentUserProfile(),
+    );
     const currentUserId: number | null = getCurrentUserId();
     const isMobileDevice = useMemo(() => {
         if (typeof navigator === "undefined" || typeof window === "undefined") {
@@ -108,13 +115,16 @@ export default function ChatPage() {
     const [avatarError, setAvatarError] = useState("");
     const [isAvatarUploading, setIsAvatarUploading] = useState(false);
     const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
+        const nickname = participant.nickname?.trim();
+        if (nickname) {
+            return nickname;
+        }
         const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
         if (fullName) {
             return fullName;
         }
         return `User ${participant.user_id}`;
     }, []);
-
 
     const handleAuthFailure = useCallback(
         (message: string): void => {
@@ -134,10 +144,55 @@ export default function ChatPage() {
         setSelectedProfileUserId(null);
         setSelectedProfile(null);
         setSelectedProfileError("");
+        setProfileUpdateError("");
         setIsProfileLoading(false);
         setIsAvatarPreviewOpen(false);
+        setNicknameDraft(currentUserProfile?.nickname ?? "");
         setIsProfileModalOpen(true);
-    }, []);
+    }, [currentUserProfile?.nickname]);
+
+    async function handleSaveNickname(): Promise<void> {
+        if (!currentUserProfile) {
+            setProfileUpdateError("Profile not loaded");
+            return;
+        }
+        const firstName = profileFirstName?.trim() ?? "";
+        const lastName = profileLastName?.trim() ?? "";
+        const nickname = nicknameDraft.trim();
+        if (!firstName || !lastName || !nickname) {
+            setProfileUpdateError("First name, last name, and nickname are required");
+            return;
+        }
+        if (nickname.length < 5) {
+            setProfileUpdateError("Nickname must be at least 5 characters long");
+            return;
+        }
+        if (isSavingNickname) {
+            return;
+        }
+        setIsSavingNickname(true);
+        setProfileUpdateError("");
+        try {
+            await API.post("/updateUser", {
+                first_name: firstName,
+                last_name: lastName,
+                nickname,
+            });
+            const nextProfile: CurrentUserProfile = {
+                ...currentUserProfile,
+                first_name: firstName,
+                last_name: lastName,
+                nickname,
+            };
+            localStorage.setItem("current_user", JSON.stringify(nextProfile));
+            setCurrentUserProfile(nextProfile);
+            setNicknameDraft(nickname);
+        } catch (err) {
+            setProfileUpdateError(extractApiError(err, "Failed to update profile"));
+        } finally {
+            setIsSavingNickname(false);
+        }
+    }
 
     const refreshOnlineUsers = useCallback(async () => {
         if (!socketRef.current || !isConnected || selectedServerId <= 0) {
@@ -148,14 +203,26 @@ export default function ChatPage() {
         try {
             setIsOnlineUsersLoading(true);
             const users = await socketRef.current.getUsersOnline(selectedServerId);
-            setOnlineUsers(users);
+            const currentEmail = currentUserProfile?.email?.trim().toLowerCase();
+            const currentNickname = currentUserProfile?.nickname?.trim();
+            const normalizedUsers = users.map((user) => {
+                if (user.nickname?.trim()) {
+                    return user;
+                }
+                const userEmail = user.email?.trim().toLowerCase();
+                if (currentEmail && currentNickname && userEmail === currentEmail) {
+                    return { ...user, nickname: currentNickname };
+                }
+                return user;
+            });
+            setOnlineUsers(normalizedUsers);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to load online users";
             setError(message);
         } finally {
             setIsOnlineUsersLoading(false);
         }
-    }, [isConnected, selectedServerId]);
+    }, [isConnected, selectedServerId, currentUserProfile?.email, currentUserProfile?.nickname]);
 
     const syncServersAndChannels = useCallback(
         async (preferredServerId?: number) => {
@@ -463,8 +530,6 @@ export default function ChatPage() {
         void loadAvatar();
     }, [loadAvatar]);
 
-    
-
     useEffect(() => {
         if (!isJoinModalOpen) {
             setJoinResults([]);
@@ -729,6 +794,7 @@ export default function ChatPage() {
                         user_id: currentUserId,
                         first_name: currentUserProfile?.first_name || undefined,
                         last_name: currentUserProfile?.last_name || undefined,
+                        nickname: currentUserProfile?.nickname || undefined,
                         avatar_url: avatarUrl || undefined,
                         mic_enabled: true,
                         deafened: false,
@@ -1038,14 +1104,30 @@ export default function ChatPage() {
     const shouldHideMessageInput = isInSelectedVoiceChannel;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
     const userInitial =
+        currentUserProfile?.nickname?.[0]?.toUpperCase() ??
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
         currentUserProfile?.email?.[0]?.toUpperCase() ??
         "U";
     const getParticipantDisplayName = (participant: VoiceParticipant): string => {
+        const nickname = participant.nickname?.trim();
+        if (nickname) {
+            return nickname;
+        }
         const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
         return fullName || `User ${participant.user_id}`;
     };
     const getParticipantInitials = (participant: VoiceParticipant): string => {
+        const nickname = participant.nickname?.trim() ?? "";
+        if (nickname) {
+            const initials = nickname
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((part) => part[0] ?? "")
+                .join("")
+                .slice(0, 2)
+                .toUpperCase();
+            return initials || nickname[0]?.toUpperCase() || "U";
+        }
         const initials = `${participant.first_name?.[0] ?? ""}${participant.last_name?.[0] ?? ""}`.toUpperCase();
         return initials || "U";
     };
@@ -1058,24 +1140,30 @@ export default function ChatPage() {
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
 
-        const add = (firstName?: string, lastName?: string, avatar?: string) => {
-            const fullName = [firstName, lastName].filter(Boolean).join(" ").trim().toLowerCase();
-            if (!fullName || !avatar || map[fullName]) {
+        const add = (firstName?: string, lastName?: string, avatar?: string, nickname?: string) => {
+            if (!avatar) {
                 return;
             }
-            map[fullName] = avatar;
+            const fullName = [firstName, lastName].filter(Boolean).join(" ").trim().toLowerCase();
+            if (fullName && !map[fullName]) {
+                map[fullName] = avatar;
+            }
+            const nickKey = nickname?.trim().toLowerCase();
+            if (nickKey && !map[nickKey]) {
+                map[nickKey] = avatar;
+            }
         };
 
         Object.values(messagesByChannel).forEach((messages) => {
             messages.forEach((message) => {
-                add(message.author_first_name, message.author_last_name, message.author_avatar_url);
+                add(message.author_first_name, message.author_last_name, message.author_avatar_url, message.author_nickname);
             });
         });
 
-        add(currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl);
+        add(currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl, currentUserProfile?.nickname);
 
         return map;
-    }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, avatarUrl]);
+    }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, currentUserProfile?.nickname, avatarUrl]);
 
     const openUserProfile = useCallback(async (userId: number) => {
         if (currentUserId && userId === currentUserId) {
@@ -1086,8 +1174,10 @@ export default function ChatPage() {
         setSelectedProfileUserId(userId);
         setSelectedProfile(null);
         setSelectedProfileError("");
+        setProfileUpdateError("");
         setIsProfileLoading(true);
         setIsAvatarPreviewOpen(false);
+        setNicknameDraft("");
         setIsProfileModalOpen(true);
 
         const socket = socketRef.current;
@@ -1115,6 +1205,7 @@ export default function ChatPage() {
                         user_id: userId,
                         first_name: messageFallback?.author_first_name ?? voiceFallback?.first_name ?? "",
                         last_name: messageFallback?.author_last_name ?? voiceFallback?.last_name ?? "",
+                        nickname: messageFallback?.author_nickname ?? voiceFallback?.nickname ?? "",
                         avatar_url: messageFallback?.author_avatar_url ?? voiceFallback?.avatar_url ?? "",
                     });
                     setSelectedProfileError("");
@@ -1132,8 +1223,9 @@ export default function ChatPage() {
     const profileAvatarUrl = isSelfProfile ? avatarUrl : (selectedProfile?.avatar_url ?? "");
     const profileFirstName = isSelfProfile ? currentUserProfile?.first_name : selectedProfile?.first_name;
     const profileLastName = isSelfProfile ? currentUserProfile?.last_name : selectedProfile?.last_name;
-    const profileDisplayName = [profileFirstName, profileLastName].filter(Boolean).join(" ").trim();
-    const profileInitial = (profileFirstName?.[0] ?? profileLastName?.[0] ?? "U").toUpperCase();
+    const profileNickname = isSelfProfile ? currentUserProfile?.nickname : selectedProfile?.nickname;
+    const profileDisplayName = profileNickname || [profileFirstName, profileLastName].filter(Boolean).join(" ").trim();
+    const profileInitial = (profileNickname?.[0] ?? profileFirstName?.[0] ?? profileLastName?.[0] ?? "U").toUpperCase();
 
     useEffect(() => {
         const el = chatContentRef.current;
@@ -1213,7 +1305,7 @@ export default function ChatPage() {
                                 title="Delete server"
                                 type="button"
                             >
-                                <Trash2 size={16} aria-hidden="true"/>
+                                <Trash2 size={14} aria-hidden="true"/>
                             </button>
                         ) : null}
                         <button
@@ -1523,6 +1615,7 @@ export default function ChatPage() {
 
                                 {isProfileLoading ? <div className="profile-avatar-error">Loading profile...</div> : null}
                                 {selectedProfileError ? <div className="profile-avatar-error">{selectedProfileError}</div> : null}
+                                {profileUpdateError ? <div className="profile-avatar-error">{profileUpdateError}</div> : null}
                                 {isSelfProfile && avatarError ? <div className="profile-avatar-error">{avatarError}</div> : null}
                             </div>
 
@@ -1533,6 +1626,22 @@ export default function ChatPage() {
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Last name</span>
                                 <span className="profile-modal-value">{profileLastName || "-"}</span>
+                            </div>
+                            <div className="profile-modal-row">
+                                <span className="profile-modal-label">Nickname</span>
+                                {isSelfProfile ? (
+                                    <input
+                                        className="modal-input"
+                                        type="text"
+                                        value={nicknameDraft}
+                                        onChange={(e) => setNicknameDraft(e.target.value)}
+                                        maxLength={48}
+                                        placeholder="Enter nickname"
+                                        disabled={isSavingNickname}
+                                    />
+                                ) : (
+                                    <span className="profile-modal-value">{profileNickname || "-"}</span>
+                                )}
                             </div>
                             {isSelfProfile ? (
                                 <div className="profile-modal-row">
@@ -1547,13 +1656,23 @@ export default function ChatPage() {
                         </div>
                         <div className="modal-actions">
                             {isSelfProfile ? (
-                                <button
-                                    className="modal-btn modal-btn-secondary"
-                                    onClick={handleLogout}
-                                    type="button"
-                                >
-                                    Logout
-                                </button>
+                                <>
+                                    <button
+                                        className="modal-btn modal-btn-secondary"
+                                        onClick={() => void handleSaveNickname()}
+                                        type="button"
+                                        disabled={isSavingNickname}
+                                    >
+                                        {isSavingNickname ? "Saving..." : "Save"}
+                                    </button>
+                                    <button
+                                        className="modal-btn modal-btn-secondary"
+                                        onClick={handleLogout}
+                                        type="button"
+                                    >
+                                        Logout
+                                    </button>
+                                </>
                             ) : null}
                             <button
                                 className="modal-btn modal-btn-primary"
@@ -1563,7 +1682,6 @@ export default function ChatPage() {
                                 Close
                             </button>
                         </div>
-
                     </div>
                 </div>
             )}
