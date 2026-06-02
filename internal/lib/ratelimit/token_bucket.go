@@ -1,10 +1,12 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
@@ -33,18 +35,18 @@ func NewTokenBucket(tokensPerSecond float64, maxTokens float64) *TokenBucket {
 		stopCh:          make(chan struct{}),
 	}
 	tb.Start()
+
+	closer.Add("tokenBucket", func(ctx context.Context) error {
+		close(tb.stopCh)
+
+		return nil
+	})
 	return tb
 }
 
 func (tb *TokenBucket) Start() {
 	tb.startOnce.Do(func() {
 		go tb.cleanup()
-	})
-}
-
-func (tb *TokenBucket) Close() {
-	tb.stopOnce.Do(func() {
-		close(tb.stopCh)
 	})
 }
 

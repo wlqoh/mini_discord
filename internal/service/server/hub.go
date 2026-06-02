@@ -68,12 +68,6 @@ func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
 	}
 }
 
-func (h *Hub) Close() {
-	h.createServerLimiter.Close()
-	h.createChannelLimiter.Close()
-	h.sendMessageLimiter.Close()
-}
-
 func (h *Hub) Run() {
 	for {
 		select {
