@@ -1,10 +1,12 @@
 package postgresql
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
 	_ "github.com/lib/pq"
+	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
 )
 
 type Storage struct {
@@ -22,6 +24,10 @@ func New(storagePath string) (*Storage, error) {
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("%s: failed to connect %w", op, err)
 	}
+
+	closer.Add("postgresql", func(ctx context.Context) error {
+		return db.Close()
+	})
 
 	return &Storage{db: db}, nil
 }
