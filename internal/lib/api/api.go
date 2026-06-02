@@ -41,7 +41,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
-	hub := server.NewHub(s.db, log, cfg.S3HOST)
+	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST)
 	defer hub.Close()
 
 	userHandler := user.NewHandler(s.db, s.db, hub, cfg, log, s3Client)

@@ -21,6 +21,7 @@ import (
 
 type Hub struct {
 	storage              types.ServerStorage
+	s3Client             types.S3ClientStorage
 	s3Host               string
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
@@ -55,9 +56,10 @@ type voiceStatus struct {
 const maxServerChannelNameLen = 16
 const maxAttachmentsPerMessage = 10
 
-func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string) *Hub {
 	return &Hub{
 		storage:              storage,
+		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
 		clientsByUser:        make(map[int]*Client),
 		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
@@ -163,6 +165,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.deleteChannel(req, ctx)
 	case types.WsActionSendMessage:
 		h.sendMessage(req, ctx)
+	case types.WsActionDeleteMessage:
+		h.deleteMessage(req, ctx)
 	case types.WsActionGetMessages:
 		h.getMessages(req, ctx)
 	case types.WsActionGetServers:
@@ -668,7 +672,7 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		}
 		if err := h.storage.SaveMessageAttachments(ctx, msg.ID, attachments); err != nil {
 			h.log.Error("failed to save attachments, deleting message", "message_id", msg.ID, "error", err.Error())
-			if delErr := h.storage.DeleteMessage(ctx, msg.ID); delErr != nil {
+			if _, delErr := h.storage.DeleteMessage(ctx, msg.ID, user.ID); delErr != nil {
 				h.log.Error("failed to delete message after attachment save failure", "message_id", msg.ID, "error", delErr.Error())
 			}
 			h.pushError(req.client, "failed to save attachments")
@@ -690,6 +694,32 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	h.pushToUsers(recipientUserIDs, event)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+func (h *Hub) deleteMessage(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsDeleteMessageRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid delete_message payload")
+		return
+	}
+
+	if payload.MessageID <= 0 {
+		h.pushError(req.client, "message_id is required")
+		return
+	}
+
+	fileKeys, err := h.storage.DeleteMessage(ctx, payload.MessageID, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
+
+	err = h.s3Client.DeleteAttachment(ctx, fileKeys)
+	if err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
 }
 
 func (h *Hub) getMessages(req wsCommandRequest, ctx context.Context) {

@@ -325,9 +325,48 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	return messages, nextCursor, hasMore, nil
 }
 
-func (s *Storage) DeleteMessage(ctx context.Context, messageID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
-	return err
+func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error) {
+	var ownerID int
+	err := s.db.QueryRowContext(ctx, "SELECT author_id FROM messages WHERE id = $1", messageID).Scan(&ownerID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("message not found")
+		}
+		return nil, err
+	}
+
+	if ownerID != userID {
+		return nil, errors.New("user is not message owner")
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT file_key FROM message_attachments WHERE message_id = $1",
+		messageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var fileKeys []string
+
+	for rows.Next() {
+		var key string
+
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+
+		fileKeys = append(fileKeys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
+
+	return fileKeys, err
 }
 
 func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, attachments []types.Attachment) error {
