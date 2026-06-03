@@ -389,14 +389,14 @@ func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, a
 		batch := attachments[i:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO message_attachments (message_id, file_key, size_bytes) VALUES ")
+		sb.WriteString("INSERT INTO message_attachments (message_id, file_key, file_name, content_type, size_bytes) VALUES ")
 		args := make([]any, 0, len(batch)*5)
 		for j, a := range batch {
 			if j > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3))
-			args = append(args, messageID, a.FileKey, a.SizeBytes)
+			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5))
+			args = append(args, messageID, a.FileKey, a.FileName, a.ContentType, a.SizeBytes)
 		}
 
 		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
@@ -420,7 +420,7 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, message_id, file_key, size_bytes, created_at
+		`SELECT id, message_id, file_key, file_name, content_type, size_bytes, created_at
 		 FROM message_attachments
 		 WHERE message_id IN (%s)
 		 ORDER BY id`,
@@ -438,7 +438,7 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 		var a types.Attachment
 		var createdAt time.Time
 		var fileKey string
-		if err := rows.Scan(&a.ID, &a.MessageID, &fileKey, &a.SizeBytes, &createdAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.MessageID, &fileKey, &a.FileName, &a.ContentType, &a.SizeBytes, &createdAt); err != nil {
 			return nil, err
 		}
 		a.URL = utils.AvatarURLFromKey(fileKey, s3Host)
