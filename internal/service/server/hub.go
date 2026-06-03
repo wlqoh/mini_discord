@@ -665,9 +665,11 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		var attachments []types.Attachment
 		for _, pa := range pendingAtts {
 			attachments = append(attachments, types.Attachment{
-				MessageID: msg.ID,
-				FileKey:   pa.FileKey,
-				SizeBytes: pa.SizeBytes,
+				MessageID:   msg.ID,
+				FileKey:     pa.FileKey,
+				FileName:    pa.FileName,
+				ContentType: pa.ContentType,
+				SizeBytes:   pa.SizeBytes,
 			})
 		}
 		if err := h.storage.SaveMessageAttachments(ctx, msg.ID, attachments); err != nil {

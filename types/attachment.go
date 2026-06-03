@@ -1,12 +1,14 @@
 package types
 
 type Attachment struct {
-	ID        int64  `json:"id"`
-	MessageID int64  `json:"message_id"`
-	FileKey   string `json:"-"`
-	URL       string `json:"url"`
-	SizeBytes int64  `json:"size_bytes"`
-	CreatedAt string `json:"created_at"`
+	ID          int64  `json:"id"`
+	MessageID   int64  `json:"message_id"`
+	FileKey     string `json:"-"`
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	URL          string `json:"url"`
+	SizeBytes    int64  `json:"size_bytes"`
+	CreatedAt    string `json:"created_at"`
 }
 
 type UploadResponse struct {
@@ -15,11 +17,13 @@ type UploadResponse struct {
 }
 
 type PendingAttachment struct {
-	ID        int64  `json:"id"`
-	UserID    int    `json:"user_id"`
-	FolderKey string `json:"folder_key"`
-	FileKey   string `json:"file_key"`
-	SizeBytes int64  `json:"size_bytes"`
+	ID          int64  `json:"id"`
+	UserID      int    `json:"user_id"`
+	FolderKey   string `json:"folder_key"`
+	FileKey     string `json:"file_key"`
+	FileName    string `json:"file_name"`
+	ContentType string `json:"content_type"`
+	SizeBytes   int64  `json:"size_bytes"`
 }
 
 type PendingAttachmentStore interface {

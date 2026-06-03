@@ -477,10 +477,12 @@ func (h *Handler) handleUpload(c *fiber.Ctx) error {
 
 	s3Key := fmt.Sprintf("attachments/%s/%s_%s", folderKey, fileSuffix, file.Filename)
 	pa := types.PendingAttachment{
-		UserID:    clientID,
-		FolderKey: folderKey,
-		FileKey:   s3Key,
-		SizeBytes: int64(len(raw)),
+		UserID:      clientID,
+		FolderKey:   folderKey,
+		FileKey:     s3Key,
+		FileName:    file.Filename,
+		ContentType: contentType,
+		SizeBytes:   int64(len(raw)),
 	}
 
 	attachmentID := h.pendingStore.StorePendingAttachment(pa)
