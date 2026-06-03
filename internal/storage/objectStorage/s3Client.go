@@ -13,6 +13,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -66,6 +67,34 @@ func (s3Client *S3Client) PutAvatar(ctx context.Context, key string, data []byte
 	}
 
 	return utils.AvatarURLFromKey(key, s3Client.cfg.S3HOST), nil
+}
+
+func (s3Client *S3Client) DeleteAttachment(ctx context.Context, keys []string) error {
+
+	objects := make([]types.ObjectIdentifier, 0, len(keys))
+	if len(keys) == 0 {
+		return nil
+	}
+	for _, key := range keys {
+		objects = append(objects, types.ObjectIdentifier{
+			Key: aws.String(key),
+		})
+
+	}
+
+	_, err := s3Client.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(s3Client.cfg.S3.Bucket),
+		Delete: &types.Delete{
+			Objects: objects,
+			Quiet:   aws.Bool(true),
+		},
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s3Client *S3Client) PutAttachment(ctx context.Context, key string, data []byte, filename string, contentType string, uniqueSuffix string) (string, error) {

@@ -20,15 +20,12 @@ type ServerStorage interface {
 	ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error)
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
 	SaveMessage(ctx context.Context, msg *WsMessage) error
-	DeleteMessage(ctx context.Context, messageID int64) error
+	DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error)
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
 	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
-	CreatePendingAttachment(ctx context.Context, pa PendingAttachment) (int64, error)
-	GetPendingAttachmentByID(ctx context.Context, id int64) (*PendingAttachment, error)
-	DeletePendingAttachment(ctx context.Context, id int64) error
 	SaveMessageAttachments(ctx context.Context, messageID int64, attachments []Attachment) error
 	GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]Attachment, error)
 }
@@ -40,6 +37,7 @@ const (
 	WsActionCreateChannel     = "create_channel"
 	WsActionDeleteChannel     = "delete_channel"
 	WsActionSendMessage       = "send_message"
+	WsActionDeleteMessage     = "delete_message"
 	WsActionGetMessages       = "get_messages"
 	WsActionGetServers        = "get_servers"
 	WsActionGetServerChannels = "get_server_channels"
@@ -113,6 +111,10 @@ type WsSendMessageRequest struct {
 	ChannelID     int64   `json:"channel_id"`
 	Content       string  `json:"content"`
 	AttachmentIDs []int64 `json:"attachment_ids,omitempty"`
+}
+
+type WsDeleteMessageRequest struct {
+	MessageID int64 `json:"message_id"`
 }
 
 type WsGetMessagesRequest struct {

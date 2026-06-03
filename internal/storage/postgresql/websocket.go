@@ -325,36 +325,48 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	return messages, nextCursor, hasMore, nil
 }
 
-func (s *Storage) DeleteMessage(ctx context.Context, messageID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
-	return err
-}
+func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error) {
+	var ownerID int
+	err := s.db.QueryRowContext(ctx, "SELECT author_id FROM messages WHERE id = $1", messageID).Scan(&ownerID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("message not found")
+		}
+		return nil, err
+	}
 
-func (s *Storage) CreatePendingAttachment(ctx context.Context, pa types.PendingAttachment) (int64, error) {
-	var id int64
-	err := s.db.QueryRowContext(ctx,
-		`INSERT INTO pending_attachments (user_id, folder_key, file_key, file_name, content_type, size_bytes)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		pa.UserID, pa.FolderKey, pa.FileKey, pa.FileName, pa.ContentType, pa.SizeBytes,
-	).Scan(&id)
-	return id, err
-}
+	if ownerID != userID {
+		return nil, errors.New("user is not message owner")
+	}
 
-func (s *Storage) GetPendingAttachmentByID(ctx context.Context, id int64) (*types.PendingAttachment, error) {
-	var pa types.PendingAttachment
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, user_id, folder_key, file_key, file_name, content_type, size_bytes FROM pending_attachments WHERE id = $1`,
-		id,
-	).Scan(&pa.ID, &pa.UserID, &pa.FolderKey, &pa.FileKey, &pa.FileName, &pa.ContentType, &pa.SizeBytes)
+	rows, err := s.db.QueryContext(
+		ctx,
+		"SELECT file_key FROM message_attachments WHERE message_id = $1",
+		messageID,
+	)
 	if err != nil {
 		return nil, err
 	}
-	return &pa, nil
-}
+	defer rows.Close()
 
-func (s *Storage) DeletePendingAttachment(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM pending_attachments WHERE id = $1`, id)
-	return err
+	var fileKeys []string
+
+	for rows.Next() {
+		var key string
+
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+
+		fileKeys = append(fileKeys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM messages WHERE id = $1`, messageID)
+
+	return fileKeys, err
 }
 
 func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, attachments []types.Attachment) error {
@@ -377,14 +389,14 @@ func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, a
 		batch := attachments[i:end]
 
 		var sb strings.Builder
-		sb.WriteString("INSERT INTO message_attachments (message_id, file_key, file_name, content_type, size_bytes) VALUES ")
+		sb.WriteString("INSERT INTO message_attachments (message_id, file_key, size_bytes) VALUES ")
 		args := make([]any, 0, len(batch)*5)
 		for j, a := range batch {
 			if j > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5))
-			args = append(args, messageID, a.FileKey, a.FileName, a.ContentType, a.SizeBytes)
+			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3))
+			args = append(args, messageID, a.FileKey, a.SizeBytes)
 		}
 
 		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
@@ -408,7 +420,7 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 	}
 
 	query := fmt.Sprintf(
-		`SELECT id, message_id, file_key, file_name, content_type, size_bytes, created_at
+		`SELECT id, message_id, file_key, size_bytes, created_at
 		 FROM message_attachments
 		 WHERE message_id IN (%s)
 		 ORDER BY id`,
@@ -426,7 +438,7 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 		var a types.Attachment
 		var createdAt time.Time
 		var fileKey string
-		if err := rows.Scan(&a.ID, &a.MessageID, &fileKey, &a.FileName, &a.ContentType, &a.SizeBytes, &createdAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.MessageID, &fileKey, &a.SizeBytes, &createdAt); err != nil {
 			return nil, err
 		}
 		a.URL = utils.AvatarURLFromKey(fileKey, s3Host)

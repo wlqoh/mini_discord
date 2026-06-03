@@ -606,6 +606,30 @@ export default function ChatPage() {
         })();
     }, [selectedChannelId, isConnected, loadedChannels]);
 
+    useEffect(() => {
+        if (selectedChannelId <= 0 || !socketRef.current || !isConnected) {
+            return;
+        }
+
+        const intervalId = window.setInterval(() => {
+            const socket = socketRef.current;
+            if (!socket) return;
+
+            void socket.getMessages(selectedChannelId).then((data) => {
+                if (!data) return;
+                setMessagesByChannel((prev) => {
+                    const prevMessages = prev[selectedChannelId];
+                    if (prevMessages && prevMessages.length === data.length && prevMessages.every((m, i) => m.id === data[i].id)) {
+                        return prev;
+                    }
+                    return { ...prev, [selectedChannelId]: data };
+                });
+            }).catch(() => {});
+        }, 5000);
+
+        return () => window.clearInterval(intervalId);
+    }, [selectedChannelId, isConnected]);
+
     function openCreateServerModal() {
         setError("");
         setNewServerName("");
@@ -704,6 +728,40 @@ export default function ChatPage() {
         } finally {
             isCreatingChannelRef.current = false;
             setIsCreatingChannel(false);
+        }
+    }
+
+    async function handleDeleteMessage(messageId: number, channelId: number): Promise<void> {
+        if (!socketRef.current || !isConnected) {
+            setError("No connection");
+            return;
+        }
+
+        setMessagesByChannel((prev) => {
+            const channelMessages = prev[channelId];
+            if (!channelMessages) return prev;
+            const next = channelMessages.filter((m) => m.id !== messageId);
+            if (next.length === channelMessages.length) return prev;
+            return { ...prev, [channelId]: next };
+        });
+
+        try {
+            await socketRef.current.deleteMessage(messageId);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to delete message";
+            setError(message);
+            const socket = socketRef.current;
+            if (socket) {
+                try {
+                    const data = await socket.getMessages(channelId);
+                    setMessagesByChannel((prev) => ({
+                        ...prev,
+                        [channelId]: data ?? [],
+                    }));
+                } catch {
+                    // best-effort rollback
+                }
+            }
         }
     }
 
@@ -1554,7 +1612,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile}/>
+                    <MessageList key={selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile} onDeleteMessage={handleDeleteMessage}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <MessageInput

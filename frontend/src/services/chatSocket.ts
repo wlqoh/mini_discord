@@ -532,6 +532,10 @@ export class ChatSocket {
     await this.sendCommand("delete_channel", { channel_id: channelId });
   }
 
+  async deleteMessage(messageId: number): Promise<void> {
+    await this.sendCommand("delete_message", { message_id: messageId });
+  }
+
   async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {
     const state = await this.getServerChannelsState(serverId);
     return state.channels;

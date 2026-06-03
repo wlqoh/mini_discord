@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +21,7 @@ import (
 
 type Hub struct {
 	storage              types.ServerStorage
+	s3Client             types.S3ClientStorage
 	s3Host               string
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
@@ -29,6 +31,10 @@ type Hub struct {
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
+
+	pendingAttachmentsMu sync.Mutex
+	pendingAttachments   map[int64]*types.PendingAttachment
+	nextAttachmentID     atomic.Int64
 
 	log *slog.Logger
 
@@ -50,9 +56,10 @@ type voiceStatus struct {
 const maxServerChannelNameLen = 16
 const maxAttachmentsPerMessage = 10
 
-func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string) *Hub {
 	return &Hub{
 		storage:              storage,
+		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
 		clientsByUser:        make(map[int]*Client),
 		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
@@ -61,6 +68,7 @@ func NewHub(storage types.ServerStorage, log *slog.Logger, s3Host string) *Hub {
 		voiceParticipants:    make(map[int64]map[int]struct{}),
 		userVoiceChannel:     make(map[int]int64),
 		voiceStatusByUser:    make(map[int]voiceStatus),
+		pendingAttachments:   make(map[int64]*types.PendingAttachment),
 		log:                  log,
 		Register:             make(chan *Client),
 		Unregister:           make(chan *Client),
@@ -72,6 +80,31 @@ func (h *Hub) Close() {
 	h.createServerLimiter.Close()
 	h.createChannelLimiter.Close()
 	h.sendMessageLimiter.Close()
+}
+
+func (h *Hub) StorePendingAttachment(pa types.PendingAttachment) int64 {
+	id := h.nextAttachmentID.Add(1)
+	pa.ID = id
+	h.pendingAttachmentsMu.Lock()
+	h.pendingAttachments[id] = &pa
+	h.pendingAttachmentsMu.Unlock()
+	return id
+}
+
+func (h *Hub) TakePendingAttachment(id int64, userID int) (*types.PendingAttachment, bool) {
+	h.pendingAttachmentsMu.Lock()
+	pa, ok := h.pendingAttachments[id]
+	if !ok {
+		h.pendingAttachmentsMu.Unlock()
+		return nil, false
+	}
+	if pa.UserID != userID {
+		h.pendingAttachmentsMu.Unlock()
+		return nil, false
+	}
+	delete(h.pendingAttachments, id)
+	h.pendingAttachmentsMu.Unlock()
+	return pa, true
 }
 
 func (h *Hub) Run() {
@@ -132,6 +165,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.deleteChannel(req, ctx)
 	case types.WsActionSendMessage:
 		h.sendMessage(req, ctx)
+	case types.WsActionDeleteMessage:
+		h.deleteMessage(req, ctx)
 	case types.WsActionGetMessages:
 		h.getMessages(req, ctx)
 	case types.WsActionGetServers:
@@ -585,13 +620,9 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 			return
 		}
 		for _, id := range payload.AttachmentIDs {
-			pa, err := h.storage.GetPendingAttachmentByID(ctx, id)
-			if err != nil || pa == nil {
+			pa, ok := h.TakePendingAttachment(id, req.client.UserID)
+			if !ok {
 				h.pushError(req.client, "attachment not found: "+strconv.FormatInt(id, 10))
-				return
-			}
-			if pa.UserID != req.client.UserID {
-				h.pushError(req.client, "attachment not owned by you: "+strconv.FormatInt(id, 10))
 				return
 			}
 			pendingAtts = append(pendingAtts, pa)
@@ -634,16 +665,14 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		var attachments []types.Attachment
 		for _, pa := range pendingAtts {
 			attachments = append(attachments, types.Attachment{
-				MessageID:   msg.ID,
-				FileKey:     pa.FileKey,
-				FileName:    pa.FileName,
-				ContentType: pa.ContentType,
-				SizeBytes:   pa.SizeBytes,
+				MessageID: msg.ID,
+				FileKey:   pa.FileKey,
+				SizeBytes: pa.SizeBytes,
 			})
 		}
 		if err := h.storage.SaveMessageAttachments(ctx, msg.ID, attachments); err != nil {
 			h.log.Error("failed to save attachments, deleting message", "message_id", msg.ID, "error", err.Error())
-			if delErr := h.storage.DeleteMessage(ctx, msg.ID); delErr != nil {
+			if _, delErr := h.storage.DeleteMessage(ctx, msg.ID, user.ID); delErr != nil {
 				h.log.Error("failed to delete message after attachment save failure", "message_id", msg.ID, "error", delErr.Error())
 			}
 			h.pushError(req.client, "failed to save attachments")
@@ -653,9 +682,6 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 			url := utils.AvatarURLFromKey(pa.FileKey, h.s3Host)
 			attachments[i].URL = url
 			attachments[i].ID = 0
-			if err := h.storage.DeletePendingAttachment(ctx, pa.ID); err != nil {
-				h.log.Warn("failed to delete pending attachment", "attachment_id", pa.ID, "error", err.Error())
-			}
 		}
 		msg.Attachments = attachments
 	}
@@ -668,6 +694,32 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	h.pushToUsers(recipientUserIDs, event)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+func (h *Hub) deleteMessage(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsDeleteMessageRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid delete_message payload")
+		return
+	}
+
+	if payload.MessageID <= 0 {
+		h.pushError(req.client, "message_id is required")
+		return
+	}
+
+	fileKeys, err := h.storage.DeleteMessage(ctx, payload.MessageID, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
+
+	err = h.s3Client.DeleteAttachment(ctx, fileKeys)
+	if err != nil {
+		h.pushError(req.client, err.Error())
+		return
+	}
 }
 
 func (h *Hub) getMessages(req wsCommandRequest, ctx context.Context) {

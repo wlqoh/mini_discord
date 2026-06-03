@@ -1,9 +1,11 @@
+import { useState } from "react";
 import type { Attachment, Message } from "../types/chat.ts";
 
 type Props = {
     messages: Message[];
     currentUserId: number | null;
     onOpenProfile?: (userId: number) => void;
+    onDeleteMessage?: (messageId: number, channelId: number) => void;
 };
 
 function getAuthorLabel(msg: Message): string {
@@ -130,7 +132,9 @@ function renderAttachment(att: Attachment) {
     );
 }
 
-export default function MessageList({ messages, currentUserId, onOpenProfile }: Props) {
+export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage }: Props) {
+    const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
     return (
@@ -172,6 +176,39 @@ export default function MessageList({ messages, currentUserId, onOpenProfile }: 
                                 >
                                     {getAuthorLabel(msg)}
                                 </button>
+                                {isOwn ? (
+                                    confirmDeleteId === msg.id ? (
+                                        <span className="message-delete-confirm">
+                                            <button
+                                                className="message-delete-btn confirm"
+                                                type="button"
+                                                onClick={() => {
+                                                    onDeleteMessage?.(msg.id, msg.channel_id);
+                                                    setConfirmDeleteId(null);
+                                                }}
+                                            >
+                                                Delete
+                                            </button>
+                                            <button
+                                                className="message-delete-btn cancel"
+                                                type="button"
+                                                onClick={() => setConfirmDeleteId(null)}
+                                            >
+                                                Cancel
+                                            </button>
+                                        </span>
+                                    ) : (
+                                        <button
+                                            className="message-delete-btn"
+                                            type="button"
+                                            onClick={() => setConfirmDeleteId(msg.id)}
+                                            aria-label="Delete message"
+                                            title="Delete message"
+                                        >
+                                            ✕
+                                        </button>
+                                    )
+                                ) : null}
                             </div>
                             {msg.content && <div className="message-content">{msg.content}</div>}
                             {msg.attachments && msg.attachments.length > 0 && (
