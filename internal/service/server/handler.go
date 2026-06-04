@@ -6,7 +6,7 @@ import (
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
-	"github.com/wlqoh/mini_discord.git/internal/service/auth"
+	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -34,7 +34,7 @@ func NewHandler(h *Hub, allowedOrigins []string) *Handler {
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 
-	router.Use("/server", auth.WithJWTAuth(h.hub.storage, h.hub.log, true))
+	router.Use("/server", middleware.WithJWTAuth(h.hub.storage, h.hub.log, true, h.hub.jwtSecret))
 	router.Use("/server/ws", h.isWebsocketUpgraded)
 	router.Get("/server/ws", websocket.New(h.handleSocket))
 }

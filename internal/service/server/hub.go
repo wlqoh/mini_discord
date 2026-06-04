@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
+	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -25,12 +25,14 @@ type Hub struct {
 	s3Host               string
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
-	createServerLimiter  *ratelimit.TokenBucket
-	createChannelLimiter *ratelimit.TokenBucket
-	sendMessageLimiter   *ratelimit.TokenBucket
+	createServerLimiter  *middleware.TokenBucket
+	createChannelLimiter *middleware.TokenBucket
+	sendMessageLimiter   *middleware.TokenBucket
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
+
+	jwtSecret []byte
 
 	pendingAttachmentsMu sync.Mutex
 	pendingAttachments   map[int64]*types.PendingAttachment
@@ -56,16 +58,17 @@ type voiceStatus struct {
 const maxServerChannelNameLen = 16
 const maxAttachmentsPerMessage = 10
 
-func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string) *Hub {
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte) *Hub {
 	return &Hub{
 		storage:              storage,
 		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
 		clientsByUser:        make(map[int]*Client),
-		createServerLimiter:  ratelimit.NewTokenBucket(5.0/60.0, 5.0),
-		createChannelLimiter: ratelimit.NewTokenBucket(5.0/60.0, 5.0),
-		sendMessageLimiter:   ratelimit.NewTokenBucket(1.0, 1.0),
+		createServerLimiter:  middleware.NewTokenBucket(5.0/60.0, 5.0),
+		createChannelLimiter: middleware.NewTokenBucket(5.0/60.0, 5.0),
+		sendMessageLimiter:   middleware.NewTokenBucket(1.0, 1.0),
 		voiceParticipants:    make(map[int64]map[int]struct{}),
+		jwtSecret:            jwtSecret,
 		userVoiceChannel:     make(map[int]int64),
 		voiceStatusByUser:    make(map[int]voiceStatus),
 		pendingAttachments:   make(map[int64]*types.PendingAttachment),

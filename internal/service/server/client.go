@@ -2,7 +2,6 @@ package server
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -55,7 +54,7 @@ func (c *Client) readMessage(hub *Hub) {
 		err := c.Conn.ReadJSON(&cmd)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				hub.log.Error("read error", "error", err)
 			}
 			break
 		}

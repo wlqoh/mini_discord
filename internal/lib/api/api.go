@@ -7,8 +7,8 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
 	"github.com/wlqoh/mini_discord.git/internal/storage/objectStorage"
@@ -33,7 +33,11 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		WriteTimeout: cfg.HTTPServer.Timeout,
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
 	})
-	app.Use(logger.New())
+	app.Use(
+		middleware.Recovery(log),
+		middleware.RequestID(),
+		middleware.Logger(log),
+	)
 	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
 
 	s3Client := objectStorage.NewS3Client(cfg, log)
@@ -41,7 +45,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
-	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST)
+	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret))
 	defer hub.Close()
 
 	userHandler := user.NewHandler(s.db, s.db, hub, cfg, log, s3Client)

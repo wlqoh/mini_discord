@@ -13,7 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/internal/config"
-	"github.com/wlqoh/mini_discord.git/internal/lib/ratelimit"
+	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
@@ -29,21 +29,29 @@ type Handler struct {
 }
 
 func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, pendingStore types.PendingAttachmentStore, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
-	return &Handler{storage: storage, serverStorage: serverStorage, pendingStore: pendingStore, cfg: cfg, log: log, s3Client: s3Client}
+	return &Handler{
+		storage:       storage,
+		serverStorage: serverStorage,
+		pendingStore:  pendingStore,
+		cfg:           cfg,
+		log:           log,
+		s3Client:      s3Client,
+	}
 }
 
 func (h *Handler) RegisterRoutes(router fiber.Router) {
-	limiter := ratelimit.NewTokenBucket(5.0/60.0, 5)
+	limiter := middleware.NewTokenBucket(5.0/60.0, 5)
 	limiterMW := limiter.FiberRateLimitMiddleware()
-	uploadLimiter := ratelimit.NewTokenBucket(10.0/60.0, 5)
+	uploadLimiter := middleware.NewTokenBucket(10.0/60.0, 5)
 	uploadLimiterMW := uploadLimiter.FiberRateLimitMiddleware()
-	router.Get("/getAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleGetImage)
-	router.Post("/setAvatar", auth.WithJWTAuth(h.storage, h.log, false), h.handleSetImage)
-	router.Post("/upload", uploadLimiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleUpload)
+	secret := []byte(h.cfg.JWTSecret)
+	router.Get("/getAvatar", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleGetImage)
+	router.Post("/setAvatar", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleSetImage)
+	router.Post("/upload", uploadLimiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpload)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
-	router.Post("/updateUser", auth.WithJWTAuth(h.storage, h.log, false), h.handleUpdateUser)
-	router.Delete("/deleteUser", limiterMW, auth.WithJWTAuth(h.storage, h.log, false), h.handleDeleteUser)
+	router.Post("/updateUser", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpdateUser)
+	router.Delete("/deleteUser", limiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {
 		router.Post("/renew", limiterMW, h.handleRenewAccessToken)
@@ -351,7 +359,7 @@ func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
 		return utils.WriteError(c, fiber.StatusBadRequest, "error decoding request body")
 	}
 
-	refreshClaims, err := auth.ValidateToken(req.RefreshToken)
+	refreshClaims, err := auth.ValidateToken(req.RefreshToken, []byte(h.cfg.JWTSecret))
 	if err != nil {
 		h.log.Error(err.Error())
 		return utils.WriteError(c, fiber.StatusUnauthorized, "error verifying token")
