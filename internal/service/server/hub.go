@@ -79,13 +79,6 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 	}
 }
 
-<<<<<<< HEAD
-func (h *Hub) Close() {
-	h.createServerLimiter.Close()
-	h.createChannelLimiter.Close()
-	h.sendMessageLimiter.Close()
-}
-
 func (h *Hub) StorePendingAttachment(pa types.PendingAttachment) int64 {
 	id := h.nextAttachmentID.Add(1)
 	pa.ID = id
@@ -111,8 +104,6 @@ func (h *Hub) TakePendingAttachment(id int64, userID int) (*types.PendingAttachm
 	return pa, true
 }
 
-=======
->>>>>>> origin/graceful-shutdown
 func (h *Hub) Run() {
 	for {
 		select {
