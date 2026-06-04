@@ -1118,6 +1118,14 @@
     max-width: 200px;
 }
 
+.attachment-preview-thumb {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
 .attachment-preview-name {
     overflow: hidden;
     text-overflow: ellipsis;

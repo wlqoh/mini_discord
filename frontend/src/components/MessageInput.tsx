@@ -1,8 +1,13 @@
 import { useCallback, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
-import type { AttachmentUploadResponse } from "../services/avatarApi.ts";
 import { uploadAttachment } from "../services/avatarApi.ts";
 import type { OnlineUser } from "../types/chat.ts";
+
+type PendingFile = {
+    id: string;
+    file: File;
+    previewUrl: string | null;
+};
 
 type Props = {
     disabled?: boolean;
@@ -49,10 +54,12 @@ export default function MessageInput({
     onOpenProfile,
 }: Props) {
     const [text, setText] = useState("");
-    const [pendingAttachments, setPendingAttachments] = useState<AttachmentUploadResponse[]>([]);
+    const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadError, setUploadError] = useState("");
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    
 
     const [isRecording, setIsRecording] = useState(false);
     const [recordingDuration, setRecordingDuration] = useState(0);
@@ -113,16 +120,8 @@ export default function MessageInput({
                     return;
                 }
 
-                setIsUploading(true);
-                try {
-                    const uploaded = await uploadAttachment(file);
-                    setPendingAttachments((prev) => [...prev, uploaded]);
-                } catch (err) {
-                    const message = err instanceof Error ? err.message : "Upload failed";
-                    setUploadError(message);
-                } finally {
-                    setIsUploading(false);
-                }
+                const pendingId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+                setPendingFiles((prev) => [...prev, { id: pendingId, file, previewUrl: null }]);
             };
 
             recorder.start(250);
@@ -152,13 +151,15 @@ export default function MessageInput({
         return initials || "U";
     }
 
-    async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
         const files = e.target.files;
         if (!files || files.length === 0) {
             return;
         }
 
         setUploadError("");
+
+        const newFiles: PendingFile[] = [];
 
         for (const file of Array.from(files)) {
             if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
@@ -171,40 +172,75 @@ export default function MessageInput({
                 continue;
             }
 
-            setIsUploading(true);
-            try {
-                const uploaded = await uploadAttachment(file);
-                setPendingAttachments((prev) => [...prev, uploaded]);
-            } catch (err) {
-                const message = err instanceof Error ? err.message : "Upload failed";
-                setUploadError(message);
-            } finally {
-                setIsUploading(false);
-            }
+            const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+            const previewUrl = file.type.startsWith("image/") || file.type.startsWith("video/")
+                ? URL.createObjectURL(file)
+                : null;
+            newFiles.push({ id, file, previewUrl });
+        }
+
+        if (newFiles.length > 0) {
+            setPendingFiles((prev) => [...prev, ...newFiles]);
         }
 
         e.target.value = "";
     }
 
-    function removeAttachment(attachmentId: number) {
-        setPendingAttachments((prev) => prev.filter((a) => a.attachment_id !== attachmentId));
+    function removePendingFile(id: string) {
+        setPendingFiles((prev) => {
+            const removed = prev.find((f) => f.id === id);
+            if (removed?.previewUrl) {
+                URL.revokeObjectURL(removed.previewUrl);
+            }
+            return prev.filter((f) => f.id !== id);
+        });
     }
 
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         const value = text.trim();
-        if (!value && pendingAttachments.length === 0) {
+        if (!value && pendingFiles.length === 0) {
             return;
         }
         if (disabled) return;
 
-        const attachmentIds = pendingAttachments.length > 0
-            ? pendingAttachments.map((a) => a.attachment_id)
-            : undefined;
+        let attachmentIds: number[] | undefined;
+
+        if (pendingFiles.length > 0) {
+            setIsUploading(true);
+            try {
+                const results = await Promise.allSettled(
+                    pendingFiles.map((pf) => uploadAttachment(pf.file)),
+                );
+                const ids: number[] = [];
+                const errors: string[] = [];
+                results.forEach((r, i) => {
+                    if (r.status === "fulfilled") {
+                        ids.push(r.value.attachment_id);
+                    } else {
+                        errors.push(pendingFiles[i].file.name);
+                    }
+                });
+                if (errors.length > 0) {
+                    setUploadError(`Failed to upload: ${errors.join(", ")}`);
+                    setIsUploading(false);
+                    if (ids.length === 0) return;
+                }
+                attachmentIds = ids.length > 0 ? ids : undefined;
+                pendingFiles.forEach((pf) => {
+                    if (pf.previewUrl) URL.revokeObjectURL(pf.previewUrl);
+                });
+            } catch {
+                setUploadError("Upload failed");
+                setIsUploading(false);
+                return;
+            }
+            setIsUploading(false);
+        }
 
         await onSend(value, attachmentIds);
         setText("");
-        setPendingAttachments([]);
+        setPendingFiles([]);
         setUploadError("");
     }
 
@@ -212,19 +248,26 @@ export default function MessageInput({
         fileInputRef.current?.click();
     }
 
-    const canSend = !disabled && !isUploading && !isRecording && (text.trim().length > 0 || pendingAttachments.length > 0);
+    const canSend = !disabled && !isUploading && !isRecording && (text.trim().length > 0 || pendingFiles.length > 0);
 
     return (
         <form className="message-form" onSubmit={handleSubmit}>
-            {pendingAttachments.length > 0 && (
+            {pendingFiles.length > 0 && (
                 <div className="message-attachments-preview">
-                    {pendingAttachments.map((att) => (
-                        <div key={att.attachment_id} className="attachment-preview-item">
-                            <span className="attachment-preview-name">{att.url.split("/").pop()}</span>
+                    {pendingFiles.map((pf) => (
+                        <div key={pf.id} className="attachment-preview-item">
+                            {pf.previewUrl && (pf.file.type.startsWith("image/") || pf.file.type.startsWith("video/")) && (
+                                <img
+                                    src={pf.previewUrl}
+                                    alt={pf.file.name}
+                                    className="attachment-preview-thumb"
+                                />
+                            )}
+                            <span className="attachment-preview-name">{pf.file.name}</span>
                             <button
                                 type="button"
                                 className="attachment-preview-remove"
-                                onClick={() => removeAttachment(att.attachment_id)}
+                                onClick={() => removePendingFile(pf.id)}
                                 aria-label="Remove attachment"
                             >
                                 <X size={12} />
