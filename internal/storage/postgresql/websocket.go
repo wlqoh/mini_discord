@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -40,20 +41,27 @@ func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64,
 		return 0, err
 	}
 
-	return serverID, tx.Commit()
+	err = tx.Commit()
+	if err != nil {
+		return 0, err
+	}
+
+	s.cache.Delete(fmt.Sprintf("%s%d", serversUserKey, server.OwnerID))
+	return serverID, nil
 }
 
 func (s *Storage) DeleteChannel(ctx context.Context, channelID int64, userID int) error {
 	var ownerID int
+	var serverID int64
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT s.owner_id
+		`SELECT s.owner_id, s.id
 				FROM channels c
 				JOIN servers s ON s.id = c.server_id
 				WHERE c.id = $1
 				`,
 		channelID,
-	).Scan(&ownerID)
+	).Scan(&ownerID, &serverID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("channel not found")
@@ -66,7 +74,14 @@ func (s *Storage) DeleteChannel(ctx context.Context, channelID int64, userID int
 	}
 
 	_, err = s.db.ExecContext(ctx, "DELETE FROM channels WHERE id = $1", channelID)
-	return err
+	if err != nil {
+		return err
+	}
+	s.cache.Delete(fmt.Sprintf("%s%d", channelKey, channelID))
+	s.cache.Delete(fmt.Sprintf("%s%d", channelsServerKey, serverID))
+	s.cache.DeleteByPrefix(fmt.Sprintf("%s%d", membersKey, channelID))
+	s.cache.DeleteByPrefix(fmt.Sprintf("%s%d", accessKey, channelID))
+	return nil
 }
 
 func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) error {
@@ -87,8 +102,29 @@ func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) 
 		return errors.New("user is not server owner")
 	}
 
+	rows, err := s.db.QueryContext(ctx, "SELECT user_id FROM server_members WHERE server_id = $1", serverID)
+	if err != nil {
+		slog.Error("failed to query server members for cache invalidation", "server_id", serverID, "error", err)
+	} else {
+		for rows.Next() {
+			var memberID int
+			if err := rows.Scan(&memberID); err != nil {
+				slog.Error("failed to scan member id for cache invalidation", "error", err)
+				continue
+			}
+			s.cache.Delete(fmt.Sprintf("%s%d", serversUserKey, memberID))
+			s.cache.Delete(fmt.Sprintf("%s%d:%d", memberKey, memberID, serverID))
+		}
+		rows.Close()
+	}
+
 	_, err = s.db.ExecContext(ctx, "DELETE FROM servers WHERE id = $1", serverID)
-	return err
+	if err != nil {
+		return err
+	}
+	s.cache.Delete(fmt.Sprintf("%s%d", channelsServerKey, serverID))
+	s.cache.Delete(fmt.Sprintf("%s%d", membersServerKey, serverID))
+	return nil
 }
 
 func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error) {
@@ -109,10 +145,16 @@ func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, chann
 		return 0, err
 	}
 
+	s.cache.Delete(fmt.Sprintf("%s%d", channelsServerKey, serverID))
+
 	return channelID, nil
 }
 
 func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error) {
+	key := fmt.Sprintf("%s%d:%d", memberKey, userID, serverID)
+	if v, ok := s.cache.Get(key); ok {
+		return v.(bool), nil
+	}
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
@@ -124,10 +166,19 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 		serverID,
 	).Scan(&exists)
 
-	return exists, err
+	if err != nil {
+		return false, err
+	}
+
+	s.cache.Set(key, exists, 2*time.Minute)
+	return exists, nil
 }
 
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
+	key := fmt.Sprintf("%s%d:%d", accessKey, channelID, userID)
+	if v, ok := s.cache.Get(key); ok {
+		return v.(bool), nil
+	}
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
 		`SELECT EXISTS(
@@ -140,10 +191,22 @@ func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelI
 		userID,
 	).Scan(&exists)
 
-	return exists, err
+	if err != nil {
+		return false, err
+	}
+
+	s.cache.Set(key, exists, 2*time.Minute)
+	return exists, nil
 }
 
 func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error) {
+	key := fmt.Sprintf("%s%d", membersServerKey, serverID)
+	if v, ok := s.cache.Get(key); ok {
+		cached := v.([]int)
+		copied := make([]int, len(cached))
+		copy(copied, cached)
+		return copied, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT user_id
 		FROM server_members
@@ -167,10 +230,18 @@ func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) 
 		return nil, err
 	}
 
+	s.cache.Set(key, userIDs, 2*time.Minute)
 	return userIDs, nil
 }
 
 func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
+	key := fmt.Sprintf("%s%d", membersKey, channelID)
+	if v, ok := s.cache.Get(key); ok {
+		cached := v.([]int)
+		copied := make([]int, len(cached))
+		copy(copied, cached)
+		return copied, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT sm.user_id
 		FROM channels c
@@ -195,6 +266,7 @@ func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64)
 		return nil, err
 	}
 
+	s.cache.Set(key, userIDs, 2*time.Minute)
 	return userIDs, nil
 }
 
@@ -459,7 +531,19 @@ func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID in
 	`
 
 	_, err := s.db.ExecContext(ctx, query, userID, serverID)
-	return err
+	if err != nil {
+		return err
+	}
+	s.cache.Delete(fmt.Sprintf("%s%d", serversUserKey, userID))
+	s.cache.Delete(fmt.Sprintf("%s%d", membersServerKey, serverID))
+	s.cache.Delete(fmt.Sprintf("%s%d:%d", memberKey, userID, serverID))
+	channels, err := s.GetServerChannels(ctx, serverID)
+	if err == nil {
+		for _, channel := range channels {
+			s.cache.Delete(fmt.Sprintf("%s%d:%d", accessKey, channel.ID, userID))
+		}
+	}
+	return nil
 }
 
 func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64, error) {
@@ -489,6 +573,13 @@ func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64
 }
 
 func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]types.Channel, error) {
+	key := fmt.Sprintf("%s%d", channelsServerKey, serverID)
+	if v, ok := s.cache.Get(key); ok {
+		cached := v.([]types.Channel)
+		copied := make([]types.Channel, len(cached))
+		copy(copied, cached)
+		return copied, nil
+	}
 	query := `
 		SELECT
 			id,
@@ -519,10 +610,18 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	s.cache.Set(key, channels, 5*time.Minute)
 	return channels, nil
 }
 
 func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
+	key := fmt.Sprintf("%s%d", serversUserKey, userID)
+	if v, ok := s.cache.Get(key); ok {
+		cached := v.([]types.Server)
+		copied := make([]types.Server, len(cached))
+		copy(copied, cached)
+		return copied, nil
+	}
 	query := `
 		SELECT s.id, s.name, s.owner_id
 		FROM servers s
@@ -550,10 +649,17 @@ func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.S
 		return nil, err
 	}
 
+	s.cache.Set(key, servers, 5*time.Minute)
 	return servers, nil
 }
 
 func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.Channel, error) {
+	key := fmt.Sprintf("%s%d", channelKey, channelID)
+	if v, ok := s.cache.Get(key); ok {
+		ch := v.(*types.Channel)
+		chCopy := *ch
+		return &chCopy, nil
+	}
 	query := `
 		SELECT id, server_id, name, type, created_at
 		FROM channels
@@ -571,6 +677,7 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 		return nil, err
 	}
 
+	s.cache.Set(key, &channel, 5*time.Minute)
 	return &channel, nil
 }
 

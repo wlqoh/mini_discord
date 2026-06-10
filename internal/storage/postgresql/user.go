@@ -56,14 +56,29 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 }
 
 func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE id = $1", id)
+	key := fmt.Sprintf("%s%d", userIDKey, id)
+	if v, ok := s.cache.Get(key); ok {
+		u := v.(*types.User)
+		uCopy := *u
+		return &uCopy, nil
+	}
+	val, err := s.sf.Do(ctx, key, func(ctx context.Context) (interface{}, error) {
+		row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE id = $1", id)
 
-	u, err := scanRowIntoUser(row)
+		u, err := scanRowIntoUser(row)
+		if err != nil {
+			return nil, err
+		}
+
+		s.cache.Set(key, u, 0)
+		return u, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	return u, nil
+	u := val.(*types.User)
+	uCopy := *u
+	return &uCopy, nil
 }
 
 func (s *Storage) SaveUserAvatar(ctx context.Context, userID int, avatarKey string) error {
@@ -73,7 +88,13 @@ func (s *Storage) SaveUserAvatar(ctx context.Context, userID int, avatarKey stri
 		avatarKey,
 		userID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	key := fmt.Sprintf("%s%d", userIDKey, userID)
+	s.cache.Delete(key)
+	return nil
 }
 
 func (s *Storage) GetOrCreateAttachmentFolderKey(ctx context.Context, userID int) (string, error) {
@@ -98,7 +119,8 @@ func (s *Storage) GetOrCreateAttachmentFolderKey(ctx context.Context, userID int
 	if err != nil {
 		return "", err
 	}
-
+	key := fmt.Sprintf("%s%d", userIDKey, userID)
+	s.cache.Delete(key)
 	return newKey, nil
 }
 
@@ -110,10 +132,20 @@ func (s *Storage) CreateUser(ctx context.Context, user types.User) error {
 func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateUserRequest) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE users SET first_name = $1, last_name = $2, nickname = $3, updated_at = NOW() WHERE id = $4",
 		user.FirstName, user.LastName, user.Nickname, userID)
-	return err
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("%s%d", userIDKey, userID)
+	s.cache.Delete(key)
+	return nil
 }
 
 func (s *Storage) DeleteUser(ctx context.Context, userID int) error {
 	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
-	return err
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("%s%d", userIDKey, userID)
+	s.cache.Delete(key)
+	return nil
 }
