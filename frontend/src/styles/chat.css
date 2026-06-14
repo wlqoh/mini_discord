@@ -248,13 +248,32 @@
     margin-left: 32px;
 }
 
-.voice-volume-popover input[type="range"] {
+.voice-volume-slider-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.voice-volume-slider-wrap input[type="range"] {
     width: 120px;
+}
+
+.voice-volume-ticks {
+    display: flex;
+    justify-content: space-between;
+    width: 120px;
+    padding: 0 2px;
+    font-size: 9px;
+    color: var(--text-muted);
+    line-height: 1;
+    pointer-events: none;
 }
 
 .voice-volume-value {
     font-size: 11px;
     color: var(--text-muted);
+    min-width: 34px;
+    text-align: right;
 }
 
 .chat-main {

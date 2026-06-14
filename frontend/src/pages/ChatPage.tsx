@@ -27,6 +27,7 @@ import "../styles/chat.css";
 const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
+const VOICE_VOLUME_KEY = "voice_volume_by_user";
 const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
 const MAX_AVATAR_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
 const ALLOWED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -94,7 +95,25 @@ export default function ChatPage() {
     const [isDeafened, setIsDeafened] = useState(false);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
-    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>({});
+    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
+        try {
+            const stored = localStorage.getItem(VOICE_VOLUME_KEY);
+            if (!stored) return {};
+            const parsed = JSON.parse(stored) as unknown;
+            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+            const result: Record<number, number> = {};
+            for (const [k, v] of Object.entries(parsed)) {
+                const id = Number(k);
+                const vol = Number(v);
+                if (Number.isFinite(id) && id > 0 && Number.isFinite(vol) && vol >= 0 && vol <= 2) {
+                    result[id] = vol;
+                }
+            }
+            return result;
+        } catch {
+            return {};
+        }
+    });
     const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const micBeforeDeafenRef = useRef(true);
     const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfile | null>(
@@ -510,6 +529,14 @@ export default function ChatPage() {
         }
         selectedServerIdRef.current = selectedServerId;
     }, [selectedServerId]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(VOICE_VOLUME_KEY, JSON.stringify(voiceVolumeByUserId));
+        } catch {
+            // ignore quota or security errors
+        }
+    }, [voiceVolumeByUserId]);
 
     useEffect(() => {
         if (!isConnected || selectedServerId <= 0) {
@@ -1463,20 +1490,28 @@ export default function ChatPage() {
                                             </div>
                                             {activeVolumeUserId === participant.user_id && (
                                                 <div className="voice-volume-popover" onClick={(e) => e.stopPropagation()}>
-                                                    <input
-                                                        type="range"
-                                                        min="0"
-                                                        max="1"
-                                                        step="0.01"
-                                                        value={voiceVolumeByUserId[participant.user_id] ?? 1}
-                                                        onChange={(e) => {
-                                                            const next = Number(e.target.value);
-                                                            setVoiceVolumeByUserId((prev) => ({
-                                                                ...prev,
-                                                                [participant.user_id]: next,
-                                                            }));
-                                                        }}
-                                                    />
+                                                    <div className="voice-volume-slider-wrap">
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="2"
+                                                            step="0.01"
+                                                            value={voiceVolumeByUserId[participant.user_id] ?? 1}
+                                                            onChange={(e) => {
+                                                                const raw = Number(e.target.value);
+                                                                const next = Number.isFinite(raw) ? Math.max(0, Math.min(2, raw)) : 1;
+                                                                setVoiceVolumeByUserId((prev) => ({
+                                                                    ...prev,
+                                                                    [participant.user_id]: next,
+                                                                }));
+                                                            }}
+                                                        />
+                                                        <div className="voice-volume-ticks" aria-hidden="true">
+                                                            <span>0%</span>
+                                                            <span>100%</span>
+                                                            <span>200%</span>
+                                                        </div>
+                                                    </div>
                                                     <span className="voice-volume-value">
                                                         {Math.round((voiceVolumeByUserId[participant.user_id] ?? 1) * 100)}%
                                                     </span>
