@@ -26,14 +26,10 @@ CREATE TABLE IF NOT EXISTS messages (
     channel_id bigint REFERENCES channels(id) ON DELETE CASCADE,
     author_id bigint REFERENCES users(id) ON DELETE SET NULL,
     content TEXT NOT NULL,
-    reply_to_id bigint REFERENCES messages(id) ON DELETE SET NULL,
     created_at TIMESTAMP DEFAULT now(),
     edited_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_channel_created
     ON messages(channel_id, created_at DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_messages_reply_to_id
-    ON messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
 
