@@ -2,6 +2,7 @@ import type {
   JoinVoiceResponse,
   Message,
   OnlineUser,
+  ReplyPreview,
   RTCSignalEvent,
   RTCSignalPayload, UserProfile,
   VoiceChannelParticipants,
@@ -114,6 +115,8 @@ function toMessage(raw: unknown): Message | null {
       nickName?: unknown;
     } | unknown;
     attachments?: unknown;
+    reply_to_id?: unknown;
+    reply_to?: unknown;
   };
 
   const candidate = raw as RawMessage;
@@ -167,6 +170,29 @@ function toMessage(raw: unknown): Message | null {
     (typeof candidate.avatar_url === "string" && candidate.avatar_url) ||
     "";
 
+  const replyToId: number | null | undefined =
+    candidate.reply_to_id !== undefined && candidate.reply_to_id !== null
+      ? (typeof candidate.reply_to_id === "number" ? candidate.reply_to_id : null)
+      : undefined;
+
+  let replyTo: ReplyPreview | null | undefined = undefined;
+  if (candidate.reply_to && typeof candidate.reply_to === "object") {
+    const r = candidate.reply_to as unknown as Record<string, unknown>;
+    if (typeof r.message_id === "number") {
+      replyTo = {
+        message_id: r.message_id,
+        author_id: typeof r.author_id === "number" ? r.author_id : 0,
+        author_first_name: typeof r.author_first_name === "string" ? r.author_first_name : "",
+        author_last_name: typeof r.author_last_name === "string" ? r.author_last_name : "",
+        author_nickname: typeof r.author_nickname === "string" ? r.author_nickname : undefined,
+        content: typeof r.content === "string" ? r.content : "",
+        has_attachments: typeof r.has_attachments === "boolean" ? r.has_attachments : false,
+      };
+    }
+  } else if (replyToId === null) {
+    replyTo = null;
+  }
+
   return {
     id: typeof candidate.id === "number" ? candidate.id : 0,
     channel_id: candidate.channel_id,
@@ -177,6 +203,8 @@ function toMessage(raw: unknown): Message | null {
     author_avatar_url: authorAvatarUrl,
     content: candidate.content,
     attachments: parseAttachments(candidate.attachments),
+    reply_to_id: replyToId,
+    reply_to: replyTo,
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
 }
@@ -483,10 +511,13 @@ export class ChatSocket {
     await this.sendCommand("join_server", { server_id: serverId });
   }
 
-  async sendMessage(channelId: number, content: string, attachmentIds?: number[]): Promise<void> {
+  async sendMessage(channelId: number, content: string, attachmentIds?: number[], replyToId?: number | null): Promise<void> {
     const payload: Record<string, unknown> = { channel_id: channelId, content };
     if (attachmentIds && attachmentIds.length > 0) {
       payload.attachment_ids = attachmentIds;
+    }
+    if (replyToId != null) {
+      payload.reply_to_id = replyToId;
     }
     await this.sendCommand("send_message", payload);
   }

@@ -95,6 +95,7 @@ export default function ChatPage() {
     const [isDeafened, setIsDeafened] = useState(false);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
         try {
             const stored = localStorage.getItem(VOICE_VOLUME_KEY);
@@ -792,14 +793,15 @@ export default function ChatPage() {
         }
     }
 
-    async function handleSend(text: string, attachmentIds?: number[]) {
+    async function handleSend(text: string, attachmentIds?: number[], replyToId?: number | null) {
         if (!socketRef.current || !isConnected || selectedChannelId <= 0) {
             return;
         }
 
         try {
             setError("");
-            await socketRef.current.sendMessage(selectedChannelId, text, attachmentIds);
+            await socketRef.current.sendMessage(selectedChannelId, text, attachmentIds, replyToId);
+            setReplyToMessage(null);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Failed to send message";
             setError(message);
@@ -1193,6 +1195,16 @@ export default function ChatPage() {
     const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
     const shouldHideMessageInput = isVoiceChannel;
     const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
+
+    function scrollToMessage(messageId: number) {
+        const el = document.getElementById(`message-${messageId}`);
+        if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("message-highlight");
+            setTimeout(() => el.classList.remove("message-highlight"), 2000);
+        }
+    }
+
     const userInitial =
         currentUserProfile?.nickname?.[0]?.toUpperCase() ??
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
@@ -1647,7 +1659,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile} onDeleteMessage={handleDeleteMessage}/>
+                    <MessageList key={selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile} onDeleteMessage={handleDeleteMessage} onReply={setReplyToMessage} onScrollToMessage={scrollToMessage}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <MessageInput
@@ -1659,6 +1671,8 @@ export default function ChatPage() {
                         isOnlineUsersLoading={isOnlineUsersLoading}
                         onlineUserAvatarByName={onlineUserAvatarByName}
                         onOpenProfile={openUserProfile}
+                        replyToMessage={replyToMessage}
+                        onCancelReply={() => setReplyToMessage(null)}
                     />
                 )}
             </section>

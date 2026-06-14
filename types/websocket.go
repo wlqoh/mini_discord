@@ -28,6 +28,8 @@ type ServerStorage interface {
 	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
 	SaveMessageAttachments(ctx context.Context, messageID int64, attachments []Attachment) error
 	GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]Attachment, error)
+	GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3Host string) (map[int64]*WsReplyTo, error)
+	GetReplyPreview(ctx context.Context, messageID int64) (*WsReplyTo, error)
 }
 
 const (
@@ -111,6 +113,7 @@ type WsSendMessageRequest struct {
 	ChannelID     int64   `json:"channel_id"`
 	Content       string  `json:"content"`
 	AttachmentIDs []int64 `json:"attachment_ids,omitempty"`
+	ReplyToID    *int64  `json:"reply_to_id,omitempty"`
 }
 
 type WsDeleteMessageRequest struct {
@@ -257,8 +260,21 @@ type WsMessage struct {
 	AuthorAvatarURL string       `json:"author_avatar_url,omitempty"`
 	Content         string       `json:"content"`
 	Attachments     []Attachment `json:"attachments,omitempty"`
+	ReplyToID       *int64       `json:"reply_to_id,omitempty"`
+	ReplyTo         *WsReplyTo   `json:"reply_to,omitempty"`
 	CreatedAt       time.Time    `json:"created_at"`
 	EditedAt        *time.Time   `json:"edited_at,omitempty"`
+}
+
+type WsReplyTo struct {
+	MessageID       int64  `json:"message_id"`
+	ChannelID       int64  `json:"-"`
+	AuthorID        int    `json:"author_id"`
+	AuthorFirstName string `json:"author_first_name"`
+	AuthorLastName  string `json:"author_last_name"`
+	AuthorNickname  string `json:"author_nickname,omitempty"`
+	Content         string `json:"content"`
+	HasAttachments  bool   `json:"has_attachments"`
 }
 
 type Server struct {

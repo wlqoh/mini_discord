@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import { uploadAttachment } from "../services/avatarApi.ts";
-import type { OnlineUser } from "../types/chat.ts";
+import type { Message, OnlineUser } from "../types/chat.ts";
 
 type PendingFile = {
     id: string;
@@ -11,13 +11,15 @@ type PendingFile = {
 
 type Props = {
     disabled?: boolean;
-    onSend: (text: string, attachmentIds?: number[]) => Promise<void> | void;
+    onSend: (text: string, attachmentIds?: number[], replyToId?: number | null) => Promise<void> | void;
     isOnlinePanelOpen: boolean;
     onToggleOnlinePanel: () => void;
     onlineUsers: OnlineUser[];
     isOnlineUsersLoading: boolean;
     onlineUserAvatarByName: Record<string, string>;
     onOpenProfile?: (userId: number) => void;
+    replyToMessage?: Message | null;
+    onCancelReply?: () => void;
 };
 
 const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
@@ -52,12 +54,21 @@ export default function MessageInput({
     isOnlineUsersLoading,
     onlineUserAvatarByName,
     onOpenProfile,
+    replyToMessage,
+    onCancelReply,
 }: Props) {
     const [text, setText] = useState("");
     const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadError, setUploadError] = useState("");
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    function getReplyAuthorLabel(msg: Message): string {
+        const nickname = msg.author_nickname?.trim() ?? "";
+        if (nickname) return nickname;
+        const fullName = `${msg.author_first_name?.trim() ?? ""} ${msg.author_last_name?.trim() ?? ""}`.trim();
+        return fullName || `User #${msg.author_id}`;
+    }
 
     
 
@@ -238,7 +249,7 @@ export default function MessageInput({
             setIsUploading(false);
         }
 
-        await onSend(value, attachmentIds);
+        await onSend(value, attachmentIds, replyToMessage?.id ?? undefined);
         setText("");
         setPendingFiles([]);
         setUploadError("");
@@ -252,6 +263,17 @@ export default function MessageInput({
 
     return (
         <form className="message-form" onSubmit={handleSubmit}>
+            {replyToMessage && (
+                <div className="reply-draft">
+                    <div className="reply-draft-content">
+                        <span className="reply-draft-author">{getReplyAuthorLabel(replyToMessage)}</span>
+                        <span className="reply-draft-text">{replyToMessage.content ? (replyToMessage.content.length > 80 ? replyToMessage.content.slice(0, 80) + "..." : replyToMessage.content) : (replyToMessage.attachments && replyToMessage.attachments.length > 0 ? "📎 Attachment" : "")}</span>
+                    </div>
+                    <button type="button" className="reply-draft-cancel" onClick={onCancelReply} aria-label="Cancel reply">
+                        <X size={14} />
+                    </button>
+                </div>
+            )}
             {pendingFiles.length > 0 && (
                 <div className="message-attachments-preview">
                     {pendingFiles.map((pf) => (

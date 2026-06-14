@@ -20,6 +20,16 @@ export interface Attachment {
     size_bytes?: number;
 }
 
+export interface ReplyPreview {
+    message_id: number;
+    author_id: number;
+    author_first_name: string;
+    author_last_name: string;
+    author_nickname?: string;
+    content: string;
+    has_attachments: boolean;
+}
+
 export interface Message {
     id: number;
     channel_id: number;
@@ -30,6 +40,8 @@ export interface Message {
     author_avatar_url?: string;
     content: string;
     attachments?: Attachment[];
+    reply_to_id?: number | null;
+    reply_to?: ReplyPreview | null;
     created_at: string;
 }
 
