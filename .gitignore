@@ -44,4 +44,3 @@ frontend/dist/
 # Docker
 docker-compose.override.yml
 frontend/nginx.conf
-docker-compose.yml

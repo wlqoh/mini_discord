@@ -1,0 +1,71 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: murad
+      POSTGRES_PASSWORD: "123"
+      POSTGRES_DB: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U murad -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    image: postgres:17-alpine
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: "123"
+    volumes:
+      - ./sql/init:/migrations:ro
+    command: >
+      sh -c "
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/01_users.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/02_chat_schema.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/03_users_avatar_key.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/04_message_attachments.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/05_users_attachment_folder_key.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/06_users_nickname.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/07_messages_reply_to.sql
+      "
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: ./config/prod.yaml
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_WEBRTC_STUN_URLS: ${VITE_WEBRTC_STUN_URLS:-stun:stun.l.google.com:19302}
+        VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-turn:45.155.205.212:3478?transport=udp,turn:45.155.205.212:3478?transport=tcp,turn:45.155.205.212:5349?transport=udp,turn:45.155.205.212:5349?transport=tcp}
+        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-mini discord}
+        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-${TURN_PASSWORD:-StrongPassword123}}
+        VITE_WEBRTC_FORCE_RELAY: ${VITE_WEBRTC_FORCE_RELAY:-false}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:8081:80"
+
+volumes:
+  pgdata:
