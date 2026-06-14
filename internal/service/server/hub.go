@@ -595,8 +595,8 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		h.pushError(req.client, "channel_id is required")
 		return
 	}
-	if payload.Content == "" && len(payload.AttachmentIDs) == 0 {
-		h.pushError(req.client, "content or attachment_ids are required")
+	if payload.Content == "" && len(payload.AttachmentIDs) == 0 && (payload.ReplyToID == nil || *payload.ReplyToID <= 0) {
+		h.pushError(req.client, "content, attachment_ids, or reply_to_id are required")
 		return
 	}
 
@@ -608,6 +608,24 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	if !canAccess {
 		h.pushError(req.client, "access denied")
 		return
+	}
+
+	var replyTo *types.WsReplyTo
+	if payload.ReplyToID != nil && *payload.ReplyToID > 0 {
+		rt, err := h.storage.GetReplyPreview(ctx, *payload.ReplyToID)
+		if err != nil {
+			h.pushError(req.client, "failed to resolve reply target")
+			return
+		}
+		if rt == nil {
+			h.pushError(req.client, "reply target message not found")
+			return
+		}
+		if rt.ChannelID != payload.ChannelID {
+			h.pushError(req.client, "reply target must be in the same channel")
+			return
+		}
+		replyTo = rt
 	}
 
 	var pendingAtts []*types.PendingAttachment
@@ -651,6 +669,8 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		AuthorNickname:  user.Nickname,
 		AuthorAvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
 		Content:         content,
+		ReplyToID:       payload.ReplyToID,
+		ReplyTo:         replyTo,
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := h.storage.SaveMessage(ctx, msg); err != nil {

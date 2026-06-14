@@ -10,9 +10,17 @@ type Props = {
   deafened?: boolean;
 };
 
+type GainState = {
+  ctx: AudioContext;
+  source: MediaStreamAudioSourceNode;
+  gain: GainNode;
+  stream: MediaStream;
+};
+
 export default function VideoTile({ stream, label, muted = false, volume = 1, micEnabled, deafened }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const gainStateRef = useRef<GainState | null>(null);
   const isDebugEnabled = (() => {
     try {
       return window.localStorage.getItem("webrtc_debug") === "1";
@@ -32,6 +40,18 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
       void el.requestFullscreen();
     }
   };
+
+  function teardownGain(): void {
+    const g = gainStateRef.current;
+    if (!g) return;
+    try { g.source.disconnect(); } catch { /* ignore */ }
+    try { g.gain.disconnect(); } catch { /* ignore */ }
+    try { void g.ctx.close(); } catch { /* ignore */ }
+    gainStateRef.current = null;
+  }
+
+  // Unmount-only cleanup for the GainNode (safety net).
+  useEffect(() => () => teardownGain(), []);
 
   useEffect(() => {
     const el = ref.current;
@@ -54,6 +74,7 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
         }
       });
     }
+    // GainNode lifecycle is managed entirely in the volume/muted effect below.
   }, [stream, label, isDebugEnabled]);
 
   useEffect(() => {
@@ -61,10 +82,43 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
     if (!el) {
       return;
     }
-    const safeVolume = Math.min(1, Math.max(0, volume));
-    el.muted = muted;
-    el.defaultMuted = muted;
-    el.volume = muted ? 0 : safeVolume;
+
+    const clampedVolume = Math.min(2, Math.max(0, Number.isFinite(volume) ? volume : 1));
+    const effectiveMuted = muted || clampedVolume === 0;
+
+    if (!effectiveMuted && clampedVolume > 1 && stream) {
+      // Route via AudioContext GainNode to allow gain > 1.
+      const existing = gainStateRef.current;
+      if (existing && existing.stream === stream) {
+        // Same stream — just update gain value in place.
+        existing.gain.gain.value = clampedVolume;
+        el.muted = true;
+        return;
+      }
+      // Stream changed or first time in boost mode — (re)create the graph.
+      teardownGain();
+      try {
+        const ctx = new AudioContext();
+        const source = ctx.createMediaStreamSource(stream);
+        const gain = ctx.createGain();
+        gain.gain.value = clampedVolume;
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        gainStateRef.current = { ctx, source, gain, stream };
+        el.muted = true;
+        void ctx.resume();
+        return;
+      } catch {
+        // AudioContext unavailable — fall through to native volume (capped at 1).
+        teardownGain();
+      }
+    }
+
+    // No boost needed — tear down GainNode if it was active and use native volume.
+    teardownGain();
+    el.muted = effectiveMuted;
+    el.defaultMuted = effectiveMuted;
+    el.volume = effectiveMuted ? 0 : Math.min(1, clampedVolume);
   }, [muted, volume, stream]);
 
   useEffect(() => {

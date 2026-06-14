@@ -1,11 +1,14 @@
 import { useState } from "react";
-import type { Attachment, Message } from "../types/chat.ts";
+import { CornerDownLeft, CornerUpLeft } from "lucide-react";
+import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
 
 type Props = {
     messages: Message[];
     currentUserId: number | null;
     onOpenProfile?: (userId: number) => void;
     onDeleteMessage?: (messageId: number, channelId: number) => void;
+    onReply?: (message: Message) => void;
+    onScrollToMessage?: (messageId: number) => void;
 };
 
 function getAuthorLabel(msg: Message): string {
@@ -132,7 +135,31 @@ function renderAttachment(att: Attachment) {
     );
 }
 
-export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage }: Props) {
+function truncateContent(text: string, maxLen = 60): string {
+    const stripped = text.replace(/\n/g, " ").trim();
+    if (stripped.length <= maxLen) return stripped;
+    return stripped.slice(0, maxLen) + "...";
+}
+
+function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; onScrollToMessage?: (id: number) => void }) {
+    const authorName = reply.author_nickname?.trim() || `${reply.author_first_name} ${reply.author_last_name}`.trim() || `User #${reply.author_id}`;
+    return (
+        <div
+            className="reply-preview"
+            role="button"
+            tabIndex={0}
+            onClick={() => onScrollToMessage?.(reply.message_id)}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onScrollToMessage?.(reply.message_id); } }}
+        >
+            <CornerUpLeft size={14} className="reply-preview-icon" />
+            <span className="reply-preview-author">{authorName}</span>
+            <span className="reply-preview-content">{truncateContent(reply.content)}</span>
+            {reply.has_attachments && <span className="reply-preview-attachment-indicator">📎</span>}
+        </div>
+    );
+}
+
+export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage, onReply, onScrollToMessage }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
     if (!messages.length) return <div className="messages-empty">No messages</div>;
@@ -143,7 +170,7 @@ export default function MessageList({ messages, currentUserId, onOpenProfile, on
                 const isOwn = currentUserId !== null && msg.author_id === currentUserId;
 
                 return (
-                    <div key={msg.id} className={`message-row ${isOwn ? "own" : "other"}`}>
+                    <div key={msg.id} id={`message-${msg.id}`} className={`message-row ${isOwn ? "own" : "other"}`}>
                         <button
                             className="message-avatar-wrap"
                             type="button"
@@ -198,18 +225,42 @@ export default function MessageList({ messages, currentUserId, onOpenProfile, on
                                             </button>
                                         </span>
                                     ) : (
-                                        <button
-                                            className="message-delete-btn"
-                                            type="button"
-                                            onClick={() => setConfirmDeleteId(msg.id)}
-                                            aria-label="Delete message"
-                                            title="Delete message"
-                                        >
-                                            ✕
-                                        </button>
+                                        <span className="message-actions-inline">
+                                            <button
+                                                className="message-reply-btn"
+                                                type="button"
+                                                onClick={() => onReply?.(msg)}
+                                                aria-label="Reply to message"
+                                                title="Reply"
+                                            >
+                                                <CornerDownLeft size={14} />
+                                            </button>
+                                            <button
+                                                className="message-delete-btn"
+                                                type="button"
+                                                onClick={() => setConfirmDeleteId(msg.id)}
+                                                aria-label="Delete message"
+                                                title="Delete message"
+                                            >
+                                                ✕
+                                            </button>
+                                        </span>
                                     )
-                                ) : null}
+                                ) : (
+                                    <button
+                                        className="message-reply-btn"
+                                        type="button"
+                                        onClick={() => onReply?.(msg)}
+                                        aria-label="Reply to message"
+                                        title="Reply"
+                                    >
+                                        <CornerDownLeft size={14} />
+                                    </button>
+                                )}
                             </div>
+                            {msg.reply_to && (
+                                <ReplyPreviewBlock reply={msg.reply_to} onScrollToMessage={onScrollToMessage} />
+                            )}
                             {msg.content && <div className="message-content">{msg.content}</div>}
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className="message-attachments">

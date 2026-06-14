@@ -276,19 +276,35 @@ func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 		content = " "
 	}
 
-	query := `
-	INSERT INTO messages (channel_id, author_id, content)
-	VALUES ($1,$2,$3)
-	RETURNING id, created_at
-	`
-
-	err := s.db.QueryRowContext(
-		ctx,
-		query,
-		msg.ChannelID,
-		msg.AuthorID,
-		content,
-	).Scan(&msg.ID, &msg.CreatedAt)
+	var err error
+	if msg.ReplyToID != nil && *msg.ReplyToID > 0 {
+		query := `
+		INSERT INTO messages (channel_id, author_id, content, reply_to_id)
+		VALUES ($1,$2,$3,$4)
+		RETURNING id, created_at
+		`
+		err = s.db.QueryRowContext(
+			ctx,
+			query,
+			msg.ChannelID,
+			msg.AuthorID,
+			content,
+			*msg.ReplyToID,
+		).Scan(&msg.ID, &msg.CreatedAt)
+	} else {
+		query := `
+		INSERT INTO messages (channel_id, author_id, content)
+		VALUES ($1,$2,$3)
+		RETURNING id, created_at
+		`
+		err = s.db.QueryRowContext(
+			ctx,
+			query,
+			msg.ChannelID,
+			msg.AuthorID,
+			content,
+		).Scan(&msg.ID, &msg.CreatedAt)
+	}
 
 	return err
 }
@@ -303,7 +319,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at
+	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
 		 FROM messages m
 		 LEFT JOIN users u ON u.id = m.author_id
 		 WHERE m.channel_id = $1
@@ -312,7 +328,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at
+		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
 			 FROM messages m
 			 LEFT JOIN users u ON u.id = m.author_id
 			 WHERE m.channel_id = $1
@@ -332,6 +348,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	for rows.Next() {
 		var msg types.WsMessage
 		var avatarKey sql.NullString
+		var replyToID *int64
 		if err := rows.Scan(
 			&msg.ID,
 			&msg.ChannelID,
@@ -343,6 +360,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			&msg.Content,
 			&msg.CreatedAt,
 			&msg.EditedAt,
+			&replyToID,
 		); err != nil {
 			return nil, nil, false, err
 		}
@@ -352,6 +370,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		if msg.Content == " " {
 			msg.Content = ""
 		}
+		msg.ReplyToID = replyToID
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
@@ -373,7 +392,6 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		}
 	}
 
-	// Reverse to get chronological order
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
 	}
@@ -387,9 +405,18 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		if err != nil {
 			return nil, nil, false, err
 		}
+
+		replyTos, err := s.GetMessageReplyTos(ctx, msgIDs, s3Host)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
 		for i := range messages {
 			if a, ok := atts[messages[i].ID]; ok {
 				messages[i].Attachments = a
+			}
+			if rt, ok := replyTos[messages[i].ID]; ok {
+				messages[i].ReplyTo = rt
 			}
 		}
 	}
@@ -522,6 +549,182 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 	}
 
 	return result, nil
+}
+
+func (s *Storage) GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3Host string) (map[int64]*types.WsReplyTo, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+
+	replyToIDs := make(map[int64]int64)
+	for _, id := range messageIDs {
+		replyToIDs[id] = 0
+	}
+
+	args := make([]any, len(messageIDs))
+	placeholders := make([]string, len(messageIDs))
+	for i, id := range messageIDs {
+		args[i] = id
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	query := fmt.Sprintf(
+		`SELECT m.id, m.reply_to_id
+		 FROM messages m
+		 WHERE m.id IN (%s)
+		   AND m.reply_to_id IS NOT NULL`,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	referencedIDs := make(map[int64]bool)
+	msgToReplyID := make(map[int64]int64)
+	for rows.Next() {
+		var msgID, replyToID int64
+		if err := rows.Scan(&msgID, &replyToID); err != nil {
+			return nil, err
+		}
+		msgToReplyID[msgID] = replyToID
+		referencedIDs[replyToID] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(referencedIDs) == 0 {
+		return nil, nil
+	}
+
+	refArgs := make([]any, 0, len(referencedIDs))
+	refPlaceholders := make([]string, 0, len(referencedIDs))
+	idx := 1
+	for refID := range referencedIDs {
+		refArgs = append(refArgs, refID)
+		refPlaceholders = append(refPlaceholders, fmt.Sprintf("$%d", idx))
+		idx++
+	}
+
+	refQuery := fmt.Sprintf(
+		`SELECT rm.id, rm.channel_id, rm.content, rm.author_id, u.first_name, u.last_name, u.nickname,
+		        EXISTS(SELECT 1 FROM message_attachments WHERE message_id = rm.id) AS has_attachments
+		 FROM messages rm
+		 LEFT JOIN users u ON u.id = rm.author_id
+		 WHERE rm.id IN (%s)`,
+		strings.Join(refPlaceholders, ","),
+	)
+
+	refRows, err := s.db.QueryContext(ctx, refQuery, refArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer refRows.Close()
+
+	type refInfo struct {
+		content         string
+		channelID       int64
+		authorID        sql.NullInt64
+		authorFirstName sql.NullString
+		authorLastName  sql.NullString
+		authorNickname  sql.NullString
+		hasAttachments  bool
+	}
+	refData := make(map[int64]*refInfo)
+	for refRows.Next() {
+		var id int64
+		var content string
+		var channelID int64
+		var authorID sql.NullInt64
+		var authorFirstName, authorLastName, authorNickname sql.NullString
+		var hasAttachments bool
+		if err := refRows.Scan(&id, &channelID, &content, &authorID, &authorFirstName, &authorLastName, &authorNickname, &hasAttachments); err != nil {
+			return nil, err
+		}
+		if content == " " {
+			content = ""
+		}
+		refData[id] = &refInfo{
+			content:         content,
+			channelID:       channelID,
+			authorID:        authorID,
+			authorFirstName: authorFirstName,
+			authorLastName:  authorLastName,
+			authorNickname:  authorNickname,
+			hasAttachments:  hasAttachments,
+		}
+	}
+	if err := refRows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make(map[int64]*types.WsReplyTo)
+	for msgID, replyID := range msgToReplyID {
+		info, ok := refData[replyID]
+		if !ok {
+			continue
+		}
+		var authorID int
+		if info.authorID.Valid {
+			authorID = int(info.authorID.Int64)
+		}
+		result[msgID] = &types.WsReplyTo{
+			MessageID:       replyID,
+			ChannelID:       info.channelID,
+			AuthorID:        authorID,
+			AuthorFirstName: info.authorFirstName.String,
+			AuthorLastName:  info.authorLastName.String,
+			AuthorNickname:  info.authorNickname.String,
+			Content:         info.content,
+			HasAttachments:  info.hasAttachments,
+		}
+	}
+
+	return result, nil
+}
+
+func (s *Storage) GetReplyPreview(ctx context.Context, messageID int64) (*types.WsReplyTo, error) {
+	var content string
+	var channelID int64
+	var authorID sql.NullInt64
+	var authorFirstName, authorLastName, authorNickname sql.NullString
+	var hasAttachments bool
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT m.content, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname,
+		       EXISTS(SELECT 1 FROM message_attachments WHERE message_id = m.id) AS has_attachments
+		FROM messages m
+		LEFT JOIN users u ON u.id = m.author_id
+		WHERE m.id = $1`, messageID).Scan(&content, &channelID, &authorID, &authorFirstName, &authorLastName, &authorNickname, &hasAttachments)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	if content == " " {
+		content = ""
+	}
+
+	var aID int
+	if authorID.Valid {
+		aID = int(authorID.Int64)
+	}
+
+	return &types.WsReplyTo{
+		MessageID:       messageID,
+		ChannelID:       channelID,
+		AuthorID:        aID,
+		AuthorFirstName: authorFirstName.String,
+		AuthorLastName:  authorLastName.String,
+		AuthorNickname:  authorNickname.String,
+		Content:         content,
+		HasAttachments:  hasAttachments,
+	}, nil
 }
 
 func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID int64) error {
