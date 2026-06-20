@@ -56,6 +56,13 @@ export default function Login(): React.JSX.Element {
     setError("");
   };
 
+  const focusField = (id: string) => (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      document.getElementById(id)?.focus();
+    }
+  };
+
   const validateForm = (): boolean => {
     if (!formData.email || !formData.password) {
       setError("Please fill all fields.");
@@ -130,6 +137,13 @@ export default function Login(): React.JSX.Element {
               onChange={handleChange}
               placeholder="user@example.com"
               disabled={loading}
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="next"
+              onKeyDown={focusField("password")}
             />
           </div>
 
@@ -143,6 +157,8 @@ export default function Login(): React.JSX.Element {
               onChange={handleChange}
               placeholder="Enter password"
               disabled={loading}
+              autoComplete="current-password"
+              enterKeyHint="done"
             />
           </div>
 

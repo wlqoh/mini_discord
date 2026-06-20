@@ -350,6 +350,10 @@ export default function MessageInput({
                         onChange={(e) => setText(e.target.value)}
                         onPaste={handlePaste}
                         disabled={disabled || isUploading}
+                        inputMode="text"
+                        enterKeyHint="send"
+                        autoCapitalize="sentences"
+                        autoComplete="off"
                     />
                     <button
                         className="message-voice-btn"
