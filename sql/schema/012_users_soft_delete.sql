@@ -1,0 +1,14 @@
+-- +goose Up
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- +goose Down
+ALTER TABLE users
+    DROP COLUMN IF EXISTS deleted_at;
+
+ALTER TABLE users
+    DROP COLUMN IF EXISTS is_deleted;
+

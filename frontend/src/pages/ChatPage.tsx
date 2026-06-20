@@ -89,6 +89,10 @@ export default function ChatPage() {
     const [nicknameDraft, setNicknameDraft] = useState("");
     const [profileUpdateError, setProfileUpdateError] = useState("");
     const [isSavingNickname, setIsSavingNickname] = useState(false);
+    const [isDeleteAccountConfirmOpen, setIsDeleteAccountConfirmOpen] = useState(false);
+    const [deletePasswordDraft, setDeletePasswordDraft] = useState("");
+    const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+    const [deleteAccountError, setDeleteAccountError] = useState("");
     const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
@@ -167,6 +171,9 @@ export default function ChatPage() {
         setSelectedProfileError("");
         setProfileUpdateError("");
         setIsProfileLoading(false);
+        setDeleteAccountError("");
+        setIsDeleteAccountConfirmOpen(false);
+        setDeletePasswordDraft("");
         setIsAvatarPreviewOpen(false);
         setNicknameDraft(currentUserProfile?.nickname ?? "");
         setIsProfileModalOpen(true);
@@ -841,6 +848,36 @@ export default function ChatPage() {
         setIsProfileModalOpen(false);
 
         navigate("/login", {replace: true});
+    }
+
+    async function handleDeleteAccount(): Promise<void> {
+        const password = deletePasswordDraft;
+        if (!password) {
+            setDeleteAccountError("Enter your password to confirm");
+            return;
+        }
+        if (isDeletingAccount) {
+            return;
+        }
+        setIsDeletingAccount(true);
+        setDeleteAccountError("");
+        try {
+            await API.delete("/deleteUser", { data: { password } });
+            callClientRef.current?.dispose();
+            callClientRef.current = null;
+            socketRef.current?.close();
+            socketRef.current = null;
+            clearAuthStorage();
+            localStorage.removeItem(CHAT_SERVERS_KEY);
+            localStorage.removeItem(CHAT_CHANNELS_BY_SERVER_KEY);
+            localStorage.removeItem(CHAT_SELECTED_SERVER_KEY);
+            setIsProfileModalOpen(false);
+            navigate("/login", {replace: true});
+        } catch (err) {
+            setDeleteAccountError(extractApiError(err, "Failed to delete account"));
+        } finally {
+            setIsDeletingAccount(false);
+        }
     }
 
     async function handleJoinVoice(): Promise<void> {
@@ -1773,6 +1810,45 @@ export default function ChatPage() {
                                 <span className="profile-modal-value">{profileDisplayName || "-"}</span>
                             </div>
                         </div>
+                        {isSelfProfile && isDeleteAccountConfirmOpen ? (
+                            <div className="delete-account-confirm">
+                                <div className="delete-account-warning">
+                                    This permanently deletes your account. Enter your password to confirm.
+                                </div>
+                                <input
+                                    className="modal-input"
+                                    type="password"
+                                    value={deletePasswordDraft}
+                                    onChange={(e) => setDeletePasswordDraft(e.target.value)}
+                                    placeholder="Password"
+                                    disabled={isDeletingAccount}
+                                    autoFocus
+                                />
+                                {deleteAccountError ? <div className="profile-avatar-error">{deleteAccountError}</div> : null}
+                                <div className="delete-account-confirm-actions">
+                                    <button
+                                        className="modal-btn modal-btn-secondary"
+                                        type="button"
+                                        onClick={() => {
+                                            setIsDeleteAccountConfirmOpen(false);
+                                            setDeletePasswordDraft("");
+                                            setDeleteAccountError("");
+                                        }}
+                                        disabled={isDeletingAccount}
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        className="modal-btn modal-btn-danger"
+                                        type="button"
+                                        onClick={() => void handleDeleteAccount()}
+                                        disabled={isDeletingAccount}
+                                    >
+                                        {isDeletingAccount ? "Deleting..." : "Delete account"}
+                                    </button>
+                                </div>
+                            </div>
+                        ) : null}
                         <div className="modal-actions">
                             {isSelfProfile ? (
                                 <>
@@ -1791,6 +1867,16 @@ export default function ChatPage() {
                                     >
                                         Logout
                                     </button>
+                                    {!isDeleteAccountConfirmOpen ? (
+                                        <button
+                                            className="modal-btn modal-btn-danger"
+                                            type="button"
+                                            onClick={() => setIsDeleteAccountConfirmOpen(true)}
+                                            disabled={isSavingNickname || isDeletingAccount}
+                                        >
+                                            Delete account
+                                        </button>
+                                    ) : null}
                                 </>
                             ) : null}
                             <button

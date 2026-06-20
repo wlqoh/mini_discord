@@ -41,6 +41,10 @@ func WithJWTAuth(userReader UserReader, log *slog.Logger, isWebsocket bool, secr
 			log.Error("failed to get user by id", sl.Err(err))
 			return utils.PermissionDenied(c)
 		}
+		if u.IsDeleted {
+			log.Info("deleted user access attempt")
+			return utils.PermissionDenied(c)
+		}
 
 		c.Locals("user_id", u.ID)
 		return c.Next()

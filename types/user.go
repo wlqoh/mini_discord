@@ -16,16 +16,18 @@ type UserStorage interface {
 }
 
 type User struct {
-	ID                  int       `json:"id"`
-	FirstName           string    `json:"first_name"`
-	LastName            string    `json:"last_name"`
-	Nickname            string    `json:"nickname"`
-	Email               string    `json:"email"`
-	AvatarKey           string    `json:"avatar_key,omitempty"`
-	AttachmentFolderKey string    `json:"attachment_folder_key,omitempty"`
-	Password            string    `json:"-"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                  int        `json:"id"`
+	FirstName           string     `json:"first_name"`
+	LastName            string     `json:"last_name"`
+	Nickname            string     `json:"nickname"`
+	Email               string     `json:"email"`
+	AvatarKey           string     `json:"avatar_key,omitempty"`
+	AttachmentFolderKey string     `json:"attachment_folder_key,omitempty"`
+	Password            string     `json:"-"`
+	IsDeleted           bool       `json:"-"`
+	DeletedAt           *time.Time `json:"-"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 type UserResponse struct {
 	FirstName string `json:"first_name"`
@@ -49,8 +51,8 @@ type UpdateUserRequest struct {
 	Nickname  string `json:"nickname" validate:"required,min=1"`
 }
 
-type DeleteUserRequest struct {
-	ID int `json:"id" validate:"required"`
+type DeleteAccountRequest struct {
+	Password string `json:"password" validate:"required"`
 }
 
 type LoginUserRequest struct {

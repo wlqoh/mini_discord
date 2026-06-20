@@ -319,7 +319,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
+	query := `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
 		 FROM messages m
 		 LEFT JOIN users u ON u.id = m.author_id
 		 WHERE m.channel_id = $1
@@ -328,7 +328,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT m.id, m.channel_id, m.author_id, u.first_name, u.last_name, u.nickname, u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
+		query = `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
 			 FROM messages m
 			 LEFT JOIN users u ON u.id = m.author_id
 			 WHERE m.channel_id = $1

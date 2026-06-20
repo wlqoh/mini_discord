@@ -8,10 +8,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/types"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE email = $1", email)
+	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, created_at, updated_at FROM users WHERE email = $1 AND is_deleted = FALSE", email)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -25,6 +26,7 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 	u := new(types.User)
 	var avatarKey sql.NullString
 	var folderKey sql.NullString
+	var deletedAt sql.NullTime
 
 	err := row.Scan(
 		&u.ID,
@@ -35,6 +37,8 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 		&avatarKey,
 		&folderKey,
 		&u.Password,
+		&u.IsDeleted,
+		&deletedAt,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)
@@ -51,6 +55,9 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 	if folderKey.Valid {
 		u.AttachmentFolderKey = folderKey.String
 	}
+	if deletedAt.Valid {
+		u.DeletedAt = &deletedAt.Time
+	}
 
 	return u, nil
 }
@@ -63,7 +70,7 @@ func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) 
 		return &uCopy, nil
 	}
 	val, err := s.sf.Do(ctx, key, func(ctx context.Context) (interface{}, error) {
-		row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, created_at, updated_at FROM users WHERE id = $1", id)
+		row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, created_at, updated_at FROM users WHERE id = $1", id)
 
 		u, err := scanRowIntoUser(row)
 		if err != nil {
@@ -141,7 +148,26 @@ func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateU
 }
 
 func (s *Storage) DeleteUser(ctx context.Context, userID int) error {
-	_, err := s.db.ExecContext(ctx, "DELETE FROM users WHERE id = $1", userID)
+	deletedEmail := fmt.Sprintf("deleted+%s@local.invalid", uuid.NewString())
+	newPassword, err := bcrypt.GenerateFromPassword([]byte(uuid.NewString()), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx, `UPDATE users
+		SET first_name = $1,
+			last_name = $2,
+			nickname = $3,
+			email = $4,
+			password = $5,
+			avatar_key = NULL,
+			attachment_folder_key = NULL,
+			is_deleted = TRUE,
+			deleted_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $6`,
+		"Deleted", "User", "deleted user", deletedEmail, string(newPassword), userID,
+	)
 	if err != nil {
 		return err
 	}
