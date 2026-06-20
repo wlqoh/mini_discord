@@ -53,6 +53,7 @@ body {
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* ---- Layout -------------------------------------------------- */
@@ -68,6 +69,7 @@ body {
     padding-bottom: calc(24px + env(safe-area-inset-bottom));
     overflow: hidden;
     background: var(--auth-bg);
+    transition: background-color 0.2s ease;
 }
 
 /* Animated crimson glow blobs */
@@ -139,6 +141,8 @@ body {
         0 0 0 1px rgba(255, 255, 255, 0.04) inset,
         0 8px 40px rgba(0, 0, 0, 0.55),
         0 0 90px rgba(224, 37, 53, 0.04);
+    animation: auth-card-in 0.22s ease-out both;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .auth-card h1 {
@@ -160,6 +164,7 @@ body {
     margin-bottom: 18px;
     font-size: 13px;
     line-height: 1.5;
+    animation: notice-in 0.16s ease-out both;
 }
 
 /* ---- Form ---------------------------------------------------- */
@@ -301,10 +306,39 @@ button, .submit-button {
     }
 }
 
+/* ---- H: Auth card entrance ----------------------------------------- */
+@keyframes auth-card-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* ---- I: Notice slide-in (error banner, empty states) --------------- */
+@keyframes notice-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: none; }
+}
+
 /* ---- Reduced motion ------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
     .auth-container::before,
     .auth-container::after {
         animation: none;
+    }
+
+    @keyframes auth-card-in { 0%, 100% { opacity: 1; transform: none; } }
+    @keyframes notice-in    { 0%, 100% { opacity: 1; transform: none; } }
+
+    .auth-card {
+        animation: none;
+    }
+
+    .error-message {
+        animation: none;
+    }
+
+    body,
+    .auth-card,
+    .auth-container {
+        transition: none;
     }
 }

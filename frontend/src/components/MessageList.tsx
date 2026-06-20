@@ -161,16 +161,18 @@ function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; 
 
 export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage, onReply, onScrollToMessage }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+    const [initialCount] = useState(() => messages.length);
 
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
     return (
         <div className="messages-list">
-            {messages.map((msg) => {
+            {messages.map((msg, index) => {
                 const isOwn = currentUserId !== null && msg.author_id === currentUserId;
+                const isNew = index >= initialCount;
 
                 return (
-                    <div key={msg.id} id={`message-${msg.id}`} className={`message-row ${isOwn ? "own" : "other"}`}>
+                    <div key={msg.id} id={`message-${msg.id}`} className={`message-row ${isOwn ? "own" : "other"}`} data-new={isNew ? "true" : undefined}>
                         <button
                             className="message-avatar-wrap"
                             type="button"

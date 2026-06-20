@@ -103,6 +103,7 @@ export default function ChatPage() {
     const [isMicEnabled, setIsMicEnabled] = useState(true);
     const [isCameraEnabled, setIsCameraEnabled] = useState(true);
     const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
+    const [closingModal, setClosingModal] = useState<string | null>(null);
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
         try {
             const stored = localStorage.getItem(VOICE_VOLUME_KEY);
@@ -168,6 +169,14 @@ export default function ChatPage() {
         const url = await getMyAvatarUrl();
         setAvatarUrl(url ?? "");
     }, []);
+
+    function closeModalWithAnim(name: string, close: () => void): void {
+        setClosingModal(name);
+        window.setTimeout(() => {
+            close();
+            setClosingModal(null);
+        }, 160);
+    }
 
     const openSelfProfile = useCallback(() => {
         setSelectedProfileUserId(null);
@@ -1096,7 +1105,7 @@ export default function ChatPage() {
     }
 
     function closeAvatarPreview(): void {
-        setIsAvatarPreviewOpen(false);
+        closeModalWithAnim("avatarViewer", () => setIsAvatarPreviewOpen(false));
     }
 
     useEffect(() => {
@@ -1104,7 +1113,11 @@ export default function ChatPage() {
 
         const onKeyDown = (event: KeyboardEvent) => {
             if (event.key === "Escape") {
-                setIsAvatarPreviewOpen(false);
+                setClosingModal("avatarViewer");
+                window.setTimeout(() => {
+                    setIsAvatarPreviewOpen(false);
+                    setClosingModal(null);
+                }, 160);
             }
         };
 
@@ -1758,7 +1771,7 @@ export default function ChatPage() {
             </section>
 
             {isProfileModalOpen && (
-                <div className="modal-overlay" onClick={() => setIsProfileModalOpen(false)}>
+                <div className={`modal-overlay ${closingModal === "profile" ? "closing" : ""}`} onClick={() => closeModalWithAnim("profile", () => setIsProfileModalOpen(false))}>
                     <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Profile</h3>
                         <div className="profile-modal-list">
@@ -1938,7 +1951,7 @@ export default function ChatPage() {
                             ) : null}
                             <button
                                 className="modal-btn modal-btn-primary"
-                                onClick={() => setIsProfileModalOpen(false)}
+                                onClick={() => closeModalWithAnim("profile", () => setIsProfileModalOpen(false))}
                                 type="button"
                             >
                                 Close
@@ -1949,7 +1962,7 @@ export default function ChatPage() {
             )}
 
             {isAvatarPreviewOpen && avatarUrl && (
-                <div className="avatar-viewer-overlay" onClick={closeAvatarPreview}>
+                <div className={`avatar-viewer-overlay ${closingModal === "avatarViewer" ? "closing" : ""}`} onClick={closeAvatarPreview}>
                     <div className="avatar-viewer-content" onClick={(e) => e.stopPropagation()}>
                         <img
                             src={avatarUrl}
@@ -1969,7 +1982,7 @@ export default function ChatPage() {
             )}
 
             {isCreateServerModalOpen && (
-                <div className="modal-overlay" onClick={() => setIsCreateServerModalOpen(false)}>
+                <div className={`modal-overlay ${closingModal === "createServer" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createServer", () => setIsCreateServerModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Create server</h3>
 
@@ -1986,7 +1999,7 @@ export default function ChatPage() {
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => setIsCreateServerModalOpen(false)}
+                                onClick={() => closeModalWithAnim("createServer", () => setIsCreateServerModalOpen(false))}
                                 disabled={isCreatingServer}
                             >
                                 Cancel
@@ -2004,7 +2017,7 @@ export default function ChatPage() {
             )}
 
             {isJoinModalOpen && (
-                <div className="modal-overlay" onClick={() => setIsJoinModalOpen(false)}>
+                <div className={`modal-overlay ${closingModal === "join" ? "closing" : ""}`} onClick={() => closeModalWithAnim("join", () => setIsJoinModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Join server</h3>
 
@@ -2040,7 +2053,7 @@ export default function ChatPage() {
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => setIsJoinModalOpen(false)}
+                                onClick={() => closeModalWithAnim("join", () => setIsJoinModalOpen(false))}
                             >
                                 Close
                             </button>
@@ -2050,7 +2063,7 @@ export default function ChatPage() {
             )}
 
             {isCreateChannelModalOpen && (
-                <div className="modal-overlay" onClick={() => setIsCreateChannelModalOpen(false)}>
+                <div className={`modal-overlay ${closingModal === "createChannel" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createChannel", () => setIsCreateChannelModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Create channel</h3>
 
@@ -2075,7 +2088,7 @@ export default function ChatPage() {
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => setIsCreateChannelModalOpen(false)}
+                                onClick={() => closeModalWithAnim("createChannel", () => setIsCreateChannelModalOpen(false))}
                                 disabled={isCreatingChannel}
                             >
                                 Cancel
