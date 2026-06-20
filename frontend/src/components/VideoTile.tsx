@@ -34,10 +34,15 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
     if (!el) {
       return;
     }
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
+    const doc = document as Document & { webkitFullscreenElement?: Element };
+    const elExt = el as HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> };
+    if (document.fullscreenElement || doc.webkitFullscreenElement) {
+      const docExt = document as Document & { webkitExitFullscreen?: () => void };
+      if (document.exitFullscreen) void document.exitFullscreen();
+      else if (docExt.webkitExitFullscreen) docExt.webkitExitFullscreen();
     } else {
-      void el.requestFullscreen();
+      if (el.requestFullscreen) void el.requestFullscreen();
+      else if (elExt.webkitRequestFullscreen) void elExt.webkitRequestFullscreen();
     }
   };
 

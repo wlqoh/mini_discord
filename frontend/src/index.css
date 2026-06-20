@@ -49,8 +49,10 @@ body {
     background: var(--auth-bg);
     color: var(--text-1);
     min-height: 100vh;
+    min-height: 100dvh;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent;
 }
 
 /* ---- Layout -------------------------------------------------- */
@@ -60,7 +62,10 @@ body {
     justify-content: center;
     align-items: center;
     min-height: 100vh;
+    min-height: 100dvh;
     padding: 24px;
+    padding-top: calc(24px + env(safe-area-inset-top));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom));
     overflow: hidden;
     background: var(--auth-bg);
 }
@@ -125,7 +130,7 @@ body {
     background: var(--glass-card);
     border: 1px solid var(--glass-border);
     border-radius: 18px;
-    padding: 36px 32px 32px;
+    padding: clamp(20px, 5vw, 36px) clamp(16px, 5vw, 32px) clamp(16px, 5vw, 32px);
     width: 100%;
     max-width: 440px;
     -webkit-backdrop-filter: blur(20px);
@@ -251,4 +256,55 @@ body {
 
 .auth-link a:hover {
     color: var(--accent-hover);
+}
+
+/* ---- Input font-size >= 16px to prevent iOS Safari auto-zoom ------ */
+.form-group input {
+    font-size: 16px;
+}
+
+/* ---- Touch targets & active states --------------------------------- */
+button, .submit-button {
+    touch-action: manipulation;
+}
+
+.submit-button:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+/* ---- Reduce expensive blobs on small phones ------------------------ */
+@media (max-width: 768px) {
+    .auth-container::before {
+        width: 280px;
+        height: 280px;
+        filter: blur(40px);
+    }
+
+    .auth-container::after {
+        width: 220px;
+        height: 220px;
+        filter: blur(44px);
+    }
+}
+
+@media (max-width: 480px) {
+    .auth-container::before,
+    .auth-container::after {
+        display: none;
+    }
+
+    .auth-card {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: var(--auth-bg);
+        border-color: var(--glass-border);
+    }
+}
+
+/* ---- Reduced motion ------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+    .auth-container::before,
+    .auth-container::after {
+        animation: none;
+    }
 }

@@ -39,6 +39,13 @@ export default function Register(): React.JSX.Element {
     setError("");
   };
 
+  const focusField = (id: string) => (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      document.getElementById(id)?.focus();
+    }
+  };
+
   const validateForm = (): boolean => {
     if (
       !formData.firstName ||
@@ -123,6 +130,9 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="Whalter"
               disabled={loading}
+              autoComplete="given-name"
+              enterKeyHint="next"
+              onKeyDown={focusField("lastName")}
             />
           </div>
 
@@ -136,6 +146,9 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="White"
               disabled={loading}
+              autoComplete="family-name"
+              enterKeyHint="next"
+              onKeyDown={focusField("email")}
             />
           </div>
 
@@ -149,6 +162,13 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="user@example.com"
               disabled={loading}
+              inputMode="email"
+              autoComplete="email"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              enterKeyHint="next"
+              onKeyDown={focusField("password")}
             />
           </div>
 
@@ -162,6 +182,9 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="Minimum 6 characters long."
               disabled={loading}
+              autoComplete="new-password"
+              enterKeyHint="next"
+              onKeyDown={focusField("confirmPassword")}
             />
           </div>
 
@@ -175,6 +198,9 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="Re-enter password"
               disabled={loading}
+              autoComplete="new-password"
+              enterKeyHint="next"
+              onKeyDown={focusField("nickname")}
             />
           </div>
 
@@ -188,6 +214,10 @@ export default function Register(): React.JSX.Element {
               onChange={handleChange}
               placeholder="Minimum 5 characters long."
               disabled={loading}
+              autoComplete="username"
+              autoCapitalize="off"
+              autoCorrect="off"
+              enterKeyHint="done"
             />
           </div>
 

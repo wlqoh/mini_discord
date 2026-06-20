@@ -1,6 +1,7 @@
 ﻿import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu} from "lucide-react";
+import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -134,16 +135,10 @@ export default function ChatPage() {
         () => getCurrentUserProfile(),
     );
     const currentUserId: number | null = getCurrentUserId();
-    const isMobileDevice = useMemo(() => {
-        if (typeof navigator === "undefined" || typeof window === "undefined") {
-            return false;
-        }
-
-        const ua = navigator.userAgent || "";
-        const isMobileUA = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
-        const isTouchViewport = navigator.maxTouchPoints > 1 && window.matchMedia("(max-width: 1024px)").matches;
-        return isMobileUA || isTouchViewport;
-    }, []);
+    const isMobileDevice = useMediaQuery("(max-width: 1024px) and (pointer: coarse)");
+    const isPhone = useMediaQuery("(max-width: 768px)");
+    const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
+    const [isPageVisible, setIsPageVisible] = useState(true);
     const [joinQuery, setJoinQuery] = useState("");
     const [joinResults, setJoinResults] = useState<Array<{ id: number; name: string }>>([]);
     const [avatarError, setAvatarError] = useState("");
@@ -521,7 +516,7 @@ export default function ChatPage() {
     }, [navigate, handleAuthFailure, syncServersAndChannels, currentUserId, toParticipantLabel]);
 
     useEffect(() => {
-        if (!isConnected || !socketRef.current) {
+        if (!isConnected || !socketRef.current || !isPageVisible) {
             return;
         }
 
@@ -530,7 +525,7 @@ export default function ChatPage() {
         }, 3000);
 
         return () => window.clearInterval(intervalId);
-    }, [isConnected, syncServersAndChannels]);
+    }, [isConnected, syncServersAndChannels, isPageVisible]);
 
     useEffect(() => {
         localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(servers));
@@ -571,6 +566,8 @@ export default function ChatPage() {
             return;
         }
 
+        if (!isPageVisible) return;
+
         void refreshOnlineUsers();
 
         const intervalId = window.setInterval(() => {
@@ -578,11 +575,17 @@ export default function ChatPage() {
         }, 10000);
 
         return () => window.clearInterval(intervalId);
-    }, [isConnected, selectedServerId, refreshOnlineUsers]);
+    }, [isConnected, selectedServerId, refreshOnlineUsers, isPageVisible]);
 
     useEffect(() => {
         void loadAvatar();
     }, [loadAvatar]);
+
+    useEffect(() => {
+        const handler = () => setIsPageVisible(document.visibilityState === "visible");
+        document.addEventListener("visibilitychange", handler);
+        return () => document.removeEventListener("visibilitychange", handler);
+    }, []);
 
     useEffect(() => {
         if (!isJoinModalOpen) {
@@ -660,7 +663,7 @@ export default function ChatPage() {
     }, [selectedChannelId, isConnected, loadedChannels]);
 
     useEffect(() => {
-        if (selectedChannelId <= 0 || !socketRef.current || !isConnected) {
+        if (selectedChannelId <= 0 || !socketRef.current || !isConnected || !isPageVisible) {
             return;
         }
 
@@ -681,7 +684,7 @@ export default function ChatPage() {
         }, 5000);
 
         return () => window.clearInterval(intervalId);
-    }, [selectedChannelId, isConnected]);
+    }, [selectedChannelId, isConnected, isPageVisible]);
 
     function openCreateServerModal() {
         setError("");
@@ -1395,7 +1398,7 @@ export default function ChatPage() {
     }, [activeMessages.length, selectedChannelId]);
 
     return (
-        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`}>
+        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
             <aside className="servers-sidebar">
                 <button
                     className="server-add-btn"
@@ -1444,7 +1447,12 @@ export default function ChatPage() {
                 </div>
             </aside>
 
-            <aside className={`channels-sidebar ${isChannelsSidebarHidden ? "hidden" : ""}`}>
+            <div
+                className={`channels-drawer-overlay ${isChannelsDrawerOpen ? "active" : ""}`}
+                onClick={() => setIsChannelsDrawerOpen(false)}
+                aria-hidden="true"
+            />
+            <aside className={`channels-sidebar ${isChannelsSidebarHidden ? "hidden" : ""} ${isChannelsDrawerOpen ? "drawer-open" : ""}`} onClick={(e) => e.stopPropagation()}>
                 <div className="channels-header">
                     <span>Server {currentServer?.name ?? "-"}</span>
                     <div className="actions">
@@ -1487,7 +1495,7 @@ export default function ChatPage() {
                             <div className="channel-row-wrap">
                                 <button
                                     className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
-                                    onClick={() => setSelectedChannelId(channel.id)}
+                                    onClick={() => { setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
                                     type="button"
                                 >
                                     {channel.type === "voice"
@@ -1604,7 +1612,17 @@ export default function ChatPage() {
                 <div className="chat-content" ref={chatContentRef}>
                     <div className="chat-header-block">
                         <div className="chat-header-row">
-                            <div className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</div>
+                            <div className="chat-header-left">
+                                <button
+                                    className="channels-hamburger-btn"
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setIsChannelsDrawerOpen((prev) => !prev); }}
+                                    aria-label={isChannelsDrawerOpen ? "Close channels" : "Open channels"}
+                                >
+                                    <Menu size={20} aria-hidden="true" />
+                                </button>
+                                <span className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</span>
+                            </div>
                             <div className="chat-header-actions">
                                 <button
                                     className="profile-open-btn"
