@@ -162,17 +162,12 @@ export default function MessageInput({
         return initials || "U";
     }
 
-    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-        const files = e.target.files;
-        if (!files || files.length === 0) {
-            return;
-        }
-
+    function addFiles(files: File[]) {
         setUploadError("");
 
         const newFiles: PendingFile[] = [];
 
-        for (const file of Array.from(files)) {
+        for (const file of files) {
             if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
                 setUploadError(`File "${file.name}" is too large (max 10MB)`);
                 continue;
@@ -193,8 +188,39 @@ export default function MessageInput({
         if (newFiles.length > 0) {
             setPendingFiles((prev) => [...prev, ...newFiles]);
         }
+    }
 
+    function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const files = e.target.files;
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        addFiles(Array.from(files));
         e.target.value = "";
+    }
+
+    function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+
+        const imageFiles: File[] = [];
+
+        for (const item of Array.from(items)) {
+            if (item.kind === "file" && item.type.startsWith("image/")) {
+                const file = item.getAsFile();
+                if (file) {
+                    imageFiles.push(file);
+                }
+            }
+        }
+
+        if (imageFiles.length === 0) {
+            return;
+        }
+
+        e.preventDefault();
+        addFiles(imageFiles);
     }
 
     function removePendingFile(id: string) {
@@ -322,6 +348,7 @@ export default function MessageInput({
                         placeholder={isUploading ? "Uploading..." : "Write a message"}
                         value={text}
                         onChange={(e) => setText(e.target.value)}
+                        onPaste={handlePaste}
                         disabled={disabled || isUploading}
                     />
                     <button
