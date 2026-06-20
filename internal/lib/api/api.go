@@ -51,10 +51,10 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
-	userHandler := user.NewHandler(s.db, s.db, cfg, log, s3Client)
-	userHandler.RegisterRoutes(v1)
-
 	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret))
+
+	userHandler := user.NewHandler(s.db, s.db, cfg, log, s3Client, hub)
+	userHandler.RegisterRoutes(v1)
 
 	wsHandler := server.NewHandler(hub, cfg.HTTPServer.WSAllowedOrigins)
 	wsHandler.RegisterRoutes(v1)

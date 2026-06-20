@@ -28,10 +28,11 @@ type Handler struct {
 	s3Client      types.S3ClientStorage
 }
 
-func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage) *Handler {
+func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage, pendingStore types.PendingAttachmentStore) *Handler {
 	return &Handler{
 		storage:       storage,
 		serverStorage: serverStorage,
+		pendingStore:  pendingStore,
 		cfg:           cfg,
 		log:           log,
 		s3Client:      s3Client,
