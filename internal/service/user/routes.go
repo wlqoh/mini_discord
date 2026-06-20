@@ -236,7 +236,28 @@ func (h *Handler) handleDeleteUser(c *fiber.Ctx) error {
 		return utils.PermissionDenied(c)
 	}
 
-	err := h.storage.DeleteUser(c.Context(), clientID)
+	var payload types.DeleteAccountRequest
+	if err := c.BodyParser(&payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := utils.Validate.Struct(payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
+	}
+
+	u, err := h.storage.GetUserByID(c.Context(), clientID)
+	if err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete user")
+	}
+
+	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
+		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid password")
+	}
+
+	err = h.storage.DeleteUser(c.Context(), clientID)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete user")

@@ -802,6 +802,33 @@
     border-color: #3a3c43;
 }
 
+.modal-btn-danger {
+    background: #d33b3b;
+    color: #fff;
+    border-color: #d33b3b;
+}
+
+.delete-account-confirm {
+    margin-top: 14px;
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid #d33b3b;
+    border-radius: 10px;
+    background: rgba(211, 59, 59, 0.08);
+}
+
+.delete-account-warning {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.delete-account-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
 .profile-modal-card {
     width: min(460px, 94vw);
 }

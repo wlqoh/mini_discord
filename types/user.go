@@ -51,8 +51,8 @@ type UpdateUserRequest struct {
 	Nickname  string `json:"nickname" validate:"required,min=1"`
 }
 
-type DeleteUserRequest struct {
-	ID int `json:"id" validate:"required"`
+type DeleteAccountRequest struct {
+	Password string `json:"password" validate:"required"`
 }
 
 type LoginUserRequest struct {
