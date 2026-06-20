@@ -1,6 +1,6 @@
 ﻿import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -28,6 +28,8 @@ const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
 const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
 const VOICE_VOLUME_KEY = "voice_volume_by_user";
+const COLOR_THEME_KEY = "color_theme";
+type ColorTheme = "dark" | "light";
 const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
 const MAX_AVATAR_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
 const ALLOWED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
@@ -120,6 +122,13 @@ export default function ChatPage() {
         }
     });
     const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
+    const [theme, setTheme] = useState<ColorTheme>(() => {
+        try {
+            return localStorage.getItem(COLOR_THEME_KEY) === "light" ? "light" : "dark";
+        } catch {
+            return "dark";
+        }
+    });
     const micBeforeDeafenRef = useRef(true);
     const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfile | null>(
         () => getCurrentUserProfile(),
@@ -545,6 +554,15 @@ export default function ChatPage() {
             // ignore quota or security errors
         }
     }, [voiceVolumeByUserId]);
+
+    useEffect(() => {
+        document.documentElement.setAttribute("data-theme", theme);
+        try {
+            localStorage.setItem(COLOR_THEME_KEY, theme);
+        } catch {
+            // ignore quota or security errors
+        }
+    }, [theme]);
 
     useEffect(() => {
         if (!isConnected || selectedServerId <= 0) {
@@ -1211,6 +1229,10 @@ export default function ChatPage() {
         }
     }
 
+    function toggleTheme(): void {
+        setTheme((prev) => (prev === "light" ? "dark" : "light"));
+    }
+
     useEffect(() => {
         remoteStreams.forEach(({stream}) => {
             stream.getAudioTracks().forEach((track) => {
@@ -1812,6 +1834,20 @@ export default function ChatPage() {
                                 <span className="profile-modal-label">Name</span>
                                 <span className="profile-modal-value">{profileDisplayName || "-"}</span>
                             </div>
+                            {isSelfProfile ? (
+                                <div className="profile-modal-row">
+                                    <span className="profile-modal-label">Theme</span>
+                                    <button
+                                        className="theme-toggle-btn"
+                                        type="button"
+                                        onClick={toggleTheme}
+                                        aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                                        title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                                    >
+                                        {theme === "light" ? <Moon size={18} aria-hidden="true"/> : <Sun size={18} aria-hidden="true"/>}
+                                    </button>
+                                </div>
+                            ) : null}
                         </div>
                         {isSelfProfile && isDeleteAccountConfirmOpen ? (
                             <div className="delete-account-confirm">
