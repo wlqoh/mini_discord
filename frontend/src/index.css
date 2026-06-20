@@ -1,125 +1,221 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* ================================================================
+   OBSIDIAN GLASS — auth pages (Login / Register)
+   ================================================================ */
+
+*, *::before, *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --auth-bg:              #07080a;
+    --glass-card:           rgba(255, 255, 255, 0.055);
+    --glass-border:         rgba(255, 255, 255, 0.09);
+    --glass-input:          rgba(255, 255, 255, 0.05);
+    --glass-input-border:   rgba(255, 255, 255, 0.09);
+    --accent:               #e02535;
+    --accent-hover:         #ff3348;
+    --accent-glow:          rgba(224, 37, 53, 0.30);
+    --accent-glow-lg:       rgba(224, 37, 53, 0.50);
+    --text-1:               #f0f2f5;
+    --text-2:               #9ca3af;
+    --text-3:               #6b7280;
+    --error-bg:             rgba(224, 37, 53, 0.10);
+    --error-border:         rgba(224, 37, 53, 0.35);
+    --error-text:           #ff8090;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background-color: #36393f;
-  color: #dcddde;
-  min-height: 100vh;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--auth-bg);
+    color: var(--text-1);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
+/* ---- Layout -------------------------------------------------- */
 .auth-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  padding: 20px;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 24px;
+    overflow: hidden;
+    background: var(--auth-bg);
 }
 
+/* Animated crimson glow blobs */
+.auth-container::before {
+    content: "";
+    position: absolute;
+    width: 580px;
+    height: 580px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(224, 37, 53, 0.28) 0%, transparent 65%);
+    filter: blur(72px);
+    top: -220px;
+    left: -180px;
+    animation: blob-drift 16s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.auth-container::after {
+    content: "";
+    position: absolute;
+    width: 460px;
+    height: 460px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(130, 8, 22, 0.22) 0%, transparent 65%);
+    filter: blur(80px);
+    bottom: -170px;
+    right: -130px;
+    animation: blob-drift 22s ease-in-out infinite reverse;
+    pointer-events: none;
+    z-index: 0;
+}
+
+@keyframes blob-drift {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    25%       { transform: translate(42px, -36px) scale(1.07); }
+    50%       { transform: translate(14px, 32px) scale(0.94); }
+    75%       { transform: translate(-28px, -12px) scale(1.04); }
+}
+
+/* ---- Glass card --------------------------------------------- */
 .auth-card {
-  background-color: #2f3136;
-  border-radius: 8px;
-  padding: 32px;
-  width: 100%;
-  max-width: 440px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    position: relative;
+    z-index: 1;
+    background: var(--glass-card);
+    border: 1px solid var(--glass-border);
+    border-radius: 18px;
+    padding: 36px 32px 32px;
+    width: 100%;
+    max-width: 440px;
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 8px 40px rgba(0, 0, 0, 0.55),
+        0 0 90px rgba(224, 37, 53, 0.04);
 }
 
 .auth-card h1 {
-  text-align: center;
-  color: #ffffff;
-  margin-bottom: 24px;
-  font-size: 24px;
-  font-weight: 600;
+    text-align: center;
+    color: var(--text-1);
+    margin-bottom: 28px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
+/* ---- Error banner ------------------------------------------- */
 .error-message {
-  background-color: rgba(237, 66, 69, 0.1);
-  border: 1px solid #ed4245;
-  color: #ed4245;
-  padding: 10px 14px;
-  border-radius: 4px;
-  margin-bottom: 16px;
-  font-size: 14px;
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
+    color: var(--error-text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 18px;
+    font-size: 13px;
+    line-height: 1.5;
 }
 
+/* ---- Form ---------------------------------------------------- */
 .form-group {
-  margin-bottom: 20px;
+    margin-bottom: 18px;
 }
 
 .form-group label {
-  display: block;
-  color: #b9bbbe;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-  letter-spacing: 0.02em;
+    display: block;
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-bottom: 6px;
 }
 
 .form-group input {
-  width: 100%;
-  padding: 10px 12px;
-  background-color: #202225;
-  border: 1px solid #040405;
-  border-radius: 4px;
-  color: #dcddde;
-  font-size: 16px;
-  outline: none;
-  transition: border-color 0.2s;
+    width: 100%;
+    padding: 10px 13px;
+    background: var(--glass-input);
+    border: 1px solid var(--glass-input-border);
+    border-radius: 8px;
+    color: var(--text-1);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.18s, box-shadow 0.18s;
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
 }
 
 .form-group input:focus {
-  border-color: #5865f2;
+    border-color: rgba(224, 37, 53, 0.50);
+    box-shadow: 0 0 0 3px rgba(224, 37, 53, 0.13);
 }
 
 .form-group input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .form-group input::placeholder {
-  color: #72767d;
+    color: var(--text-3);
 }
 
+/* ---- Submit button ------------------------------------------ */
 .submit-button {
-  width: 100%;
-  padding: 12px;
-  background-color: #5865f2;
-  color: #ffffff;
-  border: none;
-  border-radius: 4px;
-  font-size: 16px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  margin-top: 8px;
+    width: 100%;
+    padding: 12px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    margin-top: 10px;
+    transition: background 0.18s, box-shadow 0.18s, transform 0.12s;
+    box-shadow: 0 4px 18px var(--accent-glow);
 }
 
 .submit-button:hover:not(:disabled) {
-  background-color: #4752c4;
+    background: var(--accent-hover);
+    box-shadow: 0 4px 26px var(--accent-glow-lg);
+    transform: translateY(-1px);
+}
+
+.submit-button:active:not(:disabled) {
+    transform: translateY(0);
 }
 
 .submit-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
 }
 
+/* ---- Auth link --------------------------------------------- */
 .auth-link {
-  text-align: center;
-  margin-top: 16px;
-  font-size: 14px;
-  color: #a3a6aa;
+    text-align: center;
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--text-3);
 }
 
 .auth-link a {
-  color: #00aff4;
-  text-decoration: none;
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.15s;
 }
 
 .auth-link a:hover {
-  text-decoration: underline;
+    color: var(--accent-hover);
 }

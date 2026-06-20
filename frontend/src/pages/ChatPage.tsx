@@ -1,6 +1,6 @@
 ﻿import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash} from "lucide-react";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -1468,7 +1468,10 @@ export default function ChatPage() {
                                     onClick={() => setSelectedChannelId(channel.id)}
                                     type="button"
                                 >
-                                    {channel.type === "voice" ? "🔊" : "#"} {channel.name}
+                                    {channel.type === "voice"
+                                        ? <Volume2 size={14} aria-hidden="true" />
+                                        : <Hash size={14} aria-hidden="true" />
+                                    } {channel.name}
                                 </button>
 
                                 {isCurrentServerOwner ? (

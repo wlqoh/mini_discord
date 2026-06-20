@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CornerDownLeft, CornerUpLeft } from "lucide-react";
+import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
 
 type Props = {
@@ -124,7 +124,7 @@ function renderAttachment(att: Attachment) {
 
     return (
         <a key={att.url} href={att.url} download={att.file_name} className="message-attachment file-attachment">
-            <span className="file-attachment-icon">📎</span>
+            <span className="file-attachment-icon"><Paperclip size={16} aria-hidden="true" /></span>
             <span className="file-attachment-info">
                 <span className="file-attachment-name">{att.file_name}</span>
                 {att.size_bytes ? (
@@ -154,7 +154,7 @@ function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; 
             <CornerUpLeft size={14} className="reply-preview-icon" />
             <span className="reply-preview-author">{authorName}</span>
             <span className="reply-preview-content">{truncateContent(reply.content)}</span>
-            {reply.has_attachments && <span className="reply-preview-attachment-indicator">📎</span>}
+            {reply.has_attachments && <span className="reply-preview-attachment-indicator"><Paperclip size={11} aria-hidden="true" /></span>}
         </div>
     );
 }
