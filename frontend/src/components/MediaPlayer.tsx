@@ -238,6 +238,7 @@ export default function MediaPlayer({
                 ref={player.audioRef}
                 src={currentTrack?.url}
                 preload="metadata"
+                crossOrigin="anonymous"
                 className="media-player-native-audio"
             >
                 <track kind="captions" />

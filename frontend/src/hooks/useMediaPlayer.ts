@@ -54,10 +54,16 @@ function getSharedAudioContext(): AudioContext | null {
     return sharedAudioContext;
 }
 
-export function useMediaPlayer(options: UseMediaPlayerOptions) {
+/**
+ * Generic over the element type so it works for both <audio> (MediaPlayer,
+ * default) and <video> (VideoPlayer) — every API used below (play/pause/
+ * currentTime/duration/volume/muted/playbackRate/buffered/addEventListener,
+ * createMediaElementSource) is defined on the shared HTMLMediaElement base.
+ */
+export function useMediaPlayer<TElement extends HTMLMediaElement = HTMLAudioElement>(options: UseMediaPlayerOptions) {
     const { tracks, onTrackChange, audioContext: externalAudioContext } = options;
 
-    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const audioRef = useRef<TElement | null>(null);
     const graphRef = useRef<AudioGraph | null>(null);
     const eqBandsRef = useRef<EqualizerBand[]>(DEFAULT_EQUALIZER_BANDS);
     const shuffleOrderRef = useRef<number[]>([]);

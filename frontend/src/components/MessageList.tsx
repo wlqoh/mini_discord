@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
+import VideoPlayer from "./VideoPlayer";
 import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
 
@@ -119,6 +120,25 @@ function AudioAttachment({ att }: { att: Attachment }) {
     );
 }
 
+function VideoAttachment({ att }: { att: Attachment }) {
+    // Memoized for the same reason as AudioAttachment's tracks — keeps VideoPlayer's
+    // underlying video element and its event listeners stable across unrelated
+    // MessageList re-renders.
+    const tracks = useMemo<Track[]>(() => [{
+        id: att.id ?? att.url,
+        title: att.file_name,
+        duration: 0,
+        url: att.url,
+        format: guessFormatFromContentType(att.content_type),
+    }], [att.id, att.url, att.file_name, att.content_type]);
+
+    return (
+        <div className="message-attachment video-attachment">
+            <VideoPlayer tracks={tracks} />
+        </div>
+    );
+}
+
 function renderAttachment(att: Attachment) {
     if (isImageType(att.content_type)) {
         return (
@@ -129,11 +149,7 @@ function renderAttachment(att: Attachment) {
     }
 
     if (isVideoType(att.content_type)) {
-        return (
-            <video key={att.url} src={att.url} controls className="message-attachment video-attachment">
-                <track kind="captions" />
-            </video>
-        );
+        return <VideoAttachment key={att.url} att={att} />;
     }
 
     if (isAudioType(att.content_type)) {

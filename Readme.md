@@ -263,6 +263,34 @@ The equalizer/visualizer/volume-boost only create a `MediaElementAudioSourceNode
 
 **Chat integration:** `MessageList.tsx` renders an `<AudioAttachment>` wrapper per audio attachment (mapped from `Attachment` via `guessFormatFromContentType`, memoized so the `tracks` array stays referentially stable across unrelated message-list re-renders) around `<MediaPlayer tracks={tracks} compact showPlaylist={false} />`, starting collapsed as a now-playing bar the user can expand.
 
+### Video player
+
+- `frontend/src/components/VideoPlayer.tsx` — reuses `useMediaPlayer<HTMLVideoElement>` (the hook is generic over the media element type) around a visible `<video>` element instead of a hidden `<audio>` one. Controls (play/pause, seek bar with hover preview, volume + mute, playback speed, fullscreen, Picture-in-Picture) render as an overlay bar that auto-hides after ~2.5s of inactivity while playing, and stays visible while paused. Keyboard shortcuts: `Space` play/pause, `M` mute, `F` fullscreen, `←`/`→` seek ±5s.
+- `frontend/src/styles/videoPlayer.css` — dark/translucent overlay chrome (video content itself sets the backdrop, so this doesn't reuse `chat.css`'s glass-surface tokens, only `--accent*`/`--radius-*`).
+- **Chat integration:** `MessageList.tsx`'s `VideoAttachment` wrapper mirrors `AudioAttachment` (same memoized single-track mapping) around `<VideoPlayer tracks={tracks} />`.
+
+### Web Audio + cross-origin attachments — required bucket CORS
+
+Both `<audio crossOrigin="anonymous">` (MediaPlayer) and `<video crossOrigin="anonymous">` (VideoPlayer) route through `createMediaElementSource` once the equalizer, volume boost, or spectrum visualizer is enabled. Per the Web Audio spec, an element's audio is silently zeroed once piped through the graph if the underlying resource is cross-origin and wasn't loaded in CORS mode with permission from the server (this is a security measure, not an error — no exception is thrown, playback just goes silent the moment those features are toggled on).
+
+Since attachments are served straight from the Yandex Object Storage bucket (`S3HOST`, see below), **the bucket itself must return `Access-Control-Allow-Origin` for the app's origin(s)** — this can't be fixed from application code alone. Bucket CORS is configured out-of-band (e.g. via `boto3`/`aws s3api put-bucket-cors` against the Yandex Object Storage S3-compatible endpoint), not from this repo. A rule like the following is sufficient:
+
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://hyorward.tech", "https://www.hyorward.tech"],
+      "AllowedMethods": ["GET", "HEAD"],
+      "AllowedHeaders": ["*"],
+      "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges", "ETag"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}
+```
+
+Without this, plain playback still works fine (no CORS involved for normal `<audio>`/`<video>` fetches), but toggling the equalizer/boost/visualizer goes silent.
+
 ## API Эндпоинты
 
 Базовый путь: `/api/v1`
