@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
+import MediaPlayer from "./MediaPlayer";
+import { guessFormatFromContentType } from "../types/media";
+import type { Track } from "../types/media";
 
 type Props = {
     messages: Message[];
@@ -115,10 +118,17 @@ function renderAttachment(att: Attachment) {
     }
 
     if (isAudioType(att.content_type)) {
+        const track: Track = {
+            id: att.id ?? att.url,
+            title: att.file_name,
+            duration: 0,
+            url: att.url,
+            format: guessFormatFromContentType(att.content_type),
+        };
         return (
-            <audio key={att.url} src={att.url} controls className="message-attachment audio-attachment">
-                <track kind="captions" />
-            </audio>
+            <div key={att.url} className="message-attachment audio-attachment">
+                <MediaPlayer tracks={[track]} compact showPlaylist={false} />
+            </div>
         );
     }
 

@@ -226,6 +226,43 @@ Configure allowed browser origins in backend config:
 - `http_server.cors_allowed_origins`
 - `http_server.ws_allowed_origins`
 
+## Media Player (frontend)
+
+Audio message attachments render with a custom, reusable player instead of the bare native `<audio>` control.
+
+**Files:**
+
+- `frontend/src/types/media.ts` — `Track`, `PlayerState`, `EqualizerBand`, `LoopMode` types.
+- `frontend/src/hooks/useMediaPlayer.ts` — headless playback hook: owns an `<audio>` ref, playback state (play/pause/seek/volume/rate/loop/shuffle), a lazily-created Web Audio graph (5-band equalizer + analyser + gain boost), and DOM event wiring (`timeupdate`, `loadedmetadata`, `ended`, `error`, `progress`).
+- `frontend/src/services/playlistService.ts` — pure queue helpers (`shuffleTracks` via Fisher-Yates, `addTrack`/`removeTrack`/`reorderTracks`, `getNextIndex`/`getPreviousIndex`) plus `localStorage`-backed favorites/history.
+- `frontend/src/components/MediaPlayer.tsx` — the UI: transport controls, interactive seek bar with hover time preview, volume slider + mute, playback-speed dropdown, loop-mode cycling, shuffle, a collapsible equalizer/volume-boost/spectrum-visualizer panel, a queue panel, and a mini/compact mode. Keyboard shortcuts (when the player has focus): `Space` play/pause, `M` mute, `←`/`→` seek ±5s.
+- `frontend/src/styles/mediaPlayer.css` — styling, reusing the `chat.css` design tokens (`--glass-*`, `--accent*`, `--text-*`, `--radius-*`) so it matches the dark/light theme automatically.
+
+**Usage:**
+
+```tsx
+import MediaPlayer from "./components/MediaPlayer";
+import type { Track } from "./types/media";
+
+const tracks: Track[] = [
+  { id: 1, title: "Song A", artist: "Artist", duration: 0, url: "https://.../a.mp3" },
+  { id: 2, title: "Song B", artist: "Artist", duration: 0, url: "https://.../b.ogg" },
+];
+
+<MediaPlayer
+  tracks={tracks}
+  compact={false}        // start expanded (true = mini/now-playing bar)
+  showPlaylist={true}    // queue panel toggle
+  showEqualizer={true}   // EQ + volume-boost panel toggle
+  showVisualizer={true}  // spectrum visualizer toggle
+  audioContext={sharedCtx} // optional: reuse an AudioContext (e.g. from a call)
+/>
+```
+
+The equalizer/visualizer/volume-boost only create an `AudioContext` + `MediaElementAudioSourceNode` graph the first time they're actually toggled on, so a plain playback session never pays for Web Audio setup. If `AudioContext` is unavailable, playback still works through the native `<audio>` element.
+
+**Chat integration:** `MessageList.tsx` renders one `<MediaPlayer tracks={[track]} compact showPlaylist={false} />` per audio attachment (mapped from `Attachment` via `guessFormatFromContentType`), starting collapsed as a now-playing bar the user can expand.
+
 ## API Эндпоинты
 
 Базовый путь: `/api/v1`

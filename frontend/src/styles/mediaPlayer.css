@@ -1,0 +1,485 @@
+/* ================================================================
+   MEDIA PLAYER — reusable audio/media player component
+   Reuses design tokens defined in chat.css (--bg, --glass-*, --accent*,
+   --text-*, --radius-*, --shadow-*).
+   ================================================================ */
+
+.media-player {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    max-width: 360px;
+    padding: 12px;
+    background: var(--glass-1);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    color: var(--text-1);
+    font-family: var(--font);
+}
+
+.media-player-native-audio {
+    display: none;
+}
+
+/* ---- Header --------------------------------------------------- */
+.media-player-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.media-player-art {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-md);
+    background: var(--glass-2);
+    color: var(--text-2);
+    overflow: hidden;
+}
+
+.media-player-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.media-player-meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+
+.media-player-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-player-artist {
+    font-size: 11px;
+    color: var(--text-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-player-spinner {
+    color: var(--accent-text);
+    animation: media-player-spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+
+@keyframes media-player-spin {
+    to { transform: rotate(360deg); }
+}
+
+.media-player-error {
+    font-size: 12px;
+    color: var(--accent-text);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-glow);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+}
+
+/* ---- Icon buttons ---------------------------------------------- */
+.media-player-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.media-player-icon-btn:hover {
+    background: var(--glass-2);
+    color: var(--text-1);
+}
+
+.media-player-icon-btn:active {
+    transform: scale(0.92);
+}
+
+.media-player-icon-btn.active {
+    color: var(--accent-text);
+    background: var(--accent-dim);
+}
+
+.media-player-play-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    border: none;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 2px 10px var(--accent-glow);
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.media-player-play-btn:hover {
+    background: var(--accent-hover);
+}
+
+.media-player-play-btn:active {
+    transform: scale(0.94);
+}
+
+/* ---- Progress bar ----------------------------------------------- */
+.media-player-progress {
+    position: relative;
+    padding: 8px 0;
+    cursor: pointer;
+    touch-action: none;
+}
+
+.media-player-progress-track {
+    position: relative;
+    width: 100%;
+    height: 5px;
+    border-radius: var(--radius-full);
+    background: var(--glass-2);
+    overflow: visible;
+}
+
+.media-player-progress-buffered {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: var(--glass-3);
+}
+
+.media-player-progress-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 100%;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+}
+
+.media-player-progress-handle {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+    transform: translate(-50%, -50%);
+    transition: transform 0.1s ease;
+}
+
+.media-player-progress:hover .media-player-progress-handle {
+    transform: translate(-50%, -50%) scale(1.15);
+}
+
+.media-player-progress-hover {
+    position: absolute;
+    bottom: 100%;
+    transform: translateX(-50%);
+    margin-bottom: 6px;
+    padding: 2px 6px;
+    font-size: 10px;
+    white-space: nowrap;
+    color: var(--text-1);
+    background: rgba(0, 0, 0, 0.75);
+    border-radius: var(--radius-sm);
+    pointer-events: none;
+}
+
+.media-player-time-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -6px;
+    font-size: 11px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- Controls ----------------------------------------------------- */
+.media-player-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+
+.media-player-secondary-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.media-player-volume {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.media-player-volume-slider,
+.media-player-eq-slider,
+.media-player-boost input[type="range"] {
+    accent-color: var(--accent);
+}
+
+.media-player-volume-slider {
+    flex: 1;
+    min-width: 40px;
+    height: 4px;
+    cursor: pointer;
+}
+
+.media-player-speed {
+    flex-shrink: 0;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: var(--text-1);
+    background: var(--glass-2);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.media-player-toggle-group {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* ---- Advanced panel: equalizer + visualizer ------------------------ */
+.media-player-advanced-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 10px;
+    background: var(--glass-0);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+}
+
+.media-player-eq-header,
+.media-player-eq-enable {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-2);
+}
+
+.media-player-eq-header {
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+
+.media-player-eq-bands {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.media-player-eq-band {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.media-player-eq-slider {
+    width: 70px;
+    height: 4px;
+    transform: rotate(-90deg);
+    margin: 28px -18px;
+}
+
+.media-player-eq-label {
+    font-size: 9px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.media-player-boost {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-2);
+}
+
+.media-player-boost input[type="range"] {
+    flex: 1;
+}
+
+.media-player-visualizer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 10px;
+    border-top: 1px solid var(--glass-border);
+}
+
+.media-player-canvas {
+    width: 100%;
+    height: 60px;
+    border-radius: var(--radius-sm);
+    background: var(--glass-0);
+}
+
+/* ---- Playlist / queue ---------------------------------------------- */
+.media-player-playlist {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: var(--glass-0);
+}
+
+.media-player-playlist-items {
+    list-style: none;
+    margin: 0;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.media-player-playlist-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    padding: 6px 8px;
+    text-align: left;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.media-player-playlist-item:hover {
+    background: var(--glass-2);
+    color: var(--text-1);
+}
+
+.media-player-playlist-item.active {
+    background: var(--accent-dim);
+    color: var(--accent-text);
+}
+
+.media-player-playlist-item-title {
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.media-player-playlist-item-artist {
+    font-size: 10px;
+    color: var(--text-3);
+}
+
+/* ---- Mini / compact mode -------------------------------------------- */
+.media-player--mini {
+    max-width: 320px;
+    padding: 6px 8px;
+}
+
+.media-player-mini-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.media-player-mini-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.media-player-mini-title {
+    font-size: 12px;
+    color: var(--text-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-player-mini-progress {
+    height: 3px;
+    border-radius: var(--radius-full);
+    background: var(--glass-2);
+    overflow: hidden;
+}
+
+.media-player-mini-progress-fill {
+    height: 100%;
+    background: var(--accent);
+}
+
+/* ---- Responsive / touch ---------------------------------------------- */
+@media (max-width: 480px) {
+    .media-player {
+        max-width: 100%;
+    }
+
+    .media-player-icon-btn {
+        width: 34px;
+        height: 34px;
+    }
+
+    .media-player-play-btn {
+        width: 46px;
+        height: 46px;
+    }
+
+    .media-player-progress {
+        padding: 12px 0;
+    }
+}
+
+/* ---- Embedded in a chat message attachment -------------------------- */
+.message-attachment.audio-attachment {
+    max-width: 340px;
+    overflow: visible;
+    border-radius: 0;
+}
+
+[data-theme="light"] .media-player-progress-hover {
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--text-1);
+    box-shadow: var(--shadow-sm);
+}
