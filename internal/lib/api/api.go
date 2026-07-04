@@ -38,6 +38,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		ReadTimeout:  cfg.HTTPServer.Timeout,
 		WriteTimeout: cfg.HTTPServer.Timeout,
 		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
+		BodyLimit:    10 * 1024 * 1024,
 	})
 	app.Use(
 		middleware.Recovery(log),

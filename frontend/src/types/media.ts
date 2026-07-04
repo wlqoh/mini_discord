@@ -20,8 +20,10 @@ export interface PlayerState {
     duration: number;
     /** Buffered duration in seconds, from the end of the last contiguous range starting at 0. */
     buffered: number;
-    /** 0..2, where 1 is 100% (native) and up to 2 is a 200% Web-Audio-boosted gain. */
+    /** 0..1 native volume. */
     volume: number;
+    /** 1..2 Web-Audio gain multiplier applied on top of volume, independent of it. Only active (routed through Web Audio) once above 1. */
+    boost: number;
     muted: boolean;
     playbackRate: number;
     loopMode: LoopMode;

@@ -1,6 +1,5 @@
 import type { LoopMode, Track } from "../types/media";
 
-const FAVORITES_KEY = "mediaPlayer:favorites";
 const HISTORY_KEY = "mediaPlayer:history";
 const MAX_HISTORY = 50;
 
@@ -11,31 +10,6 @@ export function shuffleTracks<T>(items: T[]): T[] {
         const j = Math.floor(Math.random() * (i + 1));
         [result[i], result[j]] = [result[j], result[i]];
     }
-    return result;
-}
-
-export function addTrack(queue: Track[], track: Track): Track[] {
-    if (queue.some((t) => t.id === track.id)) return queue;
-    return [...queue, track];
-}
-
-export function removeTrack(queue: Track[], trackId: Track["id"]): Track[] {
-    return queue.filter((t) => t.id !== trackId);
-}
-
-export function reorderTracks(queue: Track[], fromIndex: number, toIndex: number): Track[] {
-    if (
-        fromIndex === toIndex ||
-        fromIndex < 0 ||
-        toIndex < 0 ||
-        fromIndex >= queue.length ||
-        toIndex >= queue.length
-    ) {
-        return queue;
-    }
-    const result = queue.slice();
-    const [moved] = result.splice(fromIndex, 1);
-    result.splice(toIndex, 0, moved);
     return result;
 }
 
@@ -89,33 +63,8 @@ function writeTracks(key: string, tracks: Track[]): void {
     }
 }
 
-export function getFavorites(): Track[] {
-    return readTracks(FAVORITES_KEY);
-}
-
-export function isFavorite(trackId: Track["id"]): boolean {
-    return getFavorites().some((t) => t.id === trackId);
-}
-
-export function toggleFavorite(track: Track): Track[] {
-    const favorites = getFavorites();
-    const next = favorites.some((t) => t.id === track.id)
-        ? favorites.filter((t) => t.id !== track.id)
-        : [...favorites, track];
-    writeTracks(FAVORITES_KEY, next);
-    return next;
-}
-
-export function getHistory(): Track[] {
-    return readTracks(HISTORY_KEY);
-}
-
 export function addToHistory(track: Track): void {
     const history = readTracks(HISTORY_KEY).filter((t) => t.id !== track.id);
     history.unshift(track);
     writeTracks(HISTORY_KEY, history.slice(0, MAX_HISTORY));
-}
-
-export function clearHistory(): void {
-    writeTracks(HISTORY_KEY, []);
 }

@@ -232,10 +232,10 @@ Audio message attachments render with a custom, reusable player instead of the b
 
 **Files:**
 
-- `frontend/src/types/media.ts` — `Track`, `PlayerState`, `EqualizerBand`, `LoopMode` types.
-- `frontend/src/hooks/useMediaPlayer.ts` — headless playback hook: owns an `<audio>` ref, playback state (play/pause/seek/volume/rate/loop/shuffle), a lazily-created Web Audio graph (5-band equalizer + analyser + gain boost), and DOM event wiring (`timeupdate`, `loadedmetadata`, `ended`, `error`, `progress`).
-- `frontend/src/services/playlistService.ts` — pure queue helpers (`shuffleTracks` via Fisher-Yates, `addTrack`/`removeTrack`/`reorderTracks`, `getNextIndex`/`getPreviousIndex`) plus `localStorage`-backed favorites/history.
-- `frontend/src/components/MediaPlayer.tsx` — the UI: transport controls, interactive seek bar with hover time preview, volume slider + mute, playback-speed dropdown, loop-mode cycling, shuffle, a collapsible equalizer/volume-boost/spectrum-visualizer panel, a queue panel, and a mini/compact mode. Keyboard shortcuts (when the player has focus): `Space` play/pause, `M` mute, `←`/`→` seek ±5s.
+- `frontend/src/types/media.ts` — `Track`, `PlayerState`, `EqualizerBand`, `LoopMode` types. `PlayerState.volume` (0..1) and `PlayerState.boost` (1..2) are independent fields — boost is an extra Web-Audio gain multiplier on top of volume, not a second interpretation of the same number.
+- `frontend/src/hooks/useMediaPlayer.ts` — headless playback hook: owns an `<audio>` ref, playback state (play/pause/seek/volume/boost/rate/loop/shuffle), a lazily-created Web Audio graph (5-band equalizer + analyser + gain boost), and DOM event wiring (`timeupdate`, `loadedmetadata`, `ended`, `error`, `progress`). By default all instances on a page share one lazily-created `AudioContext` (module-level singleton) instead of one each, since browsers such as Safari cap concurrent AudioContexts — pass `audioContext` to opt into a different shared context (e.g. from a call) instead.
+- `frontend/src/services/playlistService.ts` — `shuffleTracks` (Fisher-Yates), `getNextIndex`/`getPreviousIndex` for advancing the queue, and `addToHistory` (`localStorage`-backed playback history).
+- `frontend/src/components/MediaPlayer.tsx` — the UI: transport controls, interactive seek bar with hover time preview (available in both expanded and mini mode), volume slider + mute, playback-speed dropdown, loop-mode cycling, shuffle, a collapsible equalizer/volume-boost/spectrum-visualizer panel, a queue panel, and a mini/compact mode. Mini mode keeps the seek bar, mute, and volume controls, and surfaces playback errors as a small alert icon (with the message as a tooltip/accessible name) next to the track title. Keyboard shortcuts (when the player has focus): `Space` play/pause, `M` mute, `←`/`→` seek ±5s.
 - `frontend/src/styles/mediaPlayer.css` — styling, reusing the `chat.css` design tokens (`--glass-*`, `--accent*`, `--text-*`, `--radius-*`) so it matches the dark/light theme automatically.
 
 **Usage:**
@@ -255,13 +255,13 @@ const tracks: Track[] = [
   showPlaylist={true}    // queue panel toggle
   showEqualizer={true}   // EQ + volume-boost panel toggle
   showVisualizer={true}  // spectrum visualizer toggle
-  audioContext={sharedCtx} // optional: reuse an AudioContext (e.g. from a call)
+  audioContext={sharedCtx} // optional: reuse an AudioContext (e.g. from a call) instead of the default shared one
 />
 ```
 
-The equalizer/visualizer/volume-boost only create an `AudioContext` + `MediaElementAudioSourceNode` graph the first time they're actually toggled on, so a plain playback session never pays for Web Audio setup. If `AudioContext` is unavailable, playback still works through the native `<audio>` element.
+The equalizer/visualizer/volume-boost only create a `MediaElementAudioSourceNode` graph the first time they're actually toggled on, so a plain playback session never pays for Web Audio setup. If `AudioContext` is unavailable, playback still works through the native `<audio>` element.
 
-**Chat integration:** `MessageList.tsx` renders one `<MediaPlayer tracks={[track]} compact showPlaylist={false} />` per audio attachment (mapped from `Attachment` via `guessFormatFromContentType`), starting collapsed as a now-playing bar the user can expand.
+**Chat integration:** `MessageList.tsx` renders an `<AudioAttachment>` wrapper per audio attachment (mapped from `Attachment` via `guessFormatFromContentType`, memoized so the `tracks` array stays referentially stable across unrelated message-list re-renders) around `<MediaPlayer tracks={tracks} compact showPlaylist={false} />`, starting collapsed as a now-playing bar the user can expand.
 
 ## API Эндпоинты
 

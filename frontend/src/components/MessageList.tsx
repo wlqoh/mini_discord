@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
@@ -100,6 +100,25 @@ function formatFileSize(bytes?: number): string {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function AudioAttachment({ att }: { att: Attachment }) {
+    // Memoized so MediaPlayer/useMediaPlayer see a stable `tracks` array across
+    // unrelated MessageList re-renders (new/deleted messages elsewhere), instead
+    // of tearing down and re-subscribing their audio event listeners every time.
+    const tracks = useMemo<Track[]>(() => [{
+        id: att.id ?? att.url,
+        title: att.file_name,
+        duration: 0,
+        url: att.url,
+        format: guessFormatFromContentType(att.content_type),
+    }], [att.id, att.url, att.file_name, att.content_type]);
+
+    return (
+        <div className="message-attachment audio-attachment">
+            <MediaPlayer tracks={tracks} compact showPlaylist={false} />
+        </div>
+    );
+}
+
 function renderAttachment(att: Attachment) {
     if (isImageType(att.content_type)) {
         return (
@@ -118,18 +137,7 @@ function renderAttachment(att: Attachment) {
     }
 
     if (isAudioType(att.content_type)) {
-        const track: Track = {
-            id: att.id ?? att.url,
-            title: att.file_name,
-            duration: 0,
-            url: att.url,
-            format: guessFormatFromContentType(att.content_type),
-        };
-        return (
-            <div key={att.url} className="message-attachment audio-attachment">
-                <MediaPlayer tracks={[track]} compact showPlaylist={false} />
-            </div>
-        );
+        return <AudioAttachment key={att.url} att={att} />;
     }
 
     return (

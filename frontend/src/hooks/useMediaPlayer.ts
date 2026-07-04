@@ -28,6 +28,7 @@ const initialState: PlayerState = {
     duration: 0,
     buffered: 0,
     volume: 1,
+    boost: 1,
     muted: false,
     playbackRate: 1,
     loopMode: "off",
@@ -36,6 +37,22 @@ const initialState: PlayerState = {
     isLoading: false,
     error: null,
 };
+
+/**
+ * A page can host many MediaPlayer instances (e.g. one per audio attachment in a
+ * chat). Browsers cap concurrent AudioContexts (notably Safari), so instances
+ * share one context by default instead of each creating their own.
+ */
+let sharedAudioContext: AudioContext | null = null;
+
+function getSharedAudioContext(): AudioContext | null {
+    if (sharedAudioContext) return sharedAudioContext;
+    const AudioContextCtor: typeof AudioContext | undefined =
+        window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return null;
+    sharedAudioContext = new AudioContextCtor();
+    return sharedAudioContext;
+}
 
 export function useMediaPlayer(options: UseMediaPlayerOptions) {
     const { tracks, onTrackChange, audioContext: externalAudioContext } = options;
@@ -70,12 +87,10 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
         if (graphRef.current) return graphRef.current;
         const el = audioRef.current;
         if (!el) return null;
-        const AudioContextCtor: typeof AudioContext | undefined =
-            window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextCtor) return null;
 
         try {
-            const ctx = externalAudioContext ?? new AudioContextCtor();
+            const ctx = externalAudioContext ?? getSharedAudioContext();
+            if (!ctx) return null;
             const source = ctx.createMediaElementSource(el);
             const filters = eqBandsRef.current.map((band) => {
                 const filter = ctx.createBiquadFilter();
@@ -108,6 +123,9 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
     }, [externalAudioContext]);
 
     useEffect(() => {
+        // The underlying AudioContext (external or the shared singleton) outlives
+        // this component instance, so it is never closed here — only the nodes
+        // this instance created are torn down.
         return () => {
             const g = graphRef.current;
             if (!g) return;
@@ -115,29 +133,26 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
             try { g.gainNode.disconnect(); } catch { /* ignore */ }
             try { g.analyser.disconnect(); } catch { /* ignore */ }
             try { g.source.disconnect(); } catch { /* ignore */ }
-            if (!externalAudioContext) {
-                try { void g.ctx.close(); } catch { /* ignore */ }
-            }
             graphRef.current = null;
         };
-    }, [externalAudioContext]);
+    }, []);
 
     useEffect(() => {
         const el = audioRef.current;
         if (!el) return;
 
-        const needsGraph = graphRef.current !== null || state.volume > 1 || eqEnabled || visualizerEnabled;
+        const needsGraph = graphRef.current !== null || state.boost > 1 || eqEnabled || visualizerEnabled;
         if (needsGraph) {
             const graph = ensureGraph();
             if (graph) {
                 el.volume = 1;
-                graph.gainNode.gain.value = state.muted ? 0 : state.volume;
+                graph.gainNode.gain.value = state.muted ? 0 : state.volume * state.boost;
                 return;
             }
         }
         el.volume = Math.min(1, Math.max(0, state.volume));
         el.muted = state.muted;
-    }, [state.volume, state.muted, eqEnabled, visualizerEnabled, ensureGraph]);
+    }, [state.volume, state.boost, state.muted, eqEnabled, visualizerEnabled, ensureGraph]);
 
     useEffect(() => {
         const g = graphRef.current;
@@ -193,7 +208,11 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
     }, [seek]);
 
     const setVolume = useCallback((volume: number) => {
-        setState((s) => ({ ...s, volume: Math.min(2, Math.max(0, volume)), muted: volume === 0 ? s.muted : false }));
+        setState((s) => ({ ...s, volume: Math.min(1, Math.max(0, volume)), muted: volume === 0 ? s.muted : false }));
+    }, []);
+
+    const setBoost = useCallback((boost: number) => {
+        setState((s) => ({ ...s, boost: Math.min(2, Math.max(1, boost)) }));
     }, []);
 
     const toggleMute = useCallback(() => {
@@ -271,7 +290,7 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
             if (currentTrack) addToHistory(currentTrack);
             if (state.loopMode === "one") {
                 el.currentTime = 0;
-                void el.play();
+                void play();
                 return;
             }
             next();
@@ -307,7 +326,7 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
             el.removeEventListener("pause", onPause);
             el.removeEventListener("progress", onProgress);
         };
-    }, [currentTrack, state.loopMode, next]);
+    }, [currentTrack, state.loopMode, next, play]);
 
     const isFirstTrackLoad = useRef(true);
     useEffect(() => {
@@ -346,6 +365,7 @@ export function useMediaPlayer(options: UseMediaPlayerOptions) {
         seek,
         seekBy,
         setVolume,
+        setBoost,
         toggleMute,
         setPlaybackRate,
         setLoopMode,

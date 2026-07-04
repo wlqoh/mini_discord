@@ -416,17 +416,42 @@
     padding: 6px 8px;
 }
 
+.media-player--mini .media-player-icon-btn {
+    width: 26px;
+    height: 26px;
+}
+
+.media-player--mini .media-player-progress {
+    padding: 3px 0;
+}
+
+.media-player--mini .media-player-progress-track {
+    height: 3px;
+}
+
+.media-player--mini .media-player-progress-handle {
+    width: 9px;
+    height: 9px;
+}
+
 .media-player-mini-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .media-player-mini-info {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     flex: 1;
+    min-width: 0;
+}
+
+.media-player-mini-title-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     min-width: 0;
 }
 
@@ -436,18 +461,21 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
 }
 
-.media-player-mini-progress {
-    height: 3px;
-    border-radius: var(--radius-full);
-    background: var(--glass-2);
-    overflow: hidden;
+.media-player-mini-error {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    color: var(--accent-text);
+    cursor: default;
 }
 
-.media-player-mini-progress-fill {
-    height: 100%;
-    background: var(--accent);
+.media-player-mini-volume-slider {
+    width: 44px;
+    min-width: 0;
+    flex: 0 0 auto;
 }
 
 /* ---- Responsive / touch ---------------------------------------------- */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
 import {
+    AlertCircle,
     ListMusic,
     Loader2,
     Maximize2,
@@ -135,19 +136,30 @@ export default function MediaPlayer({
     }, [player, state.loopMode]);
 
     useEffect(() => {
-        if (!player.visualizerEnabled) {
+        // Only run the draw loop while the visualizer is both enabled AND its
+        // panel/canvas is actually mounted (advancedOpen) — otherwise it spins
+        // forever drawing to a canvas nobody sees.
+        const visible = player.visualizerEnabled && advancedOpen;
+        if (!visible) {
             if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
             return;
         }
         const analyser = player.getAnalyser();
-        const canvas = canvasRef.current;
-        const ctx2d = canvas?.getContext("2d");
-        if (!analyser || !canvas || !ctx2d) return;
+        if (!analyser) return;
 
         const bufferLength = analyser.frequencyBinCount;
         const dataArray = new Uint8Array(bufferLength);
 
         const draw = () => {
+            // Re-read the canvas ref each frame instead of capturing it once,
+            // so the loop stops cleanly if the canvas unmounts mid-animation.
+            const canvas = canvasRef.current;
+            const ctx2d = canvas?.getContext("2d");
+            if (!canvas || !ctx2d) {
+                rafRef.current = null;
+                return;
+            }
             rafRef.current = requestAnimationFrame(draw);
             analyser.getByteFrequencyData(dataArray);
             const { width, height } = canvas;
@@ -165,12 +177,55 @@ export default function MediaPlayer({
 
         return () => {
             if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [player.visualizerEnabled, player.getAnalyser]);
+    }, [player.visualizerEnabled, player.getAnalyser, advancedOpen]);
 
-    const volumePercent = Math.round(Math.min(1, state.volume) * 100);
-    const boostPercent = Math.round(Math.max(1, state.volume) * 100);
+    const volumePercent = Math.round(state.volume * 100);
+    const boostPercent = Math.round(state.boost * 100);
+
+    const progressBar = (
+        <div
+            className="media-player-progress"
+            ref={progressRef}
+            role="slider"
+            aria-label="Seek"
+            aria-valuemin={0}
+            aria-valuemax={Math.floor(state.duration)}
+            aria-valuenow={Math.floor(state.currentTime)}
+            aria-valuetext={`${formattedTime.current} of ${formattedTime.duration}`}
+            tabIndex={0}
+            onPointerDown={handleProgressPointerDown}
+            onPointerMove={handleProgressPointerMove}
+            onPointerUp={handleProgressPointerUp}
+            onPointerLeave={handleProgressLeave}
+        >
+            <div className="media-player-progress-track">
+                <div className="media-player-progress-buffered" style={{ width: `${bufferedPct}%` }} />
+                <div className="media-player-progress-fill" style={{ width: `${playedPct}%` }} />
+                <div className="media-player-progress-handle" style={{ left: `${playedPct}%` }} />
+                {hoverRatio !== null && (
+                    <div className="media-player-progress-hover" style={{ left: `${hoverRatio * 100}%` }}>
+                        {formatTime(hoverRatio * state.duration)}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const muteButton = (
+        <button
+            type="button"
+            className="media-player-icon-btn"
+            onClick={player.toggleMute}
+            aria-pressed={state.muted}
+            aria-label={state.muted ? "Unmute" : "Mute"}
+            title={state.muted ? "Unmute" : "Mute"}
+        >
+            <VolumeIcon volume={state.muted ? 0 : state.volume} muted={state.muted} />
+        </button>
+    );
 
     return (
         <div
@@ -216,32 +271,7 @@ export default function MediaPlayer({
 
                     {state.error && <div className="media-player-error" role="alert">{state.error}</div>}
 
-                    <div
-                        className="media-player-progress"
-                        ref={progressRef}
-                        role="slider"
-                        aria-label="Seek"
-                        aria-valuemin={0}
-                        aria-valuemax={Math.floor(state.duration)}
-                        aria-valuenow={Math.floor(state.currentTime)}
-                        aria-valuetext={`${formattedTime.current} of ${formattedTime.duration}`}
-                        tabIndex={0}
-                        onPointerDown={handleProgressPointerDown}
-                        onPointerMove={handleProgressPointerMove}
-                        onPointerUp={handleProgressPointerUp}
-                        onPointerLeave={handleProgressLeave}
-                    >
-                        <div className="media-player-progress-track">
-                            <div className="media-player-progress-buffered" style={{ width: `${bufferedPct}%` }} />
-                            <div className="media-player-progress-fill" style={{ width: `${playedPct}%` }} />
-                            <div className="media-player-progress-handle" style={{ left: `${playedPct}%` }} />
-                            {hoverRatio !== null && (
-                                <div className="media-player-progress-hover" style={{ left: `${hoverRatio * 100}%` }}>
-                                    {formatTime(hoverRatio * state.duration)}
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                    {progressBar}
 
                     <div className="media-player-time-row">
                         <span>{formattedTime.current}</span>
@@ -290,16 +320,7 @@ export default function MediaPlayer({
 
                     <div className="media-player-secondary-row">
                         <div className="media-player-volume">
-                            <button
-                                type="button"
-                                className="media-player-icon-btn"
-                                onClick={player.toggleMute}
-                                aria-pressed={state.muted}
-                                aria-label={state.muted ? "Unmute" : "Mute"}
-                                title={state.muted ? "Unmute" : "Mute"}
-                            >
-                                <VolumeIcon volume={state.muted ? 0 : state.volume} muted={state.muted} />
-                            </button>
+                            {muteButton}
                             <input
                                 type="range"
                                 className="media-player-volume-slider"
@@ -390,7 +411,7 @@ export default function MediaPlayer({
                                             min={100}
                                             max={200}
                                             value={boostPercent}
-                                            onChange={(e) => player.setVolume(Number(e.target.value) / 100)}
+                                            onChange={(e) => player.setBoost(Number(e.target.value) / 100)}
                                             aria-label="Volume boost"
                                         />
                                         <span>{boostPercent}%</span>
@@ -441,11 +462,31 @@ export default function MediaPlayer({
                         {state.playing ? <Pause size={16} aria-hidden="true" /> : <Play size={16} aria-hidden="true" />}
                     </button>
                     <div className="media-player-mini-info">
-                        <span className="media-player-mini-title">{currentTrack?.title ?? "No track"}</span>
-                        <div className="media-player-mini-progress">
-                            <div className="media-player-mini-progress-fill" style={{ width: `${playedPct}%` }} />
-                        </div>
+                        <span className="media-player-mini-title-row">
+                            <span className="media-player-mini-title">{currentTrack?.title ?? "No track"}</span>
+                            {state.error && (
+                                <span
+                                    className="media-player-mini-error"
+                                    role="alert"
+                                    aria-label={state.error}
+                                    title={state.error}
+                                >
+                                    <AlertCircle size={12} aria-hidden="true" />
+                                </span>
+                            )}
+                        </span>
+                        {progressBar}
                     </div>
+                    {muteButton}
+                    <input
+                        type="range"
+                        className="media-player-volume-slider media-player-mini-volume-slider"
+                        min={0}
+                        max={100}
+                        value={state.muted ? 0 : volumePercent}
+                        onChange={(e) => player.setVolume(Number(e.target.value) / 100)}
+                        aria-label="Volume"
+                    />
                     <button
                         type="button"
                         className="media-player-icon-btn"
