@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,9 +16,12 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
+	"github.com/wlqoh/mini_discord.git/internal/service/mailer"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
+
+const emailVerificationTokenTTL = 24 * time.Hour
 
 type Handler struct {
 	storage       types.UserStorage
@@ -26,6 +30,7 @@ type Handler struct {
 	cfg           *config.Config
 	log           *slog.Logger
 	s3Client      types.S3ClientStorage
+	mailer        *mailer.Mailer
 }
 
 func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage, pendingStore types.PendingAttachmentStore) *Handler {
@@ -36,6 +41,7 @@ func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cf
 		cfg:           cfg,
 		log:           log,
 		s3Client:      s3Client,
+		mailer:        mailer.New(cfg.Mail),
 	}
 }
 
@@ -50,6 +56,8 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	router.Post("/upload", uploadLimiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpload)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
+	router.Post("/verify-email", limiterMW, h.handleVerifyEmail)
+	router.Post("/resend-verification", limiterMW, h.handleResendVerification)
 	router.Post("/updateUser", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpdateUser)
 	router.Delete("/deleteUser", limiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleDeleteUser)
 
@@ -195,6 +203,10 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 
 	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
 		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid email or password")
+	}
+
+	if !u.EmailVerified {
+		return utils.WriteError(c, fiber.StatusForbidden, "email not verified, please check your inbox")
 	}
 
 	secret := []byte(h.cfg.JWTSecret)
@@ -358,19 +370,92 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
 		h.log.Error(op, "error", err.Error())
-		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid email or password")
+		return utils.WriteError(c, fiber.StatusInternalServerError, "registration failed")
 	}
 
-	if !auth.ComparePasswords(u.Password, []byte(payload.Password)) {
-		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid email or password")
+	if err := h.sendVerificationEmail(c.Context(), u); err != nil {
+		h.log.Error(op, "error", err.Error())
 	}
 
-	res := types.UserResponse{
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Nickname:  u.Nickname,
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"message": "Registration successful. Please check your email to verify your account before logging in.",
+	})
+}
+
+func (h *Handler) sendVerificationEmail(ctx context.Context, u *types.User) error {
+	rawToken, tokenHash, err := auth.GenerateVerificationToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate verification token: %w", err)
 	}
-	return c.Status(fiber.StatusOK).JSON(res)
+
+	if err := h.storage.CreateEmailVerificationToken(ctx, u.ID, tokenHash, time.Now().Add(emailVerificationTokenTTL)); err != nil {
+		return fmt.Errorf("failed to store verification token: %w", err)
+	}
+
+	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", strings.TrimRight(h.cfg.FrontendBaseURL, "/"), rawToken)
+
+	if err := h.mailer.SendVerificationEmail(u.Email, u.FirstName, verifyURL); err != nil {
+		return fmt.Errorf("failed to send verification email: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) handleVerifyEmail(c *fiber.Ctx) error {
+	const op = "service.user.handleVerifyEmail"
+
+	var payload types.VerifyEmailRequest
+	if err := c.BodyParser(&payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := utils.Validate.Struct(payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
+	}
+
+	tokenHash := auth.HashVerificationToken(payload.Token)
+	if err := h.storage.VerifyEmailByToken(c.Context(), tokenHash); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid or expired verification link")
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"message": "Email verified successfully. You can now log in.",
+	})
+}
+
+func (h *Handler) handleResendVerification(c *fiber.Ctx) error {
+	const op = "service.user.handleResendVerification"
+
+	var payload types.ResendVerificationRequest
+	if err := c.BodyParser(&payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
+	}
+
+	if err := utils.Validate.Struct(payload); err != nil {
+		h.log.Error(op, "error", err.Error())
+		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
+	}
+
+	// Always return the same generic message so this endpoint can't be used to
+	// enumerate which emails are registered.
+	genericResponse := fiber.Map{
+		"message": "If an account with that email exists and is not yet verified, a new verification email has been sent.",
+	}
+
+	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
+	if err != nil || u.EmailVerified {
+		return c.Status(fiber.StatusOK).JSON(genericResponse)
+	}
+
+	if err := h.sendVerificationEmail(c.Context(), u); err != nil {
+		h.log.Error(op, "error", err.Error())
+	}
+
+	return c.Status(fiber.StatusOK).JSON(genericResponse)
 }
 
 func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {

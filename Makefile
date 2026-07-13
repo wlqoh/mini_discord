@@ -4,7 +4,7 @@ export
 MIGRATIONS=./sql/schema
 
 build:
-	@go build -o bin/discord_go cmd/discord_go/main.go
+	@go build -o bin/discord_go.exe cmd/discord_go/main.go
 
 .PHONY: up down
 
@@ -15,4 +15,4 @@ down:
 	goose -dir $(MIGRATIONS) postgres "$(DB_URL)" down
 
 run: build
-	@./bin/discord_go
+	@./bin/discord_go.exe

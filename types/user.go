@@ -13,6 +13,8 @@ type UserStorage interface {
 	GetUserByID(ctx context.Context, id int) (*User, error)
 	SaveUserAvatar(ctx context.Context, userID int, avatarKey string) error
 	GetOrCreateAttachmentFolderKey(ctx context.Context, userID int) (string, error)
+	CreateEmailVerificationToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error
+	VerifyEmailByToken(ctx context.Context, tokenHash string) error
 }
 
 type User struct {
@@ -26,6 +28,7 @@ type User struct {
 	Password            string     `json:"-"`
 	IsDeleted           bool       `json:"-"`
 	DeletedAt           *time.Time `json:"-"`
+	EmailVerified       bool       `json:"-"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -74,4 +77,12 @@ type RenewAccessTokenRequest struct {
 type RenewAccessTokenResponse struct {
 	AccessToken          string    `json:"access_token"`
 	AccessTokenExpiresAt time.Time `json:"access_token_expires_at"`
+}
+
+type VerifyEmailRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+type ResendVerificationRequest struct {
+	Email string `json:"email" validate:"required,email"`
 }
