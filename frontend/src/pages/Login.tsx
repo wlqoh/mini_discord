@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
+import type { AxiosError } from "axios";
 import { Link, useNavigate } from "react-router-dom";
 import { extractApiError } from "../services/apiError";
 import { getValidAccessToken } from "../services/authToken";
@@ -40,6 +41,8 @@ export default function Login(): React.JSX.Element {
 
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
+  const [needsVerification, setNeedsVerification] = useState<boolean>(false);
+  const [resendStatus, setResendStatus] = useState<string>("");
 
   useEffect(() => {
     if (getValidAccessToken()) {
@@ -84,6 +87,9 @@ export default function Login(): React.JSX.Element {
       return;
     }
 
+    setError("");
+    setNeedsVerification(false);
+    setResendStatus("");
     setLoading(true);
 
     try {
@@ -112,10 +118,25 @@ export default function Login(): React.JSX.Element {
         navigate("/chat", { replace: true });
       }
     } catch (err: unknown) {
+      if ((err as AxiosError).response?.status === 403) {
+        setNeedsVerification(true);
+      }
       setError(extractApiError(err, "Error logging in. Try again later."));
       console.error("Login error:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async (): Promise<void> => {
+    setResendStatus("");
+    try {
+      const response = await API.post<{ message?: string }>("/resend-verification", {
+        email: formData.email,
+      });
+      setResendStatus(response.data?.message ?? "Verification email sent.");
+    } catch (err: unknown) {
+      setResendStatus(extractApiError(err, "Could not resend verification email."));
     }
   };
 
@@ -125,6 +146,16 @@ export default function Login(): React.JSX.Element {
         <h1>Вход</h1>
 
         {error && <div className="error-message">{error}</div>}
+
+        {needsVerification && (
+          <p className="auth-link">
+            {resendStatus || (
+              <button type="button" className="submit-button" onClick={handleResendVerification}>
+                Resend verification email
+              </button>
+            )}
+          </p>
+        )}
 
         <form onSubmit={handleSubmit}>
           <div className="form-group">

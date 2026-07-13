@@ -101,7 +101,10 @@ export default function Register(): React.JSX.Element {
       });
 
       if (response.status === 200 || response.status === 201) {
-        alert("Registration successful! Redirecting to login page...");
+        alert(
+          response.data?.message ??
+            "Registration successful! Please check your email to verify your account before logging in."
+        );
         navigate("/login");
       }
     } catch (err: unknown) {

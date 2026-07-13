@@ -5,14 +5,17 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/types"
 	"golang.org/x/crypto/bcrypt"
 )
 
+const userSelectColumns = "id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, email_verified, created_at, updated_at"
+
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
-	row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, created_at, updated_at FROM users WHERE email = $1 AND is_deleted = FALSE", email)
+	row := s.db.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE email = $1 AND is_deleted = FALSE", email)
 
 	u, err := scanRowIntoUser(row)
 	if err != nil {
@@ -39,6 +42,7 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 		&u.Password,
 		&u.IsDeleted,
 		&deletedAt,
+		&u.EmailVerified,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)
@@ -70,7 +74,7 @@ func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) 
 		return &uCopy, nil
 	}
 	val, err := s.sf.Do(ctx, key, func(ctx context.Context) (interface{}, error) {
-		row := s.db.QueryRowContext(ctx, "SELECT id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, created_at, updated_at FROM users WHERE id = $1", id)
+		row := s.db.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE id = $1", id)
 
 		u, err := scanRowIntoUser(row)
 		if err != nil {
@@ -144,6 +148,71 @@ func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateU
 	}
 	key := fmt.Sprintf("%s%d", userIDKey, userID)
 	s.cache.Delete(key)
+	return nil
+}
+
+func (s *Storage) CreateEmailVerificationToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error {
+	// Drop any outstanding tokens for this user so only the newest link works.
+	_, err := s.db.ExecContext(ctx,
+		"DELETE FROM email_verification_tokens WHERE user_id = $1 AND used_at IS NULL",
+		userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx,
+		"INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+		userID, tokenHash, expiresAt,
+	)
+	return err
+}
+
+func (s *Storage) VerifyEmailByToken(ctx context.Context, tokenHash string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var userID int
+	var expiresAt time.Time
+	var usedAt sql.NullTime
+	err = tx.QueryRowContext(ctx,
+		"SELECT user_id, expires_at, used_at FROM email_verification_tokens WHERE token_hash = $1 FOR UPDATE",
+		tokenHash,
+	).Scan(&userID, &expiresAt, &usedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("invalid or expired verification token")
+		}
+		return err
+	}
+
+	if usedAt.Valid || time.Now().After(expiresAt) {
+		return fmt.Errorf("invalid or expired verification token")
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		"UPDATE email_verification_tokens SET used_at = NOW() WHERE token_hash = $1",
+		tokenHash,
+	); err != nil {
+		return err
+	}
+
+	if _, err = tx.ExecContext(ctx,
+		"UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1",
+		userID,
+	); err != nil {
+		return err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+
+	s.cache.Delete(fmt.Sprintf("%s%d", userIDKey, userID))
+
 	return nil
 }
 

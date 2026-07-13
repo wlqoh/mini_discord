@@ -16,9 +16,20 @@ type Config struct {
 	S3                            S3Config     `yaml:"s3"`
 	WebRTC                        WebRTCConfig `yaml:"webrtc"`
 	HTTPServer                    `yaml:"http_server"`
-	JWTSecret                     string `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
-	JWTAccessExpirationInMinutes  int    `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
-	JWTRefreshExpirationInMinutes int    `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
+	JWTSecret                     string     `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
+	JWTAccessExpirationInMinutes  int        `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
+	JWTRefreshExpirationInMinutes int        `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
+	Mail                          MailConfig `yaml:"mail"`
+	FrontendBaseURL               string     `yaml:"frontend_base_url" env:"FRONTEND_BASE_URL" env-default:"http://localhost:5173"`
+}
+
+type MailConfig struct {
+	SMTPHost     string `yaml:"smtp_host" env:"SMTP_HOST"`
+	SMTPPort     int    `yaml:"smtp_port" env:"SMTP_PORT" env-default:"587"`
+	SMTPUsername string `yaml:"smtp_username" env:"SMTP_USERNAME"`
+	SMTPPassword string `yaml:"smtp_password" env:"SMTP_PASSWORD"`
+	FromAddress  string `yaml:"from_address" env:"MAIL_FROM_ADDRESS"`
+	FromName     string `yaml:"from_name" env:"MAIL_FROM_NAME" env-default:"Mini Discord"`
 }
 
 type WebRTCConfig struct {
