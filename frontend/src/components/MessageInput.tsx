@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
 import { uploadAttachment } from "../services/avatarApi.ts";
 import type { Message, OnlineUser } from "../types/chat.ts";
+import { useToast } from "./Toast.tsx";
 
 type PendingFile = {
     id: string;
@@ -57,10 +58,10 @@ export default function MessageInput({
     replyToMessage,
     onCancelReply,
 }: Props) {
+    const { showToast } = useToast();
     const [text, setText] = useState("");
     const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
     const [isUploading, setIsUploading] = useState(false);
-    const [uploadError, setUploadError] = useState("");
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     function getReplyAuthorLabel(msg: Message): string {
@@ -92,7 +93,6 @@ export default function MessageInput({
     }, []);
 
     async function startRecording() {
-        setUploadError("");
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             streamRef.current = stream;
@@ -127,7 +127,7 @@ export default function MessageInput({
                 const file = new File([blob], `voice_${id}.${ext}`, { type: mimeType });
 
                 if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-                    setUploadError("Voice message is too long (max 10MB)");
+                    showToast("error", "Voice message is too long (max 10 MB)");
                     return;
                 }
 
@@ -142,7 +142,7 @@ export default function MessageInput({
                 setRecordingDuration((prev) => prev + 1);
             }, 1000);
         } catch {
-            setUploadError("Microphone access denied");
+            showToast("error", "Microphone access denied");
         }
     }
 
@@ -163,18 +163,16 @@ export default function MessageInput({
     }
 
     function addFiles(files: File[]) {
-        setUploadError("");
-
         const newFiles: PendingFile[] = [];
 
         for (const file of files) {
             if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-                setUploadError(`File "${file.name}" is too large (max 10MB)`);
+                showToast("error", `"${file.name}" is too large (max 10 MB)`);
                 continue;
             }
 
             if (!ALLOWED_TYPES.has(file.type)) {
-                setUploadError(`File "${file.name}" has unsupported type`);
+                showToast("error", `"${file.name}" has an unsupported file type`);
                 continue;
             }
 
@@ -259,7 +257,7 @@ export default function MessageInput({
                     }
                 });
                 if (errors.length > 0) {
-                    setUploadError(`Failed to upload: ${errors.join(", ")}`);
+                    showToast("error", `Failed to upload: ${errors.join(", ")}`);
                     setIsUploading(false);
                     if (ids.length === 0) return;
                 }
@@ -268,17 +266,20 @@ export default function MessageInput({
                     if (pf.previewUrl) URL.revokeObjectURL(pf.previewUrl);
                 });
             } catch {
-                setUploadError("Upload failed");
+                showToast("error", "Upload failed");
                 setIsUploading(false);
                 return;
             }
             setIsUploading(false);
         }
 
+        const hadFiles = (attachmentIds?.length ?? 0) > 0;
         await onSend(value, attachmentIds, replyToMessage?.id ?? undefined);
         setText("");
         setPendingFiles([]);
-        setUploadError("");
+        if (hadFiles) {
+            showToast("success", "File sent");
+        }
     }
 
     function openFilePicker() {
@@ -323,9 +324,6 @@ export default function MessageInput({
                         </div>
                     ))}
                 </div>
-            )}
-            {uploadError && (
-                <div className="message-upload-error">{uploadError}</div>
             )}
             {isRecording && (
                 <div className="voice-recording-bar">

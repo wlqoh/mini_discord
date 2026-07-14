@@ -4,6 +4,7 @@ import Login from "./pages/Login";
 import ChatPage from "./pages/ChatPage";
 import VerifyEmail from "./pages/VerifyEmail";
 import { getValidAccessToken } from "./services/authToken";
+import { ToastProvider } from "./components/Toast";
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
   return getValidAccessToken() ? children : <Navigate to="/login" replace />;
@@ -15,6 +16,7 @@ function GuestOnly({ children }: { children: React.ReactElement }) {
 
 function App() {
   return (
+      <ToastProvider>
       <BrowserRouter>
         <Routes>
           <Route
@@ -28,6 +30,7 @@ function App() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </BrowserRouter>
+      </ToastProvider>
   );
 }
 
