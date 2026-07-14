@@ -1,129 +1,44 @@
-﻿import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import VideoTile from "../components/VideoTile.tsx";
-import API from "../api";
-import { extractApiError } from "../services/apiError";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
-import {clearAuthStorage, getCurrentUserId, getCurrentUserProfile} from "../services/authToken.ts";
+import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
 import type {
-    ChannelsByServer,
-    Message,
     MessagesByChannel,
-    OnlineUser,
-    Server,
-    UserProfile,
     VoiceParticipant,
-    VoiceParticipantsByChannel,
 } from "../types/chat.ts";
-import {getMyAvatarUrl, uploadMyAvatar} from "../services/avatarApi.ts";
-import {playJoinSound, playLeaveSound} from "../services/sounds.ts";
+import {getMyAvatarUrl} from "../services/avatarApi.ts";
+import { useToast } from "../components/Toast.tsx";
+import { useVoice } from "../hooks/useVoice.ts";
+import { useServers } from "../hooks/useServers.ts";
+import { useMessages } from "../hooks/useMessages.ts";
+import { useProfile } from "../hooks/useProfile.ts";
 import "../styles/chat.css";
 
-const CHAT_SERVERS_KEY = "chat_servers";
-const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
-const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
-const VOICE_VOLUME_KEY = "voice_volume_by_user";
 const COLOR_THEME_KEY = "color_theme";
 type ColorTheme = "dark" | "light";
-const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
-const MAX_AVATAR_SIZE_BYTES = 1 * 1024 * 1024; // 1 MB
-const ALLOWED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
-
-// function getNextNumericName(items: Array<{ name: string }>, fallback = 1): string {
-//   const numericNames = items.map((item) => Number(item.name)).filter((value) => Number.isInteger(value) && value > 0);
-//
-//   if (!numericNames.length) return String(fallback);
-//
-//   return String(Math.max(...numericNames) + 1);
-// }
 
 export default function ChatPage() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
     const socketRef = useRef<ChatSocket | null>(null);
     const callClientRef = useRef<CallClient | null>(null);
-    const selectedServerIdRef = useRef(0);
-    const joinSearchRequestIdRef = useRef(0);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
-    const isCreatingServerRef = useRef(false);
-    const [isCreatingServer, setIsCreatingServer] = useState(false);
-    const isCreatingChannelRef = useRef(false);
-    const [isCreatingChannel, setIsCreatingChannel] = useState(false);
-    const [isSearchingServers, setIsSearchingServers] = useState(false);
-    const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
-    const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
-    const [avatarUrl, setAvatarUrl] = useState("")
-    const [isOnlinePanelOpen, setIsOnlinePanelOpen] = useState(false);
-    const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
-    const [isOnlineUsersLoading, setIsOnlineUsersLoading] = useState(false);
-    const [servers, setServers] = useState<Server[]>([]);
-    const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
-    const [voiceParticipantsByChannel, setVoiceParticipantsByChannel] = useState<VoiceParticipantsByChannel>({});
-    const [selectedServerId, setSelectedServerId] = useState<number>(0);
-    const [selectedChannelId, setSelectedChannelId] = useState<number>(0);
-    const [messagesByChannel, setMessagesByChannel] = useState<MessagesByChannel>({});
-    const [loadedChannels, setLoadedChannels] = useState<Record<number, boolean>>({});
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState("");
-    const [isCreateServerModalOpen, setIsCreateServerModalOpen] = useState(false);
-    const [newServerName, setNewServerName] = useState("");
-    const [isCreateChannelModalOpen, setIsCreateChannelModalOpen] = useState(false);
-    const [newChannelName, setNewChannelName] = useState("");
-    const [newChannelType, setNewChannelType] = useState<"text" | "voice">("text");
-    const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-    const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
-    const [voiceChannelId, setVoiceChannelId] = useState(0);
-    const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-    const [remoteStreams, setRemoteStreams] = useState<Array<{
-        userId: number;
-        label: string;
-        stream: MediaStream
-    }>>([]);
-    const [selectedProfileUserId, setSelectedProfileUserId] = useState<number | null>(null);
-    const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
-    const [selectedProfileError, setSelectedProfileError] = useState("");
-    const [isProfileLoading, setIsProfileLoading] = useState(false);
-    const [nicknameDraft, setNicknameDraft] = useState("");
-    const [profileUpdateError, setProfileUpdateError] = useState("");
-    const [isSavingNickname, setIsSavingNickname] = useState(false);
-    const [isDeleteAccountConfirmOpen, setIsDeleteAccountConfirmOpen] = useState(false);
-    const [deletePasswordDraft, setDeletePasswordDraft] = useState("");
-    const [isDeletingAccount, setIsDeletingAccount] = useState(false);
-    const [deleteAccountError, setDeleteAccountError] = useState("");
-    const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
-    const [isScreenSharing, setIsScreenSharing] = useState(false);
-    const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
-    const [isDeafened, setIsDeafened] = useState(false);
-    const [isMicEnabled, setIsMicEnabled] = useState(true);
-    const [isCameraEnabled, setIsCameraEnabled] = useState(true);
-    const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
-    const [closingModal, setClosingModal] = useState<string | null>(null);
-    const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
-        try {
-            const stored = localStorage.getItem(VOICE_VOLUME_KEY);
-            if (!stored) return {};
-            const parsed = JSON.parse(stored) as unknown;
-            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-            const result: Record<number, number> = {};
-            for (const [k, v] of Object.entries(parsed)) {
-                const id = Number(k);
-                const vol = Number(v);
-                if (Number.isFinite(id) && id > 0 && Number.isFinite(vol) && vol >= 0 && vol <= 2) {
-                    result[id] = vol;
-                }
-            }
-            return result;
-        } catch {
-            return {};
-        }
-    });
-    const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
+    const [isPageVisible, setIsPageVisible] = useState(true);
+    const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfile | null>(
+        () => getCurrentUserProfile(),
+    );
+    const currentUserId: number | null = getCurrentUserId();
+    const [avatarUrl, setAvatarUrl] = useState("");
     const [theme, setTheme] = useState<ColorTheme>(() => {
         try {
             return localStorage.getItem(COLOR_THEME_KEY) === "light" ? "light" : "dark";
@@ -131,30 +46,14 @@ export default function ChatPage() {
             return "dark";
         }
     });
-    const micBeforeDeafenRef = useRef(true);
-    const [currentUserProfile, setCurrentUserProfile] = useState<CurrentUserProfile | null>(
-        () => getCurrentUserProfile(),
-    );
-    const currentUserId: number | null = getCurrentUserId();
+    const [closingModal, setClosingModal] = useState<string | null>(null);
+    const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
+    const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
     const isMobileDevice = useMediaQuery("(max-width: 1024px) and (pointer: coarse)");
     const isPhone = useMediaQuery("(max-width: 768px)");
-    const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
-    const [isPageVisible, setIsPageVisible] = useState(true);
-    const [joinQuery, setJoinQuery] = useState("");
-    const [joinResults, setJoinResults] = useState<Array<{ id: number; name: string }>>([]);
-    const [avatarError, setAvatarError] = useState("");
-    const [isAvatarUploading, setIsAvatarUploading] = useState(false);
-    const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
-        const nickname = participant.nickname?.trim();
-        if (nickname) {
-            return nickname;
-        }
-        const fullName = [participant.first_name, participant.last_name].filter(Boolean).join(" ").trim();
-        if (fullName) {
-            return fullName;
-        }
-        return `User ${participant.user_id}`;
-    }, []);
+
+    // Shared messagesByChannel state (used by both useServers and useMessages)
+    const [messagesByChannel, setMessagesByChannel] = useState<MessagesByChannel>({});
 
     const handleAuthFailure = useCallback(
         (message: string): void => {
@@ -165,11 +64,6 @@ export default function ChatPage() {
         [navigate],
     );
 
-    const loadAvatar = useCallback(async () => {
-        const url = await getMyAvatarUrl();
-        setAvatarUrl(url ?? "");
-    }, []);
-
     function closeModalWithAnim(name: string, close: () => void): void {
         setClosingModal(name);
         window.setTimeout(() => {
@@ -178,1098 +72,9 @@ export default function ChatPage() {
         }, 160);
     }
 
-    const openSelfProfile = useCallback(() => {
-        setSelectedProfileUserId(null);
-        setSelectedProfile(null);
-        setSelectedProfileError("");
-        setProfileUpdateError("");
-        setIsProfileLoading(false);
-        setDeleteAccountError("");
-        setIsDeleteAccountConfirmOpen(false);
-        setDeletePasswordDraft("");
-        setIsAvatarPreviewOpen(false);
-        setNicknameDraft(currentUserProfile?.nickname ?? "");
-        setIsProfileModalOpen(true);
-    }, [currentUserProfile?.nickname]);
-
-    async function handleSaveNickname(): Promise<void> {
-        if (!currentUserProfile) {
-            setProfileUpdateError("Profile not loaded");
-            return;
-        }
-        const firstName = profileFirstName?.trim() ?? "";
-        const lastName = profileLastName?.trim() ?? "";
-        const nickname = nicknameDraft.trim();
-        if (!firstName || !lastName || !nickname) {
-            setProfileUpdateError("First name, last name, and nickname are required");
-            return;
-        }
-        if (nickname.length < 5) {
-            setProfileUpdateError("Nickname must be at least 5 characters long");
-            return;
-        }
-        if (isSavingNickname) {
-            return;
-        }
-        setIsSavingNickname(true);
-        setProfileUpdateError("");
-        try {
-            await API.post("/updateUser", {
-                first_name: firstName,
-                last_name: lastName,
-                nickname,
-            });
-            const nextProfile: CurrentUserProfile = {
-                ...currentUserProfile,
-                first_name: firstName,
-                last_name: lastName,
-                nickname,
-            };
-            localStorage.setItem("current_user", JSON.stringify(nextProfile));
-            setCurrentUserProfile(nextProfile);
-            setNicknameDraft(nickname);
-        } catch (err) {
-            setProfileUpdateError(extractApiError(err, "Failed to update profile"));
-        } finally {
-            setIsSavingNickname(false);
-        }
-    }
-
-    const refreshOnlineUsers = useCallback(async () => {
-        if (!socketRef.current || !isConnected || selectedServerId <= 0) {
-            setOnlineUsers([]);
-            return;
-        }
-
-        try {
-            setIsOnlineUsersLoading(true);
-            const users = await socketRef.current.getUsersOnline(selectedServerId);
-            const currentEmail = currentUserProfile?.email?.trim().toLowerCase();
-            const currentNickname = currentUserProfile?.nickname?.trim();
-            const normalizedUsers = users.map((user) => {
-                if (user.nickname?.trim()) {
-                    return user;
-                }
-                const userEmail = user.email?.trim().toLowerCase();
-                if (currentEmail && currentNickname && userEmail === currentEmail) {
-                    return { ...user, nickname: currentNickname };
-                }
-                return user;
-            });
-            setOnlineUsers(normalizedUsers);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to load online users";
-            setError(message);
-        } finally {
-            setIsOnlineUsersLoading(false);
-        }
-    }, [isConnected, selectedServerId, currentUserProfile?.email, currentUserProfile?.nickname]);
-
-    const syncServersAndChannels = useCallback(
-        async (preferredServerId?: number) => {
-            if (!socketRef.current) {
-                return;
-            }
-
-            const remoteServers = await socketRef.current.getServers();
-            if (!remoteServers.length) {
-                setServers([]);
-                setChannelsByServer({});
-                setVoiceParticipantsByChannel({});
-                setSelectedServerId(0);
-                setSelectedChannelId(0);
-                setMessagesByChannel({});
-                localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify([]));
-                localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify({}));
-                localStorage.removeItem(CHAT_SELECTED_SERVER_KEY);
-                return;
-            }
-
-            const channelsStateByServerEntries = await Promise.all(
-                remoteServers.map(async (server) => {
-                    const state = await socketRef.current!.getServerChannelsState(server.id);
-                    return [server.id, state] as const;
-                }),
-            );
-
-            const remoteChannelsByServer = Object.fromEntries(
-                channelsStateByServerEntries.map(([serverId, state]) => [serverId, state.channels]),
-            ) as ChannelsByServer;
-            const validChannelIds = new Set(
-                Object.values(remoteChannelsByServer)
-                    .flat()
-                    .map((channel) => channel.id),
-            );
-            const nextVoiceParticipantsByChannel: VoiceParticipantsByChannel = {};
-            channelsStateByServerEntries.forEach(([, state]) => {
-                state.voice_participants.forEach((entry) => {
-                    if (validChannelIds.has(entry.channel_id)) {
-                        nextVoiceParticipantsByChannel[entry.channel_id] = entry.participants;
-                    }
-                });
-            });
-
-            const fromState = selectedServerIdRef.current;
-            const activeServerId =
-                (preferredServerId && remoteServers.some((server) => server.id === preferredServerId) && preferredServerId) ||
-                (fromState > 0 && remoteServers.some((server) => server.id === fromState) && fromState) ||
-                remoteServers[0].id;
-
-            const activeChannels = remoteChannelsByServer[activeServerId] ?? [];
-
-            setServers(remoteServers);
-            setChannelsByServer(remoteChannelsByServer);
-            setVoiceParticipantsByChannel(nextVoiceParticipantsByChannel);
-            setSelectedServerId(activeServerId);
-            setSelectedChannelId((prev) => {
-                if (activeChannels.some((channel) => channel.id === prev)) {
-                    return prev;
-                }
-                return activeChannels[0]?.id ?? 0;
-            });
-            setMessagesByChannel((prev) => {
-                const next = {...prev};
-                Object.values(remoteChannelsByServer)
-                    .flat()
-                    .forEach((channel) => {
-                        if (!next[channel.id]) {
-                            next[channel.id] = [];
-                        }
-                    });
-                return next;
-            });
-
-            localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(remoteServers));
-            localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify(remoteChannelsByServer));
-            localStorage.setItem(CHAT_SELECTED_SERVER_KEY, String(activeServerId));
-        },
-        [],
-    );
-
-    useEffect(() => {
-        const socket = new ChatSocket();
-        socketRef.current = socket;
-
-        if (currentUserId && currentUserId > 0) {
-            callClientRef.current = new CallClient(
-                socket,
-                currentUserId,
-                (participant, stream) => {
-                    const label = toParticipantLabel(participant);
-                    setRemoteStreams((prev) => {
-                        const next = prev.filter((item) => item.userId !== participant.user_id);
-                        next.push({userId: participant.user_id, label, stream});
-                        return next;
-                    });
-                    setVoiceVolumeByUserId((prev) => {
-                        if (participant.user_id in prev) {
-                            return prev;
-                        }
-                        return { ...prev, [participant.user_id]: 1 };
-                    });
-                },
-                (userId) => {
-                    setRemoteStreams((prev) => prev.filter((item) => item.userId !== userId));
-                },
-                (stream) => {
-                    setLocalStream(stream);
-                    const hasVideoTrack = Boolean(stream?.getVideoTracks()[0]);
-                    const isVideoEnabled = stream?.getVideoTracks()[0]?.enabled ?? false;
-                    setIsCameraEnabled(hasVideoTrack && isVideoEnabled);
-                    setIsScreenSharing(callClientRef.current?.isScreenShareActive() ?? false);
-                    if (!stream) {
-                        setRemoteStreams([]);
-                        setIsSwitchingCamera(false);
-                        setIsTogglingScreenShare(false);
-                    }
-                },
-                (message) => setError(message),
-            );
-        }
-
-        const unsubscribeMessage = socket.onMessage((incoming) => {
-            setMessagesByChannel((prev) => ({
-                ...prev,
-                [incoming.channel_id]: [...(prev[incoming.channel_id] ?? []), incoming],
-            }));
-
-            // Keep UI in sync if server sends message from a channel not present in local cache.
-            setChannelsByServer((prev) => {
-                const hasChannel = Object.values(prev).some((list) => list.some((channel) => channel.id === incoming.channel_id));
-                if (hasChannel || selectedServerIdRef.current <= 0) {
-                    return prev;
-                }
-
-                const current = prev[selectedServerIdRef.current] ?? [];
-                return {
-                    ...prev,
-                    [selectedServerIdRef.current]: [
-                        ...current,
-                        {
-                            id: incoming.channel_id,
-                            server_id: selectedServerIdRef.current,
-                            name: String(incoming.channel_id),
-                            type: "text",
-                        },
-                    ],
-                };
-            });
-        });
-
-        const unsubscribeError = socket.onError((text) => {
-            if (text.toLowerCase().includes("permission denied")) {
-                handleAuthFailure("Timed out, try again later");
-                return;
-            }
-            setError(text);
-        });
-
-        const unsubscribeVoiceUserJoined = socket.onVoiceUserJoined((event) => {
-            setVoiceParticipantsByChannel((prev) => {
-                const current = prev[event.channel_id] ?? [];
-                if (current.some((participant) => participant.user_id === event.user.user_id)) {
-                    return prev;
-                }
-
-                return {
-                    ...prev,
-                    [event.channel_id]: [...current, event.user],
-                };
-            });
-        });
-
-        const unsubscribeVoiceUserLeft = socket.onVoiceUserLeft((event) => {
-            setVoiceParticipantsByChannel((prev) => {
-                const current = prev[event.channel_id] ?? [];
-                if (!current.length) {
-                    return prev;
-                }
-
-                const next = current.filter((participant) => participant.user_id !== event.user.user_id);
-                if (next.length === current.length) {
-                    return prev;
-                }
-
-                if (!next.length) {
-                    const rest = {...prev};
-                    delete rest[event.channel_id];
-                    return rest;
-                }
-
-                return {
-                    ...prev,
-                    [event.channel_id]: next,
-                };
-            });
-        });
-
-        const unsubscribeVoiceStatusChanged = socket.onVoiceStatusChanged((event) => {
-            setVoiceParticipantsByChannel((prev) => {
-                const current = prev[event.channel_id] ?? [];
-                if (!current.length) {
-                    return prev;
-                }
-
-                const index = current.findIndex((participant) => participant.user_id === event.user.user_id);
-                if (index === -1) {
-                    return prev;
-                }
-
-                const next = [...current];
-                next[index] = {
-                    ...current[index],
-                    ...event.user,
-                };
-
-                return {
-                    ...prev,
-                    [event.channel_id]: next,
-                };
-            });
-        });
-
-        (async () => {
-            try {
-                await socket.connect();
-                setIsConnected(true);
-                setError("");
-
-                const persistedSelectedServer = Number(localStorage.getItem(CHAT_SELECTED_SERVER_KEY) ?? "0");
-                await syncServersAndChannels(persistedSelectedServer > 0 ? persistedSelectedServer : undefined);
-            } catch (err) {
-                const message = err instanceof Error ? err.message : "Failed to connect to chat";
-                if (
-                    message.toLowerCase().includes("re-entry required") ||
-                    message.toLowerCase().includes("re-login required") ||
-                    message.toLowerCase().includes("permission denied")
-                ) {
-                    handleAuthFailure("Session expired, please log in again");
-                    return;
-                }
-                setError(message);
-            }
-        })();
-
-        return () => {
-            unsubscribeMessage();
-            unsubscribeError();
-            unsubscribeVoiceUserJoined();
-            unsubscribeVoiceUserLeft();
-            unsubscribeVoiceStatusChanged();
-            callClientRef.current?.dispose();
-            callClientRef.current = null;
-            socketRef.current?.close();
-            socketRef.current = null;
-            setIsConnected(false);
-        };
-    }, [navigate, handleAuthFailure, syncServersAndChannels, currentUserId, toParticipantLabel]);
-
-    useEffect(() => {
-        if (!isConnected || !socketRef.current || !isPageVisible) {
-            return;
-        }
-
-        const intervalId = window.setInterval(() => {
-            void syncServersAndChannels();
-        }, 3000);
-
-        return () => window.clearInterval(intervalId);
-    }, [isConnected, syncServersAndChannels, isPageVisible]);
-
-    useEffect(() => {
-        localStorage.setItem(CHAT_SERVERS_KEY, JSON.stringify(servers));
-    }, [servers]);
-
-    useEffect(() => {
-        localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify(channelsByServer));
-    }, [channelsByServer]);
-
-    useEffect(() => {
-        if (selectedServerId > 0) {
-            localStorage.setItem(CHAT_SELECTED_SERVER_KEY, String(selectedServerId));
-        }
-        selectedServerIdRef.current = selectedServerId;
-    }, [selectedServerId]);
-
-    useEffect(() => {
-        try {
-            localStorage.setItem(VOICE_VOLUME_KEY, JSON.stringify(voiceVolumeByUserId));
-        } catch {
-            // ignore quota or security errors
-        }
-    }, [voiceVolumeByUserId]);
-
-    useEffect(() => {
-        document.documentElement.setAttribute("data-theme", theme);
-        try {
-            localStorage.setItem(COLOR_THEME_KEY, theme);
-        } catch {
-            // ignore quota or security errors
-        }
-    }, [theme]);
-
-    useEffect(() => {
-        if (!isConnected || selectedServerId <= 0) {
-            setOnlineUsers([]);
-            setIsOnlinePanelOpen(false);
-            return;
-        }
-
-        if (!isPageVisible) return;
-
-        void refreshOnlineUsers();
-
-        const intervalId = window.setInterval(() => {
-            void refreshOnlineUsers();
-        }, 10000);
-
-        return () => window.clearInterval(intervalId);
-    }, [isConnected, selectedServerId, refreshOnlineUsers, isPageVisible]);
-
-    useEffect(() => {
-        void loadAvatar();
-    }, [loadAvatar]);
-
-    useEffect(() => {
-        const handler = () => setIsPageVisible(document.visibilityState === "visible");
-        document.addEventListener("visibilitychange", handler);
-        return () => document.removeEventListener("visibilitychange", handler);
-    }, []);
-
-    useEffect(() => {
-        if (!isJoinModalOpen) {
-            setJoinResults([]);
-            setIsSearchingServers(false);
-            return;
-        }
-
-        const socket = socketRef.current;
-        if (!socket || !isConnected) {
-            setJoinResults([]);
-            setIsSearchingServers(false);
-            return;
-        }
-
-        const query = joinQuery.trim();
-        if (query.length < 2) {
-            setJoinResults([]);
-            setIsSearchingServers(false);
-            return;
-        }
-
-        setIsSearchingServers(true);
-
-        const timeoutId = window.setTimeout(() => {
-            const requestId = ++joinSearchRequestIdRef.current;
-
-            void socket.searchServers(query, 20)
-                .then((results) => {
-                    if (requestId !== joinSearchRequestIdRef.current) {
-                        return;
-                    }
-                    setJoinResults(results);
-                    setError("");
-                })
-                .catch((err: unknown) => {
-                    if (requestId !== joinSearchRequestIdRef.current) {
-                        return;
-                    }
-
-                    const message = err instanceof Error ? err.message : "Failed to search servers";
-                    setError(message);
-                    setJoinResults([]);
-                })
-                .finally(() => {
-                    if (requestId === joinSearchRequestIdRef.current) {
-                        setIsSearchingServers(false);
-                    }
-                });
-        }, 350);
-
-        return () => {
-            window.clearTimeout(timeoutId);
-        };
-    }, [joinQuery, isJoinModalOpen, isConnected]);
-
-    useEffect(() => {
-        if (selectedChannelId <= 0 || !socketRef.current || !isConnected || loadedChannels[selectedChannelId]) {
-            return;
-        }
-
-        (async () => {
-            try {
-                const data = await socketRef.current?.getMessages(selectedChannelId);
-                setMessagesByChannel((prev) => ({
-                    ...prev,
-                    [selectedChannelId]: data ?? [],
-                }));
-                setLoadedChannels((prev) => ({...prev, [selectedChannelId]: true}));
-            } catch (err) {
-                const message = err instanceof Error ? err.message : "Failed to load messages";
-                setError(message);
-            }
-        })();
-    }, [selectedChannelId, isConnected, loadedChannels]);
-
-    useEffect(() => {
-        if (selectedChannelId <= 0 || !socketRef.current || !isConnected || !isPageVisible) {
-            return;
-        }
-
-        const intervalId = window.setInterval(() => {
-            const socket = socketRef.current;
-            if (!socket) return;
-
-            void socket.getMessages(selectedChannelId).then((data) => {
-                if (!data) return;
-                setMessagesByChannel((prev) => {
-                    const prevMessages = prev[selectedChannelId];
-                    if (prevMessages && prevMessages.length === data.length && prevMessages.every((m, i) => m.id === data[i].id)) {
-                        return prev;
-                    }
-                    return { ...prev, [selectedChannelId]: data };
-                });
-            }).catch(() => {});
-        }, 5000);
-
-        return () => window.clearInterval(intervalId);
-    }, [selectedChannelId, isConnected, isPageVisible]);
-
-    function openCreateServerModal() {
-        setError("");
-        setNewServerName("");
-        setIsCreateServerModalOpen(true);
-    }
-
-    function openJoinServerModal() {
-        setError("");
-        setJoinQuery("");
-        setJoinResults([]);
-        setIsJoinModalOpen(true);
-    }
-
-    function openCreateChannelModal() {
-        setError("");
-        setNewChannelName("");
-        setNewChannelType("text");
-        setIsCreateChannelModalOpen(true);
-    }
-
-    async function handleAddServerSubmit() {
-        if (!socketRef.current || !isConnected) {
-            setError("No connection");
-            return;
-        }
-
-        const trimmedName = newServerName.trim();
-        if (!trimmedName) {
-            setError("Enter the server name");
-            return;
-        }
-        if ([...trimmedName].length > MAX_SERVER_CHANNEL_NAME_LENGTH) {
-            setError(`Server name must be at most ${MAX_SERVER_CHANNEL_NAME_LENGTH} characters`);
-            return;
-        }
-
-        if (isCreatingServerRef.current) {
-            return;
-        }
-
-        isCreatingServerRef.current = true;
-        setIsCreatingServer(true);
-
-        try {
-            const createdServer = await socketRef.current.createServer(trimmedName);
-            await socketRef.current.createChannel(createdServer.server_id, "Main", "text");
-            await socketRef.current.createChannel(createdServer.server_id, "Voice", "voice");
-
-            await syncServersAndChannels(createdServer.server_id);
-            setError("");
-            setIsCreateServerModalOpen(false);
-            setNewServerName("");
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to create server";
-            setError(message);
-        } finally {
-            isCreatingServerRef.current = false;
-            setIsCreatingServer(false);
-        }
-    }
-
-    async function handleAddChannelSubmit() {
-        if (!socketRef.current || !isConnected || selectedServerId <= 0) {
-            setError("No connection to chat");
-            return;
-        }
-
-        const trimmedName = newChannelName.trim();
-        if (!trimmedName) {
-            setError("Enter the channel name");
-            return;
-        }
-        if ([...trimmedName].length > MAX_SERVER_CHANNEL_NAME_LENGTH) {
-            setError(`Channel name must be at most ${MAX_SERVER_CHANNEL_NAME_LENGTH} characters`);
-            return;
-        }
-
-        if (isCreatingChannelRef.current) {
-            return;
-        }
-
-        isCreatingChannelRef.current = true;
-        setIsCreatingChannel(true);
-
-        try {
-            // const currentChannels = channelsByServer[selectedServerId] ?? [];
-            await socketRef.current.createChannel(selectedServerId, trimmedName, newChannelType);
-
-            await syncServersAndChannels(selectedServerId);
-            setError("");
-            setIsCreateChannelModalOpen(false);
-            setNewChannelName("");
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to create channel";
-            setError(message);
-        } finally {
-            isCreatingChannelRef.current = false;
-            setIsCreatingChannel(false);
-        }
-    }
-
-    async function handleDeleteMessage(messageId: number, channelId: number): Promise<void> {
-        if (!socketRef.current || !isConnected) {
-            setError("No connection");
-            return;
-        }
-
-        setMessagesByChannel((prev) => {
-            const channelMessages = prev[channelId];
-            if (!channelMessages) return prev;
-            const next = channelMessages.filter((m) => m.id !== messageId);
-            if (next.length === channelMessages.length) return prev;
-            return { ...prev, [channelId]: next };
-        });
-
-        try {
-            await socketRef.current.deleteMessage(messageId);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to delete message";
-            setError(message);
-            const socket = socketRef.current;
-            if (socket) {
-                try {
-                    const data = await socket.getMessages(channelId);
-                    setMessagesByChannel((prev) => ({
-                        ...prev,
-                        [channelId]: data ?? [],
-                    }));
-                } catch {
-                    // best-effort rollback
-                }
-            }
-        }
-    }
-
-    async function handleSend(text: string, attachmentIds?: number[], replyToId?: number | null) {
-        if (!socketRef.current || !isConnected || selectedChannelId <= 0) {
-            return;
-        }
-
-        try {
-            setError("");
-            await socketRef.current.sendMessage(selectedChannelId, text, attachmentIds, replyToId);
-            setReplyToMessage(null);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to send message";
-            setError(message);
-        }
-    }
-
-    async function handleSelectServer(serverId: number) {
-        setSelectedServerId(serverId);
-        setError("");
-
-        if (!socketRef.current || !isConnected) {
-            const serverChannels = channelsByServer[serverId] ?? [];
-            setSelectedChannelId(serverChannels[0]?.id ?? 0);
-            return;
-        }
-
-        try {
-            await syncServersAndChannels(serverId);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to load channels";
-            setError(message);
-        }
-    }
-
-    function handleLogout() {
-        callClientRef.current?.dispose();
-        callClientRef.current = null;
-        socketRef.current?.close();
-        socketRef.current = null;
-
-        clearAuthStorage();
-
-        localStorage.removeItem("chat_servers");
-        localStorage.removeItem("chat_channels_by_server");
-        localStorage.removeItem("chat_selected_server_id");
-
-        setIsProfileModalOpen(false);
-
-        navigate("/login", {replace: true});
-    }
-
-    async function handleDeleteAccount(): Promise<void> {
-        const password = deletePasswordDraft;
-        if (!password) {
-            setDeleteAccountError("Enter your password to confirm");
-            return;
-        }
-        if (isDeletingAccount) {
-            return;
-        }
-        setIsDeletingAccount(true);
-        setDeleteAccountError("");
-        try {
-            await API.delete("/deleteUser", { data: { password } });
-            callClientRef.current?.dispose();
-            callClientRef.current = null;
-            socketRef.current?.close();
-            socketRef.current = null;
-            clearAuthStorage();
-            localStorage.removeItem(CHAT_SERVERS_KEY);
-            localStorage.removeItem(CHAT_CHANNELS_BY_SERVER_KEY);
-            localStorage.removeItem(CHAT_SELECTED_SERVER_KEY);
-            setIsProfileModalOpen(false);
-            navigate("/login", {replace: true});
-        } catch (err) {
-            setDeleteAccountError(extractApiError(err, "Failed to delete account"));
-        } finally {
-            setIsDeletingAccount(false);
-        }
-    }
-
-    async function handleJoinVoice(): Promise<void> {
-        if (!callClientRef.current || selectedChannelId <= 0) {
-            setError("Voice call is unavailable");
-            return;
-        }
-
-        const previousChannelId = voiceChannelId;
-
-        try {
-            const response = await callClientRef.current.join(selectedChannelId);
-            setVoiceChannelId(response.channel_id);
-            setIsMicEnabled(true);
-            setIsDeafened(false);
-            setIsCameraEnabled(false);
-            setIsSwitchingCamera(false);
-            setIsScreenSharing(false);
-            setIsTogglingScreenShare(false);
-            setError("");
-
-            playJoinSound();
-
-            if (currentUserId) {
-                setVoiceParticipantsByChannel((prev) => {
-                    const next = { ...prev };
-
-                    if (previousChannelId > 0 && previousChannelId !== response.channel_id) {
-                        const prevChannel = next[previousChannelId];
-                        if (prevChannel) {
-                            const filtered = prevChannel.filter((p) => p.user_id !== currentUserId);
-                            if (filtered.length === 0) {
-                                delete next[previousChannelId];
-                            } else {
-                                next[previousChannelId] = filtered;
-                            }
-                        }
-                    }
-
-                    const selfParticipant: VoiceParticipant = {
-                        user_id: currentUserId,
-                        first_name: currentUserProfile?.first_name || undefined,
-                        last_name: currentUserProfile?.last_name || undefined,
-                        nickname: currentUserProfile?.nickname || undefined,
-                        avatar_url: avatarUrl || undefined,
-                        mic_enabled: true,
-                        deafened: false,
-                    };
-
-                    const serverParticipants = response.participants.filter(
-                        (p) => p.user_id !== selfParticipant.user_id,
-                    );
-                    next[response.channel_id] = [selfParticipant, ...serverParticipants];
-
-                    return next;
-                });
-            }
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to join voice channel";
-            setError(message);
-        }
-    }
-
-    async function handleLeaveVoice(): Promise<void> {
-        const channelId = voiceChannelId;
-
-        try {
-            await callClientRef.current?.leave();
-            playLeaveSound();
-        } finally {
-            setVoiceChannelId(0);
-            setRemoteStreams([]);
-            setIsMicEnabled(true);
-            setIsDeafened(false);
-            setIsCameraEnabled(false);
-            setIsSwitchingCamera(false);
-            setIsScreenSharing(false);
-            setIsTogglingScreenShare(false);
-
-            if (channelId > 0 && currentUserId) {
-                setVoiceParticipantsByChannel((prev) => {
-                    const current = prev[channelId] ?? [];
-                    const next = current.filter((p) => p.user_id !== currentUserId);
-                    if (!next.length) {
-                        const rest = { ...prev };
-                        delete rest[channelId];
-                        return rest;
-                    }
-                    return { ...prev, [channelId]: next };
-                });
-            }
-        }
-    }
-
-    async function handleJoinServer(serverId: number) {
-        if (!socketRef.current || !isConnected) {
-            setError("No connection");
-            return;
-        }
-
-        try {
-            await socketRef.current.joinServer(serverId);
-            await syncServersAndChannels(serverId);
-            setJoinQuery("");
-            setJoinResults([]);
-            setIsJoinModalOpen(false);
-            setError("");
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to join server";
-            setError(message);
-        }
-    }
-
-    async function handleDeleteServer(): Promise<void> {
-        if (!socketRef.current || !isConnected || selectedServerId <= 0) {
-            setError("No connection");
-            return
-        }
-
-        const confirmed = window.confirm("Delete this server? This action cannot be undone");
-        if (!confirmed) {
-            return;
-        }
-
-        try {
-            await socketRef.current.deleteServer(selectedServerId);
-            await syncServersAndChannels();
-            setError("");
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to delete server";
-            setError(message);
-        }
-    }
-
-    async function handleDeleteChannel(channelId: number): Promise<void> {
-        if (!socketRef.current || !isConnected || selectedServerId <= 0 || channelId <= 0) {
-            setError("No connection");
-            return
-        }
-
-        const confirmed = window.confirm("Delete this channel? This action cannot be undone");
-        if (!confirmed) return;
-
-        try {
-            await socketRef.current.deleteChannel(channelId);
-            await syncServersAndChannels(selectedServerId);
-            setError("");
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to delete channel";
-            setError(message);
-        }
-    }
-
-    function openAvatarPicker(): void {
-        setAvatarError("");
-        avatarInputRef.current?.click();
-    }
-
-    async function handleAvatarChange(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
-        const file = event.target.files?.[0];
-        if (!file) {
-            return;
-        }
-
-        if (!ALLOWED_AVATAR_TYPES.has(file.type)) {
-            setAvatarError("Unsupported file type. Please select a PNG, JPEG, or WEBP image.");
-            event.target.value = "";
-            return;
-        }
-
-        if (file.size > MAX_AVATAR_SIZE_BYTES) {
-            setAvatarError("File is too large. Please select an image smaller than 1 MB.");
-            event.target.value = "";
-            return;
-        }
-
-        setIsAvatarUploading(true);
-        setAvatarError("");
-
-        try {
-      const uploadedUrl = await uploadMyAvatar(file);
-      setAvatarUrl(uploadedUrl);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to upload avatar";
-            setAvatarError(message);
-        } finally {
-            setIsAvatarUploading(false);
-            event.target.value = "";
-        }
-    }
-
-    function openAvatarPreview(): void {
-        if (!avatarUrl) return;
-        setIsAvatarPreviewOpen(true);
-    }
-
-    function closeAvatarPreview(): void {
-        closeModalWithAnim("avatarViewer", () => setIsAvatarPreviewOpen(false));
-    }
-
-    useEffect(() => {
-        if (!isAvatarPreviewOpen) return;
-
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                setClosingModal("avatarViewer");
-                window.setTimeout(() => {
-                    setIsAvatarPreviewOpen(false);
-                    setClosingModal(null);
-                }, 160);
-            }
-        };
-
-        window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
-    }, [isAvatarPreviewOpen]);
-
-    function toggleMicrophone(): void {
-        if (isDeafened) {
-            return;
-        }
-        const next = !isMicEnabled;
-        setIsMicEnabled(next);
-        callClientRef.current?.setMicrophoneEnabled(next);
-
-        if (currentUserId && voiceChannelId > 0 && socketRef.current) {
-            void socketRef.current.changeVoiceStatus(currentUserId, next, isDeafened);
-        }
-
-        if (currentUserId && voiceChannelId > 0) {
-            setVoiceParticipantsByChannel((prev) => {
-                const channel = prev[voiceChannelId];
-                if (!channel) return prev;
-                const idx = channel.findIndex((p) => p.user_id === currentUserId);
-                if (idx === -1) return prev;
-                const updated = [...channel];
-                updated[idx] = { ...updated[idx], mic_enabled: next };
-                return { ...prev, [voiceChannelId]: updated };
-            });
-        }
-    }
-
-    function toggleCamera(): void {
-        const videoTrack = localStream?.getVideoTracks()[0];
-        if (!videoTrack) {
-            setIsCameraEnabled(false);
-            setError("Camera is unavailable on this device");
-            return;
-        }
-
-        const next = !isCameraEnabled;
-        setIsCameraEnabled(next);
-        callClientRef.current?.setCameraEnabled(next);
-    }
-
-    async function switchCameraFacingMode(): Promise<void> {
-        if (!callClientRef.current || isSwitchingCamera) {
-            return;
-        }
-
-        try {
-            setIsSwitchingCamera(true);
-            setError("");
-            await callClientRef.current.toggleCameraFacingMode();
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to switch camera";
-            setError(message);
-        } finally {
-            setIsSwitchingCamera(false);
-        }
-    }
-
-    async function toggleScreenShare(): Promise<void> {
-        if (!callClientRef.current || isTogglingScreenShare || isSwitchingCamera) {
-            return;
-        }
-
-        try {
-            setIsTogglingScreenShare(true);
-            setError("");
-            const nextState = await callClientRef.current.toggleScreenShare();
-            setIsScreenSharing(nextState);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to toggle screen sharing";
-            setError(message);
-        } finally {
-            setIsTogglingScreenShare(false);
-        }
-    }
-
-    function toggleDeafen(): void {
-        const next = !isDeafened;
-        if (next) {
-            micBeforeDeafenRef.current = isMicEnabled;
-            setIsDeafened(true);
-            setIsMicEnabled(false);
-            callClientRef.current?.setMicrophoneEnabled(false);
-
-            if (currentUserId && voiceChannelId > 0 && socketRef.current) {
-                void socketRef.current.changeVoiceStatus(currentUserId, false, true);
-            }
-
-            if (currentUserId && voiceChannelId > 0) {
-                setVoiceParticipantsByChannel((prev) => {
-                    const channel = prev[voiceChannelId];
-                    if (!channel) return prev;
-                    const idx = channel.findIndex((p) => p.user_id === currentUserId);
-                    if (idx === -1) return prev;
-                    const updated = [...channel];
-                    updated[idx] = { ...updated[idx], mic_enabled: false, deafened: true };
-                    return { ...prev, [voiceChannelId]: updated };
-                });
-            }
-        } else {
-            setIsDeafened(false);
-            const restoreMic = micBeforeDeafenRef.current;
-            setIsMicEnabled(restoreMic);
-            callClientRef.current?.setMicrophoneEnabled(restoreMic);
-
-            if (currentUserId && voiceChannelId > 0 && socketRef.current) {
-                void socketRef.current.changeVoiceStatus(currentUserId, restoreMic, false);
-            }
-
-            if (currentUserId && voiceChannelId > 0) {
-                setVoiceParticipantsByChannel((prev) => {
-                    const channel = prev[voiceChannelId];
-                    if (!channel) return prev;
-                    const idx = channel.findIndex((p) => p.user_id === currentUserId);
-                    if (idx === -1) return prev;
-                    const updated = [...channel];
-                    updated[idx] = { ...updated[idx], mic_enabled: restoreMic, deafened: false };
-                    return { ...prev, [voiceChannelId]: updated };
-                });
-            }
-        }
-    }
-
     function toggleTheme(): void {
         setTheme((prev) => (prev === "light" ? "dark" : "light"));
     }
-
-    useEffect(() => {
-        remoteStreams.forEach(({stream}) => {
-            stream.getAudioTracks().forEach((track) => {
-                track.enabled = !isDeafened;
-            });
-        });
-    }, [remoteStreams, isDeafened]);
-
-
-    const activeChannels = channelsByServer[selectedServerId] ?? [];
-    const currentServer = servers.find((server) => server.id === selectedServerId);
-    const isCurrentServerOwner =
-        currentUserId !== null &&
-        currentServer !== undefined &&
-        currentServer.owner_id === currentUserId;
-    const currentChannel = activeChannels.find((channel) => channel.id === selectedChannelId);
-    const isVoiceChannel = currentChannel?.type === "voice";
-    const isInVoiceCall = voiceChannelId > 0;
-    const isInSelectedVoiceChannel = isVoiceChannel && voiceChannelId === selectedChannelId;
-    const shouldHideMessageInput = isVoiceChannel;
-    const activeMessages: Message[] = selectedChannelId > 0 ? messagesByChannel[selectedChannelId] ?? [] : [];
 
     function scrollToMessage(messageId: number) {
         const el = document.getElementById(`message-${messageId}`);
@@ -1280,11 +85,102 @@ export default function ChatPage() {
         }
     }
 
+    // isPageVisible effect
+    useEffect(() => {
+        const handler = () => setIsPageVisible(document.visibilityState === "visible");
+        document.addEventListener("visibilitychange", handler);
+        return () => document.removeEventListener("visibilitychange", handler);
+    }, []);
+
+    // Theme effect
+    useEffect(() => {
+        document.documentElement.setAttribute("data-theme", theme);
+        try {
+            localStorage.setItem(COLOR_THEME_KEY, theme);
+        } catch {
+            // ignore quota or security errors
+        }
+    }, [theme]);
+
+    // Avatar load effect
+    useEffect(() => {
+        getMyAvatarUrl().then((url) => setAvatarUrl(url ?? "")).catch(() => {});
+    }, []);
+
+    // Hook call order matters for dependency flow
+    const voice = useVoice({
+        socketRef,
+        callClientRef,
+        currentUserId,
+        currentUserProfile,
+        avatarUrl,
+        setError,
+    });
+
+    const servers = useServers({
+        socketRef,
+        callClientRef,
+        setIsConnected,
+        isPageVisible,
+        showToast,
+        currentUserProfile,
+        handleAuthFailure,
+        setError,
+        setVoiceParticipantsByChannel: voice.setVoiceParticipantsByChannel,
+        setMessagesByChannel,
+        callClientCallbacks: voice.callClientCallbacks,
+        voiceSocketHandlers: voice.voiceSocketHandlers,
+        currentUserId,
+    });
+
+    const messages = useMessages({
+        socketRef,
+        isConnected,
+        selectedChannelId: servers.selectedChannelId,
+        selectedServerIdRef: servers.selectedServerIdRef,
+        isPageVisible,
+        setError,
+        setChannelsByServer: servers.setChannelsByServer,
+        messagesByChannel,
+        setMessagesByChannel,
+    });
+
+    const profile = useProfile({
+        socketRef,
+        callClientRef,
+        avatarInputRef,
+        currentUserId,
+        currentUserProfile,
+        setCurrentUserProfile,
+        avatarUrl,
+        setAvatarUrl,
+        messagesByChannel,
+        voiceParticipantsByChannel: voice.voiceParticipantsByChannel,
+        showToast,
+        navigate,
+        closeModalWithAnim,
+    });
+
+    // Derived values
+    const activeChannels = servers.channelsByServer[servers.selectedServerId] ?? [];
+    const currentServer = servers.servers.find((server) => server.id === servers.selectedServerId);
+    const isCurrentServerOwner =
+        currentUserId !== null &&
+        currentServer !== undefined &&
+        currentServer.owner_id === currentUserId;
+    const currentChannel = activeChannels.find((channel) => channel.id === servers.selectedChannelId);
+    const isVoiceChannel = currentChannel?.type === "voice";
+    const isInVoiceCall = voice.voiceChannelId > 0;
+    const isInSelectedVoiceChannel = isVoiceChannel && voice.voiceChannelId === servers.selectedChannelId;
+    const shouldHideMessageInput = isVoiceChannel;
+    const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
+
     const userInitial =
         currentUserProfile?.nickname?.[0]?.toUpperCase() ??
         currentUserProfile?.first_name?.[0]?.toUpperCase() ??
         currentUserProfile?.email?.[0]?.toUpperCase() ??
         "U";
+
     const getParticipantDisplayName = (participant: VoiceParticipant): string => {
         const nickname = participant.nickname?.trim();
         if (nickname) {
@@ -1309,11 +205,6 @@ export default function ChatPage() {
         return initials || "U";
     };
 
-    const voiceParticipantsInChannel = useMemo(
-        () => voiceParticipantsByChannel[voiceChannelId] ?? [],
-        [voiceParticipantsByChannel, voiceChannelId],
-    );
-
     const onlineUserAvatarByName = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
 
@@ -1331,8 +222,8 @@ export default function ChatPage() {
             }
         };
 
-        Object.values(messagesByChannel).forEach((messages) => {
-            messages.forEach((message) => {
+        Object.values(messagesByChannel).forEach((msgs) => {
+            msgs.forEach((message) => {
                 add(message.author_first_name, message.author_last_name, message.author_avatar_url, message.author_nickname);
             });
         });
@@ -1342,81 +233,20 @@ export default function ChatPage() {
         return map;
     }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, currentUserProfile?.nickname, avatarUrl]);
 
-    const openUserProfile = useCallback(async (userId: number) => {
-        if (currentUserId && userId === currentUserId) {
-            openSelfProfile();
-            return;
-        }
-
-        setSelectedProfileUserId(userId);
-        setSelectedProfile(null);
-        setSelectedProfileError("");
-        setProfileUpdateError("");
-        setIsProfileLoading(true);
-        setIsAvatarPreviewOpen(false);
-        setNicknameDraft("");
-        setIsProfileModalOpen(true);
-
-        const socket = socketRef.current;
-        if (!socket) {
-            setSelectedProfileError("No connection");
-            setIsProfileLoading(false);
-            return;
-        }
-
-        try {
-            const info = await socket.getUserInfo(userId);
-            setSelectedProfile(info);
-        } catch (err) {
-            const message = err instanceof Error ? err.message : "Failed to load user profile";
-            if (message.toLowerCase().includes("unknown action")) {
-                const messageFallback = Object.values(messagesByChannel)
-                    .flat()
-                    .find((item) => item.author_id === userId);
-                const voiceFallback = Object.values(voiceParticipantsByChannel)
-                    .flat()
-                    .find((item) => item.user_id === userId);
-
-                if (messageFallback || voiceFallback) {
-                    setSelectedProfile({
-                        user_id: userId,
-                        first_name: messageFallback?.author_first_name ?? voiceFallback?.first_name ?? "",
-                        last_name: messageFallback?.author_last_name ?? voiceFallback?.last_name ?? "",
-                        nickname: messageFallback?.author_nickname ?? voiceFallback?.nickname ?? "",
-                        avatar_url: messageFallback?.author_avatar_url ?? voiceFallback?.avatar_url ?? "",
-                    });
-                    setSelectedProfileError("");
-                    return;
-                }
-            }
-
-            setSelectedProfileError(message);
-        } finally {
-            setIsProfileLoading(false);
-        }
-    }, [currentUserId, openSelfProfile, messagesByChannel, voiceParticipantsByChannel]);
-
-    const isSelfProfile = selectedProfileUserId === null || selectedProfileUserId === currentUserId;
-    const profileAvatarUrl = isSelfProfile ? avatarUrl : (selectedProfile?.avatar_url ?? "");
-    const profileFirstName = isSelfProfile ? currentUserProfile?.first_name : selectedProfile?.first_name;
-    const profileLastName = isSelfProfile ? currentUserProfile?.last_name : selectedProfile?.last_name;
-    const profileNickname = isSelfProfile ? currentUserProfile?.nickname : selectedProfile?.nickname;
-    const profileDisplayName = profileNickname || [profileFirstName, profileLastName].filter(Boolean).join(" ").trim();
-    const profileInitial = (profileNickname?.[0] ?? profileFirstName?.[0] ?? profileLastName?.[0] ?? "U").toUpperCase();
-
+    // Scroll to bottom effect
     useEffect(() => {
         const el = chatContentRef.current;
         if (!el) return;
         el.scrollTop = el.scrollHeight;
-    }, [activeMessages.length, selectedChannelId]);
+    }, [activeMessages.length, servers.selectedChannelId]);
 
     return (
         <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
             <aside className="servers-sidebar">
                 <button
                     className="server-add-btn"
-                    onClick={openCreateServerModal}
-                    disabled={!isConnected || isCreatingServer}
+                    onClick={servers.openCreateServerModal}
+                    disabled={!isConnected || servers.isCreatingServer}
                     aria-label="Add server"
                     title="Add server"
                 >
@@ -1424,7 +254,7 @@ export default function ChatPage() {
                 </button>
                 <button
                     className="server-add-btn"
-                    onClick={openJoinServerModal}
+                    onClick={servers.openJoinServerModal}
                     disabled={!isConnected}
                     aria-label="Join server"
                     title="Join server"
@@ -1432,11 +262,11 @@ export default function ChatPage() {
                     <Search size={18} aria-hidden="true"/>
                 </button>
                 <ul className="servers-list">
-                    {servers.map((server) => (
+                    {servers.servers.map((server) => (
                         <li key={server.id}>
                             <button
-                                className={`server-dot ${selectedServerId === server.id ? "active" : ""}`}
-                                onClick={() => handleSelectServer(server.id)}
+                                className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
+                                onClick={() => void servers.handleSelectServer(server.id)}
                                 title={`Server ${server.name} (ID ${server.id})`}
                                 aria-label={`Server ${server.name}`}
                             >
@@ -1481,8 +311,8 @@ export default function ChatPage() {
                         {isCurrentServerOwner ? (
                             <button
                                 className="channels-add-btn"
-                                onClick={() => void handleDeleteServer()}
-                                disabled={!isConnected || selectedServerId <= 0}
+                                onClick={() => void servers.handleDeleteServer()}
+                                disabled={!isConnected || servers.selectedServerId <= 0}
                                 aria-label="Delete server"
                                 title="Delete server"
                                 type="button"
@@ -1492,8 +322,8 @@ export default function ChatPage() {
                         ) : null}
                         <button
                             className="channels-add-btn"
-                            onClick={openCreateChannelModal}
-                            disabled={!isConnected || selectedServerId <= 0 || isCreatingChannel}
+                            onClick={servers.openCreateChannelModal}
+                            disabled={!isConnected || servers.selectedServerId <= 0 || servers.isCreatingChannel}
                             aria-label="Create channel"
                             title="Create channel"
                             type="button"
@@ -1507,8 +337,8 @@ export default function ChatPage() {
                         <li key={channel.id} className="channel-item">
                             <div className="channel-row-wrap">
                                 <button
-                                    className={`channel-row ${selectedChannelId === channel.id ? "active" : ""}`}
-                                    onClick={() => { setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
+                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""}`}
+                                    onClick={() => { servers.setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
                                     type="button"
                                 >
                                     {channel.type === "voice"
@@ -1521,7 +351,7 @@ export default function ChatPage() {
                                     <button
                                         className="channels-delete-btn"
                                         type="button"
-                                        onClick={() => void handleDeleteChannel(channel.id)}
+                                        onClick={() => void servers.handleDeleteChannel(channel.id)}
                                         aria-label={`Delete channel ${channel.name}`}
                                         title="Delete channel"
                                     >
@@ -1529,21 +359,21 @@ export default function ChatPage() {
                                     </button>
                                 ) : null}
                             </div>
-                            {channel.type === "voice" && (voiceParticipantsByChannel[channel.id]?.length ?? 0) > 0 ? (
+                            {channel.type === "voice" && (voice.voiceParticipantsByChannel[channel.id]?.length ?? 0) > 0 ? (
                                 <ul className="voice-members-list">
-                                    {(voiceParticipantsByChannel[channel.id] ?? []).map((participant) => (
+                                    {(voice.voiceParticipantsByChannel[channel.id] ?? []).map((participant) => (
                                         <li
                                             key={participant.user_id}
                                             className="voice-member-item"
                                             role="button"
                                             tabIndex={0}
                                             onClick={() =>
-                                                setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id))
+                                                voice.setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id))
                                             }
                                             onKeyDown={(event) => {
                                                 if (event.key === "Enter" || event.key === " ") {
                                                     event.preventDefault();
-                                                    setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id));
+                                                    voice.setActiveVolumeUserId((prev) => (prev === participant.user_id ? null : participant.user_id));
                                                 }
                                             }}
                                         >
@@ -1553,12 +383,12 @@ export default function ChatPage() {
                                                 tabIndex={0}
                                                 onClick={(event) => {
                                                     event.stopPropagation();
-                                                    openUserProfile(participant.user_id);
+                                                    void profile.openUserProfile(participant.user_id);
                                                 }}
                                                 onKeyDown={(event) => {
                                                     if (event.key === "Enter") {
                                                         event.stopPropagation();
-                                                        openUserProfile(participant.user_id);
+                                                        void profile.openUserProfile(participant.user_id);
                                                     }
                                                 }}
                                             >
@@ -1583,7 +413,7 @@ export default function ChatPage() {
                                                     {participant.deafened ? <VolumeOff size={14} aria-hidden="true" /> : null}
                                                 </span>
                                             </div>
-                                            {activeVolumeUserId === participant.user_id && (
+                                            {voice.activeVolumeUserId === participant.user_id && (
                                                 <div className="voice-volume-popover" onClick={(e) => e.stopPropagation()}>
                                                     <div className="voice-volume-slider-wrap">
                                                         <input
@@ -1591,11 +421,11 @@ export default function ChatPage() {
                                                             min="0"
                                                             max="2"
                                                             step="0.01"
-                                                            value={voiceVolumeByUserId[participant.user_id] ?? 1}
+                                                            value={voice.voiceVolumeByUserId[participant.user_id] ?? 1}
                                                             onChange={(e) => {
                                                                 const raw = Number(e.target.value);
                                                                 const next = Number.isFinite(raw) ? Math.max(0, Math.min(2, raw)) : 1;
-                                                                setVoiceVolumeByUserId((prev) => ({
+                                                                voice.setVoiceVolumeByUserId((prev) => ({
                                                                     ...prev,
                                                                     [participant.user_id]: next,
                                                                 }));
@@ -1608,7 +438,7 @@ export default function ChatPage() {
                                                         </div>
                                                     </div>
                                                     <span className="voice-volume-value">
-                                                        {Math.round((voiceVolumeByUserId[participant.user_id] ?? 1) * 100)}%
+                                                        {Math.round((voice.voiceVolumeByUserId[participant.user_id] ?? 1) * 100)}%
                                                     </span>
                                                 </div>
                                             )}
@@ -1640,7 +470,7 @@ export default function ChatPage() {
                                 <button
                                     className="profile-open-btn"
                                     type="button"
-                                    onClick={openSelfProfile}
+                                    onClick={profile.openSelfProfile}
                                     aria-label="Open profile"
                                     title="Profile"
                                 >
@@ -1666,22 +496,22 @@ export default function ChatPage() {
                             <div className="voice-controls">
                                 {isInVoiceCall ? (
                                     <>
-                                        <button className="message-send-btn" onClick={() => void handleLeaveVoice()}>
+                                        <button className="message-send-btn" onClick={() => void voice.handleLeaveVoice()}>
                                             Leave
                                         </button>
-                                        <button className="micam-btn" onClick={toggleMicrophone} disabled={isDeafened}>
-                                            {isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
+                                        <button className="micam-btn" onClick={voice.toggleMicrophone} disabled={voice.isDeafened}>
+                                            {voice.isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
                                                 <MicOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
-                                        <button className="micam-btn" onClick={toggleCamera}>
-                                            {isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
+                                        <button className="micam-btn" onClick={voice.toggleCamera}>
+                                            {voice.isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
                                                 <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
                                         {isMobileDevice ? (
                                             <button
                                                 className="micam-btn"
-                                                onClick={() => void switchCameraFacingMode()}
-                                                disabled={isSwitchingCamera || !localStream}
+                                                onClick={() => void voice.switchCameraFacingMode()}
+                                                disabled={voice.isSwitchingCamera || !voice.localStream}
                                                 title="Switch camera"
                                                 aria-label="Switch camera"
                                             >
@@ -1690,57 +520,56 @@ export default function ChatPage() {
                                         ) : (
                                             <button
                                                 className="micam-btn"
-                                                onClick={() => void toggleScreenShare()}
-                                                disabled={!localStream || isTogglingScreenShare || isSwitchingCamera}
-                                                title={isScreenSharing ? "Stop screen sharing" : "Share screen"}
-                                                aria-label={isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                                                onClick={() => void voice.toggleScreenShare()}
+                                                disabled={!voice.localStream || voice.isTogglingScreenShare || voice.isSwitchingCamera}
+                                                title={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                                                aria-label={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
                                             >
-                                                {isScreenSharing ? <MonitorOff size={18} aria-hidden="true"/> :
+                                                {voice.isScreenSharing ? <MonitorOff size={18} aria-hidden="true"/> :
                                                     <Monitor size={18} aria-hidden="true"/>}
                                             </button>
                                         )}
-                                        <button className="micam-btn" onClick={toggleDeafen}>
-                                            {isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
+                                        <button className="micam-btn" onClick={voice.toggleDeafen}>
+                                            {voice.isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}
                                         </button>
                                         {isVoiceChannel && !isInSelectedVoiceChannel && (
-                                            <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
+                                            <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
                                                 Switch
                                             </button>
                                         )}
                                     </>
                                 ) : (
-                                    <button className="message-send-btn" onClick={() => void handleJoinVoice()}>
+                                    <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
                                         Join
                                     </button>
                                 )}
                             </div>
                             {isInVoiceCall && (
                             <div className="video-grid">
-                                {localStream && (
+                                {voice.localStream && (
                                     <VideoTile
-                                        stream={localStream}
+                                        stream={voice.localStream}
                                         label="You"
                                         muted
-                                        micEnabled={isMicEnabled}
-                                        deafened={isDeafened}
+                                        micEnabled={voice.isMicEnabled}
+                                        deafened={voice.isDeafened}
                                     />
                                 )}
-                                {voiceParticipantsInChannel
+                                {voice.voiceParticipantsInChannel
                                     .filter((p) => p.user_id !== currentUserId)
                                     .map((participant) => {
-                                        const remoteItem = remoteStreams.find((r) => r.userId === participant.user_id);
+                                        const remoteItem = voice.remoteStreams.find((r) => r.userId === participant.user_id);
                                         const stream = remoteItem?.stream ?? null;
                                         const label = remoteItem?.label ?? getParticipantDisplayName(participant);
-                                        const userVolume = voiceVolumeByUserId[participant.user_id] ?? 1;
-                                        const effectiveVolume = isDeafened ? 0 : userVolume;
-
+                                        const userVolume = voice.voiceVolumeByUserId[participant.user_id] ?? 1;
+                                        const effectiveVolume = voice.isDeafened ? 0 : userVolume;
                                         return (
                                             <VideoTile
-                                                key={`${participant.user_id}-${isDeafened ? "deaf" : "live"}`}
+                                                key={`${participant.user_id}-${voice.isDeafened ? "deaf" : "live"}`}
                                                 stream={stream}
                                                 label={label}
-                                                muted={isDeafened}
+                                                muted={voice.isDeafened}
                                                 volume={effectiveVolume}
                                                 micEnabled={participant.mic_enabled}
                                                 deafened={participant.deafened}
@@ -1752,42 +581,42 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={openUserProfile} onDeleteMessage={handleDeleteMessage} onReply={setReplyToMessage} onScrollToMessage={scrollToMessage}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <MessageInput
-                        onSend={handleSend}
-                        disabled={!isConnected || selectedChannelId <= 0}
-                        isOnlinePanelOpen={isOnlinePanelOpen}
-                        onToggleOnlinePanel={() => setIsOnlinePanelOpen((prev) => !prev)}
-                        onlineUsers={onlineUsers}
-                        isOnlineUsersLoading={isOnlineUsersLoading}
+                        onSend={messages.handleSend}
+                        disabled={!isConnected || servers.selectedChannelId <= 0}
+                        isOnlinePanelOpen={servers.isOnlinePanelOpen}
+                        onToggleOnlinePanel={() => servers.setIsOnlinePanelOpen((prev) => !prev)}
+                        onlineUsers={servers.onlineUsers}
+                        isOnlineUsersLoading={servers.isOnlineUsersLoading}
                         onlineUserAvatarByName={onlineUserAvatarByName}
-                        onOpenProfile={openUserProfile}
-                        replyToMessage={replyToMessage}
-                        onCancelReply={() => setReplyToMessage(null)}
+                        onOpenProfile={profile.openUserProfile}
+                        replyToMessage={messages.replyToMessage}
+                        onCancelReply={() => messages.setReplyToMessage(null)}
                     />
                 )}
             </section>
 
-            {isProfileModalOpen && (
-                <div className={`modal-overlay ${closingModal === "profile" ? "closing" : ""}`} onClick={() => closeModalWithAnim("profile", () => setIsProfileModalOpen(false))}>
+            {profile.isProfileModalOpen && (
+                <div className={`modal-overlay ${closingModal === "profile" ? "closing" : ""}`} onClick={() => closeModalWithAnim("profile", () => profile.setIsProfileModalOpen(false))}>
                     <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Profile</h3>
                         <div className="profile-modal-list">
                             <div className="profile-avatar-block">
                                 <div className="profile-avatar-preview-wrap">
-                                    {profileAvatarUrl ? (
-                                        isSelfProfile ? (
+                                    {profile.profileAvatarUrl ? (
+                                        profile.isSelfProfile ? (
                                             <button
                                                 type="button"
                                                 className="profile-avatar-preview-btn"
-                                                onClick={openAvatarPreview}
+                                                onClick={profile.openAvatarPreview}
                                                 aria-label="Open avatar preview"
                                                 title="Open avatar"
                                             >
                                                 <img
-                                                    src={profileAvatarUrl}
+                                                    src={profile.profileAvatarUrl}
                                                     alt="Current avatar"
                                                     className="profile-avatar-preview"
                                                     onError={() => setAvatarUrl("")}
@@ -1795,67 +624,67 @@ export default function ChatPage() {
                                             </button>
                                         ) : (
                                             <img
-                                                src={profileAvatarUrl}
+                                                src={profile.profileAvatarUrl}
                                                 alt="User avatar"
                                                 className="profile-avatar-preview"
                                             />
                                         )
                                     ) : (
-                                        <div className="profile-avatar-fallback">{profileInitial}</div>
+                                        <div className="profile-avatar-fallback">{profile.profileInitial}</div>
                                     )}
                                 </div>
 
-                                {isSelfProfile ? (
+                                {profile.isSelfProfile ? (
                                     <div className="profile-avatar-actions">
                                         <input
                                             ref={avatarInputRef}
                                             type="file"
                                             accept="image/png,image/jpeg,image/webp"
-                                            onChange={(e) => void handleAvatarChange(e)}
+                                            onChange={(e) => void profile.handleAvatarChange(e)}
                                             style={{ display: "none" }}
                                         />
                                         <button
                                             className="modal-btn modal-btn-primary"
                                             type="button"
-                                            onClick={openAvatarPicker}
-                                            disabled={isAvatarUploading}
+                                            onClick={profile.openAvatarPicker}
+                                            disabled={profile.isAvatarUploading}
                                         >
-                                            {isAvatarUploading ? "Uploading..." : "Change avatar"}
+                                            {profile.isAvatarUploading ? "Uploading..." : "Change avatar"}
                                         </button>
                                     </div>
                                 ) : null}
 
-                                {isProfileLoading ? <div className="profile-avatar-error">Loading profile...</div> : null}
-                                {selectedProfileError ? <div className="profile-avatar-error">{selectedProfileError}</div> : null}
-                                {profileUpdateError ? <div className="profile-avatar-error">{profileUpdateError}</div> : null}
-                                {isSelfProfile && avatarError ? <div className="profile-avatar-error">{avatarError}</div> : null}
+                                {profile.isProfileLoading ? <div className="profile-avatar-error">Loading profile...</div> : null}
+                                {profile.selectedProfileError ? <div className="profile-avatar-error">{profile.selectedProfileError}</div> : null}
+                                {profile.profileUpdateError ? <div className="profile-avatar-error">{profile.profileUpdateError}</div> : null}
+                                {profile.isSelfProfile && profile.avatarError ? <div className="profile-avatar-error">{profile.avatarError}</div> : null}
                             </div>
 
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">First name</span>
-                                <span className="profile-modal-value">{profileFirstName || "-"}</span>
+                                <span className="profile-modal-value">{profile.profileFirstName || "-"}</span>
                             </div>
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Last name</span>
-                                <span className="profile-modal-value">{profileLastName || "-"}</span>
+                                <span className="profile-modal-value">{profile.profileLastName || "-"}</span>
                             </div>
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Nickname</span>
-                                {isSelfProfile ? (
+                                {profile.isSelfProfile ? (
                                     <input
                                         className="modal-input"
                                         type="text"
-                                        value={nicknameDraft}
-                                        onChange={(e) => setNicknameDraft(e.target.value)}
+                                        value={profile.nicknameDraft}
+                                        onChange={(e) => profile.setNicknameDraft(e.target.value)}
                                         maxLength={48}
                                         placeholder="Enter nickname"
-                                        disabled={isSavingNickname}
+                                        disabled={profile.isSavingNickname}
                                     />
                                 ) : (
-                                    <span className="profile-modal-value">{profileNickname || "-"}</span>
+                                    <span className="profile-modal-value">{profile.profileNickname || "-"}</span>
                                 )}
                             </div>
-                            {isSelfProfile ? (
+                            {profile.isSelfProfile ? (
                                 <div className="profile-modal-row">
                                     <span className="profile-modal-label">Email</span>
                                     <span className="profile-modal-value">{currentUserProfile?.email || "-"}</span>
@@ -1863,9 +692,9 @@ export default function ChatPage() {
                             ) : null}
                             <div className="profile-modal-row">
                                 <span className="profile-modal-label">Name</span>
-                                <span className="profile-modal-value">{profileDisplayName || "-"}</span>
+                                <span className="profile-modal-value">{profile.profileDisplayName || "-"}</span>
                             </div>
-                            {isSelfProfile ? (
+                            {profile.isSelfProfile ? (
                                 <div className="profile-modal-row">
                                     <span className="profile-modal-label">Theme</span>
                                     <button
@@ -1880,7 +709,7 @@ export default function ChatPage() {
                                 </div>
                             ) : null}
                         </div>
-                        {isSelfProfile && isDeleteAccountConfirmOpen ? (
+                        {profile.isSelfProfile && profile.isDeleteAccountConfirmOpen ? (
                             <div className="delete-account-confirm">
                                 <div className="delete-account-warning">
                                     This permanently deletes your account. Enter your password to confirm.
@@ -1888,61 +717,60 @@ export default function ChatPage() {
                                 <input
                                     className="modal-input"
                                     type="password"
-                                    value={deletePasswordDraft}
-                                    onChange={(e) => setDeletePasswordDraft(e.target.value)}
+                                    value={profile.deletePasswordDraft}
+                                    onChange={(e) => profile.setDeletePasswordDraft(e.target.value)}
                                     placeholder="Password"
-                                    disabled={isDeletingAccount}
+                                    disabled={profile.isDeletingAccount}
                                     autoFocus
                                 />
-                                {deleteAccountError ? <div className="profile-avatar-error">{deleteAccountError}</div> : null}
+                                {profile.deleteAccountError ? <div className="profile-avatar-error">{profile.deleteAccountError}</div> : null}
                                 <div className="delete-account-confirm-actions">
                                     <button
                                         className="modal-btn modal-btn-secondary"
                                         type="button"
                                         onClick={() => {
-                                            setIsDeleteAccountConfirmOpen(false);
-                                            setDeletePasswordDraft("");
-                                            setDeleteAccountError("");
+                                            profile.setIsDeleteAccountConfirmOpen(false);
+                                            profile.setDeletePasswordDraft("");
                                         }}
-                                        disabled={isDeletingAccount}
+                                        disabled={profile.isDeletingAccount}
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         className="modal-btn modal-btn-danger"
                                         type="button"
-                                        onClick={() => void handleDeleteAccount()}
-                                        disabled={isDeletingAccount}
+                                        onClick={() => void profile.handleDeleteAccount()}
+                                        disabled={profile.isDeletingAccount}
                                     >
-                                        {isDeletingAccount ? "Deleting..." : "Delete account"}
+                                        {profile.isDeletingAccount ? "Deleting..." : "Delete account"}
                                     </button>
                                 </div>
                             </div>
                         ) : null}
                         <div className="modal-actions">
-                            {isSelfProfile ? (
+                            {profile.isSelfProfile ? (
                                 <>
                                     <button
                                         className="modal-btn modal-btn-secondary"
-                                        onClick={() => void handleSaveNickname()}
+                                        onClick={() => void profile.handleSaveNickname()}
                                         type="button"
-                                        disabled={isSavingNickname}
+                                        disabled={profile.isSavingNickname}
                                     >
-                                        {isSavingNickname ? "Saving..." : "Save"}
+                                        {profile.isSavingNickname ? "Saving..." : "Save"}
                                     </button>
                                     <button
                                         className="modal-btn modal-btn-secondary"
-                                        onClick={handleLogout}
+                                        onClick={profile.handleLogout}
                                         type="button"
                                     >
                                         Logout
                                     </button>
-                                    {!isDeleteAccountConfirmOpen ? (
+                                    {!profile.isDeleteAccountConfirmOpen ? (
                                         <button
                                             className="modal-btn modal-btn-danger"
                                             type="button"
-                                            onClick={() => setIsDeleteAccountConfirmOpen(true)}
-                                            disabled={isSavingNickname || isDeletingAccount}
+                                            onClick={() => profile.setIsDeleteAccountConfirmOpen(true)}
+                                            disabled={profile.isSavingNickname || profile.isDeletingAccount}
                                         >
                                             Delete account
                                         </button>
@@ -1951,7 +779,7 @@ export default function ChatPage() {
                             ) : null}
                             <button
                                 className="modal-btn modal-btn-primary"
-                                onClick={() => closeModalWithAnim("profile", () => setIsProfileModalOpen(false))}
+                                onClick={() => closeModalWithAnim("profile", () => profile.setIsProfileModalOpen(false))}
                                 type="button"
                             >
                                 Close
@@ -1961,19 +789,19 @@ export default function ChatPage() {
                 </div>
             )}
 
-            {isAvatarPreviewOpen && avatarUrl && (
-                <div className={`avatar-viewer-overlay ${closingModal === "avatarViewer" ? "closing" : ""}`} onClick={closeAvatarPreview}>
+            {profile.isAvatarPreviewOpen && avatarUrl && (
+                <div className={`avatar-viewer-overlay ${closingModal === "avatarViewer" ? "closing" : ""}`} onClick={profile.closeAvatarPreview}>
                     <div className="avatar-viewer-content" onClick={(e) => e.stopPropagation()}>
                         <img
                             src={avatarUrl}
                             alt="Avatar full size"
                             className="avatar-viewer-image"
-                            onError={closeAvatarPreview}
+                            onError={profile.closeAvatarPreview}
                         />
                         <button
                             type="button"
                             className="avatar-viewer-close"
-                            onClick={closeAvatarPreview}
+                            onClick={profile.closeAvatarPreview}
                         >
                             Close
                         </button>
@@ -1981,8 +809,8 @@ export default function ChatPage() {
                 </div>
             )}
 
-            {isCreateServerModalOpen && (
-                <div className={`modal-overlay ${closingModal === "createServer" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createServer", () => setIsCreateServerModalOpen(false))}>
+            {servers.isCreateServerModalOpen && (
+                <div className={`modal-overlay ${closingModal === "createServer" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createServer", () => servers.setIsCreateServerModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Create server</h3>
 
@@ -1990,34 +818,34 @@ export default function ChatPage() {
                             className="modal-input"
                             type="text"
                             placeholder="Enter server name"
-                            value={newServerName}
-                            onChange={(e) => setNewServerName(e.target.value)}
-                            maxLength={MAX_SERVER_CHANNEL_NAME_LENGTH}
+                            value={servers.newServerName}
+                            onChange={(e) => servers.setNewServerName(e.target.value)}
+                            maxLength={servers.MAX_SERVER_CHANNEL_NAME_LENGTH}
                             autoFocus
                         />
 
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => closeModalWithAnim("createServer", () => setIsCreateServerModalOpen(false))}
-                                disabled={isCreatingServer}
+                                onClick={() => closeModalWithAnim("createServer", () => servers.setIsCreateServerModalOpen(false))}
+                                disabled={servers.isCreatingServer}
                             >
                                 Cancel
                             </button>
                             <button
                                 className="modal-btn modal-btn-primary"
-                                onClick={handleAddServerSubmit}
-                                disabled={isCreatingServer}
+                                onClick={() => void servers.handleAddServerSubmit()}
+                                disabled={servers.isCreatingServer}
                             >
-                                {isCreatingServer ? "Creating..." : "Create"}
+                                {servers.isCreatingServer ? "Creating..." : "Create"}
                             </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {isJoinModalOpen && (
-                <div className={`modal-overlay ${closingModal === "join" ? "closing" : ""}`} onClick={() => closeModalWithAnim("join", () => setIsJoinModalOpen(false))}>
+            {servers.isJoinModalOpen && (
+                <div className={`modal-overlay ${closingModal === "join" ? "closing" : ""}`} onClick={() => closeModalWithAnim("join", () => servers.setIsJoinModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Join server</h3>
 
@@ -2025,24 +853,24 @@ export default function ChatPage() {
                             className="modal-input"
                             type="text"
                             placeholder="Search by server name"
-                            value={joinQuery}
-                            onChange={(e) => setJoinQuery(e.target.value)}
+                            value={servers.joinQuery}
+                            onChange={(e) => servers.setJoinQuery(e.target.value)}
                             maxLength={64}
                             autoFocus
                         />
 
-                        {isSearchingServers ? <div className="messages-empty">Searching...</div> : null}
+                        {servers.isSearchingServers ? <div className="messages-empty">Searching...</div> : null}
 
-                        {!isSearchingServers && joinQuery.trim().length >= 2 && !joinResults.length ? (
+                        {!servers.isSearchingServers && servers.joinQuery.trim().length >= 2 && !servers.joinResults.length ? (
                             <div className="messages-empty">No servers found</div>
                         ) : null}
 
-                        {!isSearchingServers && joinResults.length > 0 ? (
+                        {!servers.isSearchingServers && servers.joinResults.length > 0 ? (
                             <ul className="channels-list">
-                                {joinResults.map((server) => (
+                                {servers.joinResults.map((server) => (
                                     <li key={server.id}>
                                         <button className="channel-row"
-                                                onClick={() => void handleJoinServer(server.id)}>
+                                                onClick={() => void servers.handleJoinServer(server.id)}>
                                             Join {server.name}
                                         </button>
                                     </li>
@@ -2053,7 +881,7 @@ export default function ChatPage() {
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => closeModalWithAnim("join", () => setIsJoinModalOpen(false))}
+                                onClick={() => closeModalWithAnim("join", () => servers.setIsJoinModalOpen(false))}
                             >
                                 Close
                             </button>
@@ -2062,8 +890,8 @@ export default function ChatPage() {
                 </div>
             )}
 
-            {isCreateChannelModalOpen && (
-                <div className={`modal-overlay ${closingModal === "createChannel" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createChannel", () => setIsCreateChannelModalOpen(false))}>
+            {servers.isCreateChannelModalOpen && (
+                <div className={`modal-overlay ${closingModal === "createChannel" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createChannel", () => servers.setIsCreateChannelModalOpen(false))}>
                     <div className="modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Create channel</h3>
 
@@ -2071,15 +899,15 @@ export default function ChatPage() {
                             className="modal-input"
                             type="text"
                             placeholder="Enter channel name"
-                            value={newChannelName}
-                            onChange={(e) => setNewChannelName(e.target.value)}
-                            maxLength={MAX_SERVER_CHANNEL_NAME_LENGTH}
+                            value={servers.newChannelName}
+                            onChange={(e) => servers.setNewChannelName(e.target.value)}
+                            maxLength={servers.MAX_SERVER_CHANNEL_NAME_LENGTH}
                             autoFocus
                         />
                         <select
                             className="modal-input"
-                            value={newChannelType}
-                            onChange={(e) => setNewChannelType(e.target.value === "voice" ? "voice" : "text")}
+                            value={servers.newChannelType}
+                            onChange={(e) => servers.setNewChannelType(e.target.value === "voice" ? "voice" : "text")}
                         >
                             <option value="text">Text</option>
                             <option value="voice">Voice</option>
@@ -2088,17 +916,17 @@ export default function ChatPage() {
                         <div className="modal-actions">
                             <button
                                 className="modal-btn modal-btn-secondary"
-                                onClick={() => closeModalWithAnim("createChannel", () => setIsCreateChannelModalOpen(false))}
-                                disabled={isCreatingChannel}
+                                onClick={() => closeModalWithAnim("createChannel", () => servers.setIsCreateChannelModalOpen(false))}
+                                disabled={servers.isCreatingChannel}
                             >
                                 Cancel
                             </button>
                             <button
                                 className="modal-btn modal-btn-primary"
-                                onClick={handleAddChannelSubmit}
-                                disabled={isCreatingChannel}
+                                onClick={() => void servers.handleAddChannelSubmit()}
+                                disabled={servers.isCreatingChannel}
                             >
-                                {isCreatingChannel ? "Creating..." : "Create"}
+                                {servers.isCreatingChannel ? "Creating..." : "Create"}
                             </button>
                         </div>
                     </div>
@@ -2109,4 +937,3 @@ export default function ChatPage() {
         </div>
     );
 }
-

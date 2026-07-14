@@ -2567,3 +2567,105 @@ body,
         transition: none;
     }
 }
+
+/* ================================================================
+   TOAST NOTIFICATIONS
+   ================================================================ */
+
+.toast-container {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    pointer-events: none;
+    width: 22rem;
+    max-width: calc(100vw - 2rem);
+}
+
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.75rem 0.875rem;
+    border-radius: var(--radius-md);
+    background: var(--glass-3);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border-hi);
+    box-shadow: var(--shadow-lg);
+    color: var(--text-1);
+    font-size: 0.875rem;
+    line-height: 1.4;
+    pointer-events: all;
+    animation: toast-slide-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.toast--exit {
+    animation: toast-slide-out 0.18s ease-in both;
+}
+
+.toast--success {
+    border-left: 3px solid #22c55e;
+}
+
+.toast--error {
+    border-left: 3px solid var(--accent);
+}
+
+.toast--success > svg {
+    color: #22c55e;
+    flex-shrink: 0;
+}
+
+.toast--error > svg {
+    color: var(--accent-text);
+    flex-shrink: 0;
+}
+
+.toast-message {
+    flex: 1;
+    min-width: 0;
+    word-break: break-word;
+}
+
+.toast-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-3);
+    padding: 0.125rem;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    transition: color 0.15s;
+}
+
+.toast-close:hover {
+    color: var(--text-1);
+}
+
+@keyframes toast-slide-in {
+    from {
+        opacity: 0;
+        transform: translateX(1.5rem) scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+}
+
+@keyframes toast-slide-out {
+    from {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(1.5rem) scale(0.96);
+    }
+}
