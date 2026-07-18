@@ -2669,3 +2669,128 @@ body,
         transform: translateX(1.5rem) scale(0.96);
     }
 }
+
+/* ================================================================
+   SKELETON LOADERS
+   ================================================================ */
+
+@keyframes skeleton-shimmer {
+    0%   { background-position: 200% center; }
+    100% { background-position: -200% center; }
+}
+
+.skeleton {
+    border-radius: var(--radius-sm);
+    background: linear-gradient(
+        90deg,
+        var(--glass-2) 25%,
+        var(--glass-3) 50%,
+        var(--glass-2) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+/* Message list skeletons */
+.skeleton-msg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.skeleton-msg-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.skeleton-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    flex: 0 0 34px;
+}
+
+.skeleton-lines {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding-top: 3px;
+}
+
+.skeleton-line {
+    height: 12px;
+}
+
+/* Online users panel skeletons */
+.skeleton-users-list {
+    display: grid;
+    gap: 4px;
+}
+
+.skeleton-user-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    background: var(--glass-1);
+}
+
+.skeleton-user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    flex: 0 0 32px;
+}
+
+.skeleton-user-lines {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.skeleton-user-name {
+    height: 10px;
+}
+
+.skeleton-user-email {
+    height: 8px;
+}
+
+/* Profile modal skeleton */
+.skeleton-profile {
+    display: grid;
+    gap: 10px;
+}
+
+.skeleton-profile-avatar-wrap {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 6px;
+}
+
+.skeleton-profile-avatar {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+}
+
+.skeleton-profile-row {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 10px;
+    align-items: center;
+}
+
+.skeleton-profile-label {
+    height: 10px;
+    width: 65%;
+}
+
+.skeleton-profile-value {
+    height: 10px;
+}

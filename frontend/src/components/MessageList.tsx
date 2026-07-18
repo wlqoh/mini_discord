@@ -13,6 +13,7 @@ type Props = {
     onDeleteMessage?: (messageId: number, channelId: number) => void;
     onReply?: (message: Message) => void;
     onScrollToMessage?: (messageId: number) => void;
+    isLoading?: boolean;
 };
 
 function getAuthorLabel(msg: Message): string {
@@ -193,9 +194,25 @@ function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; 
     );
 }
 
-export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage, onReply, onScrollToMessage }: Props) {
+export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage, onReply, onScrollToMessage, isLoading }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
     const [initialCount] = useState(() => messages.length);
+
+    if (isLoading) {
+        return (
+            <div className="skeleton-msg-list">
+                {[70, 50, 85, 60, 40].map((w, i) => (
+                    <div key={i} className="skeleton-msg-row">
+                        <div className="skeleton skeleton-avatar" />
+                        <div className="skeleton-lines">
+                            <div className="skeleton skeleton-line" style={{ width: `${w}%` }} />
+                            <div className="skeleton skeleton-line" style={{ width: `${Math.round(w * 0.65)}%` }} />
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    }
 
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
