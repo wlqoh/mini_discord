@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, Upload, X } from "lucide-react";
 import { uploadAttachment } from "../services/avatarApi.ts";
 import type { Message, OnlineUser } from "../types/chat.ts";
@@ -82,18 +82,67 @@ export default function MessageInput({
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const animFrameRef = useRef<number | null>(null);
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
     const stopRecording = useCallback(() => {
         if (timerRef.current) {
             clearInterval(timerRef.current);
             timerRef.current = null;
         }
+        if (animFrameRef.current !== null) {
+            cancelAnimationFrame(animFrameRef.current);
+            animFrameRef.current = null;
+        }
+        audioCtxRef.current?.close();
+        audioCtxRef.current = null;
+        analyserRef.current = null;
         const recorder = mediaRecorderRef.current;
         if (recorder && recorder.state !== "inactive") {
             recorder.stop();
         }
         setIsRecording(false);
     }, []);
+
+    useEffect(() => {
+        if (!isRecording) return;
+        const analyser = analyserRef.current;
+        if (!analyser) return;
+
+        const bufferLength = analyser.fftSize;
+        const dataArray = new Uint8Array(bufferLength);
+        let frameId: number;
+
+        const draw = () => {
+            const canvas = canvasRef.current;
+            if (canvas) {
+                const ctx2d = canvas.getContext("2d");
+                if (ctx2d) {
+                    analyser.getByteTimeDomainData(dataArray);
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    ctx2d.clearRect(0, 0, w, h);
+                    ctx2d.strokeStyle = "rgba(224, 37, 53, 0.9)";
+                    ctx2d.lineWidth = 2;
+                    ctx2d.lineJoin = "round";
+                    ctx2d.beginPath();
+                    const sliceW = w / bufferLength;
+                    for (let i = 0; i < bufferLength; i++) {
+                        const y = (dataArray[i] / 128.0) * (h / 2);
+                        if (i === 0) ctx2d.moveTo(0, y);
+                        else ctx2d.lineTo(i * sliceW, y);
+                    }
+                    ctx2d.stroke();
+                }
+            }
+            frameId = requestAnimationFrame(draw);
+        };
+
+        frameId = requestAnimationFrame(draw);
+        return () => cancelAnimationFrame(frameId);
+    }, [isRecording]);
 
     async function startRecording() {
         try {
@@ -137,6 +186,17 @@ export default function MessageInput({
                 const pendingId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
                 setPendingFiles((prev) => [...prev, { id: pendingId, file, previewUrl: null }]);
             };
+
+            const audioCtx = new AudioContext();
+            if (audioCtx.state === "suspended") {
+                await audioCtx.resume();
+            }
+            audioCtxRef.current = audioCtx;
+            const source = audioCtx.createMediaStreamSource(stream);
+            const analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            analyserRef.current = analyser;
 
             recorder.start(250);
             setIsRecording(true);
@@ -388,6 +448,7 @@ export default function MessageInput({
             {isRecording && (
                 <div className="voice-recording-bar">
                     <span className="voice-recording-dot" />
+                    <canvas ref={canvasRef} className="voice-recording-waveform" width={220} height={36} />
                     <span className="voice-recording-timer">{formatRecordingDuration(recordingDuration)}</span>
                     <button
                         type="button"
