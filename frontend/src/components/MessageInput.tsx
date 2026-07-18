@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { Mic, MicOff, Paperclip, Send, X } from "lucide-react";
+import { Mic, MicOff, Paperclip, Send, Upload, X } from "lucide-react";
 import { uploadAttachment } from "../services/avatarApi.ts";
 import type { Message, OnlineUser } from "../types/chat.ts";
 import { useToast } from "./Toast.tsx";
@@ -62,8 +62,10 @@ export default function MessageInput({
     const [text, setText] = useState("");
     const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
     const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+    const [isDragOver, setIsDragOver] = useState(false);
     const isUploading = uploadProgress !== null;
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const dragCounterRef = useRef(0);
 
     function getReplyAuthorLabel(msg: Message): string {
         const nickname = msg.author_nickname?.trim() ?? "";
@@ -298,10 +300,48 @@ export default function MessageInput({
         fileInputRef.current?.click();
     }
 
+    function handleDragEnter(e: React.DragEvent) {
+        e.preventDefault();
+        dragCounterRef.current += 1;
+        if (dragCounterRef.current === 1) setIsDragOver(true);
+    }
+
+    function handleDragLeave(e: React.DragEvent) {
+        e.preventDefault();
+        dragCounterRef.current -= 1;
+        if (dragCounterRef.current === 0) setIsDragOver(false);
+    }
+
+    function handleDragOver(e: React.DragEvent) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+    }
+
+    function handleDrop(e: React.DragEvent) {
+        e.preventDefault();
+        dragCounterRef.current = 0;
+        setIsDragOver(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) addFiles(files);
+    }
+
     const canSend = !disabled && !isUploading && !isRecording && (text.trim().length > 0 || pendingFiles.length > 0);
 
     return (
-        <form className="message-form" onSubmit={handleSubmit}>
+        <form
+            className={`message-form${isDragOver ? " drag-over" : ""}`}
+            onSubmit={handleSubmit}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+        >
+            {isDragOver && (
+                <div className="drag-drop-hint">
+                    <Upload size={18} aria-hidden="true" />
+                    Drop files here
+                </div>
+            )}
             {replyToMessage && (
                 <div className="reply-draft">
                     <div className="reply-draft-content">
