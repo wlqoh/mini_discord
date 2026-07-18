@@ -1424,6 +1424,28 @@ body {
     color: var(--accent-text);
 }
 
+/* Drag-and-drop */
+.message-form.drag-over {
+    border-top-color: var(--accent);
+    box-shadow: 0 -2px 20px rgba(224, 37, 53, 0.18);
+}
+
+.drag-drop-hint {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-md);
+    background: rgba(224, 37, 53, 0.07);
+    color: var(--accent-text);
+    font-size: 14px;
+    font-weight: 500;
+    pointer-events: none;
+}
+
 /* ================================================================
    ONLINE USERS PANEL
    ================================================================ */
