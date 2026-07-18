@@ -1326,6 +1326,38 @@ body {
     box-shadow: 0 0 16px var(--accent-glow);
 }
 
+/* Upload progress bar */
+.upload-progress-wrap {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+}
+
+.upload-progress-track {
+    flex: 1;
+    height: 4px;
+    background: var(--glass-border);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.upload-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.15s ease;
+}
+
+.upload-progress-label {
+    font-size: 11px;
+    color: var(--text-3);
+    min-width: 32px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Attachment preview strip */
 .message-attachments-preview {
     display: flex;

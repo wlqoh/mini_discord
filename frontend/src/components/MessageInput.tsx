@@ -61,7 +61,8 @@ export default function MessageInput({
     const { showToast } = useToast();
     const [text, setText] = useState("");
     const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
-    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+    const isUploading = uploadProgress !== null;
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     function getReplyAuthorLabel(msg: Message): string {
@@ -242,10 +243,21 @@ export default function MessageInput({
         let attachmentIds: number[] | undefined;
 
         if (pendingFiles.length > 0) {
-            setIsUploading(true);
+            const fileLoaded = new Map<string, number>(pendingFiles.map((pf) => [pf.id, 0]));
+            const totalSize = pendingFiles.reduce((sum, pf) => sum + pf.file.size, 0);
+
+            const handleProgress = (fileId: string, loaded: number) => {
+                fileLoaded.set(fileId, loaded);
+                const sumLoaded = Array.from(fileLoaded.values()).reduce((a, b) => a + b, 0);
+                setUploadProgress(totalSize > 0 ? Math.min(100, Math.round((sumLoaded / totalSize) * 100)) : 0);
+            };
+
+            setUploadProgress(0);
             try {
                 const results = await Promise.allSettled(
-                    pendingFiles.map((pf) => uploadAttachment(pf.file)),
+                    pendingFiles.map((pf) =>
+                        uploadAttachment(pf.file, (loaded) => handleProgress(pf.id, loaded)),
+                    ),
                 );
                 const ids: number[] = [];
                 const errors: string[] = [];
@@ -258,7 +270,7 @@ export default function MessageInput({
                 });
                 if (errors.length > 0) {
                     showToast("error", `Failed to upload: ${errors.join(", ")}`);
-                    setIsUploading(false);
+                    setUploadProgress(null);
                     if (ids.length === 0) return;
                 }
                 attachmentIds = ids.length > 0 ? ids : undefined;
@@ -267,10 +279,10 @@ export default function MessageInput({
                 });
             } catch {
                 showToast("error", "Upload failed");
-                setIsUploading(false);
+                setUploadProgress(null);
                 return;
             }
-            setIsUploading(false);
+            setUploadProgress(null);
         }
 
         const hadFiles = (attachmentIds?.length ?? 0) > 0;
@@ -299,6 +311,14 @@ export default function MessageInput({
                     <button type="button" className="reply-draft-cancel" onClick={onCancelReply} aria-label="Cancel reply">
                         <X size={14} />
                     </button>
+                </div>
+            )}
+            {uploadProgress !== null && (
+                <div className="upload-progress-wrap">
+                    <div className="upload-progress-track">
+                        <div className="upload-progress-fill" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                    <span className="upload-progress-label">{uploadProgress}%</span>
                 </div>
             )}
             {pendingFiles.length > 0 && (
@@ -343,7 +363,7 @@ export default function MessageInput({
                 <>
                     <input
                         className="message-input"
-                        placeholder={isUploading ? "Uploading..." : "Write a message"}
+                        placeholder="Write a message"
                         value={text}
                         onChange={(e) => setText(e.target.value)}
                         onPaste={handlePaste}

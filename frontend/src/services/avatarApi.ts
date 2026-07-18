@@ -110,12 +110,19 @@ export type AttachmentUploadResponse = {
     url: string;
 };
 
-export async function uploadAttachment(file: File): Promise<AttachmentUploadResponse> {
+export async function uploadAttachment(
+    file: File,
+    onProgress?: (loaded: number, total: number | undefined) => void,
+): Promise<AttachmentUploadResponse> {
     const form = new FormData();
     form.append("file", file, file.name);
 
     try {
-        const { data } = await API.postForm<AttachmentUploadResponse>("/upload", form);
+        const { data } = await API.postForm<AttachmentUploadResponse>("/upload", form, {
+            onUploadProgress: (event) => {
+                onProgress?.(event.loaded, event.total);
+            },
+        });
         if (typeof data.attachment_id !== "number" || typeof data.url !== "string") {
             throw new Error("Invalid upload response");
         }
