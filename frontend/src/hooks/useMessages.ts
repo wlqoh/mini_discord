@@ -8,7 +8,6 @@ type Params = {
     isConnected: boolean;
     selectedChannelId: number;
     selectedServerIdRef: React.MutableRefObject<number>;
-    isPageVisible: boolean;
     setError: (msg: string) => void;
     setChannelsByServer: React.Dispatch<React.SetStateAction<ChannelsByServer>>;
     messagesByChannel: MessagesByChannel;
@@ -20,7 +19,6 @@ export function useMessages({
     isConnected,
     selectedChannelId,
     selectedServerIdRef,
-    isPageVisible,
     setError,
     setChannelsByServer,
     messagesByChannel,
@@ -91,31 +89,6 @@ export function useMessages({
             }
         })();
     }, [selectedChannelId, isConnected, loadedChannels, socketRef, setError, setMessagesByChannel]);
-
-    // Poll messages every 5s
-    useEffect(() => {
-        if (selectedChannelId <= 0 || !socketRef.current || !isConnected || !isPageVisible) {
-            return;
-        }
-
-        const intervalId = window.setInterval(() => {
-            const socket = socketRef.current;
-            if (!socket) return;
-
-            void socket.getMessages(selectedChannelId).then((data) => {
-                if (!data) return;
-                setMessagesByChannel((prev) => {
-                    const prevMessages = prev[selectedChannelId];
-                    if (prevMessages && prevMessages.length === data.length && prevMessages.every((m, i) => m.id === data[i].id)) {
-                        return prev;
-                    }
-                    return { ...prev, [selectedChannelId]: data };
-                });
-            }).catch(() => {});
-        }, 5000);
-
-        return () => window.clearInterval(intervalId);
-    }, [selectedChannelId, isConnected, isPageVisible, socketRef, setMessagesByChannel]);
 
     async function handleSend(text: string, attachmentIds?: number[], replyToId?: number | null) {
         if (!socketRef.current || !isConnected || selectedChannelId <= 0) {

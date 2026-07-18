@@ -138,7 +138,6 @@ export default function ChatPage() {
         isConnected,
         selectedChannelId: servers.selectedChannelId,
         selectedServerIdRef: servers.selectedServerIdRef,
-        isPageVisible,
         setError,
         setChannelsByServer: servers.setChannelsByServer,
         messagesByChannel,
