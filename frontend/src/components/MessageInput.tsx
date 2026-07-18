@@ -400,7 +400,19 @@ export default function MessageInput({
                 {isOnlinePanelOpen ? (
                     <aside className="online-users-panel" aria-label="Online users">
                         <div className="online-users-panel-title">Online users</div>
-                        {isOnlineUsersLoading ? <div className="online-users-empty">Loading...</div> : null}
+                        {isOnlineUsersLoading ? (
+                            <div className="skeleton-users-list">
+                                {[65, 80, 50].map((w, i) => (
+                                    <div key={i} className="skeleton-user-item">
+                                        <div className="skeleton skeleton-user-avatar" />
+                                        <div className="skeleton-user-lines">
+                                            <div className="skeleton skeleton-user-name" style={{ width: `${w}%` }} />
+                                            <div className="skeleton skeleton-user-email" style={{ width: `${Math.round(w * 0.7)}%` }} />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
                         {!isOnlineUsersLoading && onlineUsers.length === 0 ? (
                             <div className="online-users-empty">No users online</div>
                         ) : null}

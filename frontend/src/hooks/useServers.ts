@@ -336,6 +336,14 @@ export function useServers({
         return () => window.clearInterval(intervalId);
     }, [isConnectedLocal, selectedServerId, refreshOnlineUsers, isPageVisible]);
 
+    // Refresh when panel opens so the list is always fresh
+    useEffect(() => {
+        if (isOnlinePanelOpen) {
+            setOnlineUsers([]);
+            void refreshOnlineUsers();
+        }
+    }, [isOnlinePanelOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // Debounced join search effect
     useEffect(() => {
         if (!isJoinModalOpen) {

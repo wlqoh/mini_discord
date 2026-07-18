@@ -174,6 +174,7 @@ export default function ChatPage() {
     const isInSelectedVoiceChannel = isVoiceChannel && voice.voiceChannelId === servers.selectedChannelId;
     const shouldHideMessageInput = isVoiceChannel;
     const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
+    const isMessagesLoading = servers.selectedChannelId > 0 && messagesByChannel[servers.selectedChannelId] === undefined;
 
     const userInitial =
         currentUserProfile?.nickname?.[0]?.toUpperCase() ??
@@ -581,7 +582,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <MessageInput
@@ -604,110 +605,125 @@ export default function ChatPage() {
                     <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
                         <h3 className="modal-title">Profile</h3>
                         <div className="profile-modal-list">
-                            <div className="profile-avatar-block">
-                                <div className="profile-avatar-preview-wrap">
-                                    {profile.profileAvatarUrl ? (
-                                        profile.isSelfProfile ? (
-                                            <button
-                                                type="button"
-                                                className="profile-avatar-preview-btn"
-                                                onClick={profile.openAvatarPreview}
-                                                aria-label="Open avatar preview"
-                                                title="Open avatar"
-                                            >
-                                                <img
-                                                    src={profile.profileAvatarUrl}
-                                                    alt="Current avatar"
-                                                    className="profile-avatar-preview"
-                                                    onError={() => setAvatarUrl("")}
-                                                />
-                                            </button>
-                                        ) : (
-                                            <img
-                                                src={profile.profileAvatarUrl}
-                                                alt="User avatar"
-                                                className="profile-avatar-preview"
-                                            />
-                                        )
-                                    ) : (
-                                        <div className="profile-avatar-fallback">{profile.profileInitial}</div>
-                                    )}
-                                </div>
-
-                                {profile.isSelfProfile ? (
-                                    <div className="profile-avatar-actions">
-                                        <input
-                                            ref={avatarInputRef}
-                                            type="file"
-                                            accept="image/png,image/jpeg,image/webp"
-                                            onChange={(e) => void profile.handleAvatarChange(e)}
-                                            style={{ display: "none" }}
-                                        />
-                                        <button
-                                            className="modal-btn modal-btn-primary"
-                                            type="button"
-                                            onClick={profile.openAvatarPicker}
-                                            disabled={profile.isAvatarUploading}
-                                        >
-                                            {profile.isAvatarUploading ? "Uploading..." : "Change avatar"}
-                                        </button>
+                            {profile.isProfileLoading ? (
+                                <div className="skeleton-profile">
+                                    <div className="skeleton-profile-avatar-wrap">
+                                        <div className="skeleton skeleton-profile-avatar" />
                                     </div>
-                                ) : null}
-
-                                {profile.isProfileLoading ? <div className="profile-avatar-error">Loading profile...</div> : null}
-                                {profile.selectedProfileError ? <div className="profile-avatar-error">{profile.selectedProfileError}</div> : null}
-                                {profile.profileUpdateError ? <div className="profile-avatar-error">{profile.profileUpdateError}</div> : null}
-                                {profile.isSelfProfile && profile.avatarError ? <div className="profile-avatar-error">{profile.avatarError}</div> : null}
-                            </div>
-
-                            <div className="profile-modal-row">
-                                <span className="profile-modal-label">First name</span>
-                                <span className="profile-modal-value">{profile.profileFirstName || "-"}</span>
-                            </div>
-                            <div className="profile-modal-row">
-                                <span className="profile-modal-label">Last name</span>
-                                <span className="profile-modal-value">{profile.profileLastName || "-"}</span>
-                            </div>
-                            <div className="profile-modal-row">
-                                <span className="profile-modal-label">Nickname</span>
-                                {profile.isSelfProfile ? (
-                                    <input
-                                        className="modal-input"
-                                        type="text"
-                                        value={profile.nicknameDraft}
-                                        onChange={(e) => profile.setNicknameDraft(e.target.value)}
-                                        maxLength={48}
-                                        placeholder="Enter nickname"
-                                        disabled={profile.isSavingNickname}
-                                    />
-                                ) : (
-                                    <span className="profile-modal-value">{profile.profileNickname || "-"}</span>
-                                )}
-                            </div>
-                            {profile.isSelfProfile ? (
-                                <div className="profile-modal-row">
-                                    <span className="profile-modal-label">Email</span>
-                                    <span className="profile-modal-value">{currentUserProfile?.email || "-"}</span>
+                                    {[75, 55, 80, 60].map((w, i) => (
+                                        <div key={i} className="skeleton-profile-row">
+                                            <div className="skeleton skeleton-profile-label" />
+                                            <div className="skeleton skeleton-profile-value" style={{ width: `${w}%` }} />
+                                        </div>
+                                    ))}
                                 </div>
-                            ) : null}
-                            <div className="profile-modal-row">
-                                <span className="profile-modal-label">Name</span>
-                                <span className="profile-modal-value">{profile.profileDisplayName || "-"}</span>
-                            </div>
-                            {profile.isSelfProfile ? (
-                                <div className="profile-modal-row">
-                                    <span className="profile-modal-label">Theme</span>
-                                    <button
-                                        className="theme-toggle-btn"
-                                        type="button"
-                                        onClick={toggleTheme}
-                                        aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-                                        title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
-                                    >
-                                        {theme === "light" ? <Moon size={18} aria-hidden="true"/> : <Sun size={18} aria-hidden="true"/>}
-                                    </button>
-                                </div>
-                            ) : null}
+                            ) : (
+                                <>
+                                    <div className="profile-avatar-block">
+                                        <div className="profile-avatar-preview-wrap">
+                                            {profile.profileAvatarUrl ? (
+                                                profile.isSelfProfile ? (
+                                                    <button
+                                                        type="button"
+                                                        className="profile-avatar-preview-btn"
+                                                        onClick={profile.openAvatarPreview}
+                                                        aria-label="Open avatar preview"
+                                                        title="Open avatar"
+                                                    >
+                                                        <img
+                                                            src={profile.profileAvatarUrl}
+                                                            alt="Current avatar"
+                                                            className="profile-avatar-preview"
+                                                            onError={() => setAvatarUrl("")}
+                                                        />
+                                                    </button>
+                                                ) : (
+                                                    <img
+                                                        src={profile.profileAvatarUrl}
+                                                        alt="User avatar"
+                                                        className="profile-avatar-preview"
+                                                    />
+                                                )
+                                            ) : (
+                                                <div className="profile-avatar-fallback">{profile.profileInitial}</div>
+                                            )}
+                                        </div>
+
+                                        {profile.isSelfProfile ? (
+                                            <div className="profile-avatar-actions">
+                                                <input
+                                                    ref={avatarInputRef}
+                                                    type="file"
+                                                    accept="image/png,image/jpeg,image/webp"
+                                                    onChange={(e) => void profile.handleAvatarChange(e)}
+                                                    style={{ display: "none" }}
+                                                />
+                                                <button
+                                                    className="modal-btn modal-btn-primary"
+                                                    type="button"
+                                                    onClick={profile.openAvatarPicker}
+                                                    disabled={profile.isAvatarUploading}
+                                                >
+                                                    {profile.isAvatarUploading ? "Uploading..." : "Change avatar"}
+                                                </button>
+                                            </div>
+                                        ) : null}
+
+                                        {profile.selectedProfileError ? <div className="profile-avatar-error">{profile.selectedProfileError}</div> : null}
+                                        {profile.profileUpdateError ? <div className="profile-avatar-error">{profile.profileUpdateError}</div> : null}
+                                        {profile.isSelfProfile && profile.avatarError ? <div className="profile-avatar-error">{profile.avatarError}</div> : null}
+                                    </div>
+
+                                    <div className="profile-modal-row">
+                                        <span className="profile-modal-label">First name</span>
+                                        <span className="profile-modal-value">{profile.profileFirstName || "-"}</span>
+                                    </div>
+                                    <div className="profile-modal-row">
+                                        <span className="profile-modal-label">Last name</span>
+                                        <span className="profile-modal-value">{profile.profileLastName || "-"}</span>
+                                    </div>
+                                    <div className="profile-modal-row">
+                                        <span className="profile-modal-label">Nickname</span>
+                                        {profile.isSelfProfile ? (
+                                            <input
+                                                className="modal-input"
+                                                type="text"
+                                                value={profile.nicknameDraft}
+                                                onChange={(e) => profile.setNicknameDraft(e.target.value)}
+                                                maxLength={48}
+                                                placeholder="Enter nickname"
+                                                disabled={profile.isSavingNickname}
+                                            />
+                                        ) : (
+                                            <span className="profile-modal-value">{profile.profileNickname || "-"}</span>
+                                        )}
+                                    </div>
+                                    {profile.isSelfProfile ? (
+                                        <div className="profile-modal-row">
+                                            <span className="profile-modal-label">Email</span>
+                                            <span className="profile-modal-value">{currentUserProfile?.email || "-"}</span>
+                                        </div>
+                                    ) : null}
+                                    <div className="profile-modal-row">
+                                        <span className="profile-modal-label">Name</span>
+                                        <span className="profile-modal-value">{profile.profileDisplayName || "-"}</span>
+                                    </div>
+                                    {profile.isSelfProfile ? (
+                                        <div className="profile-modal-row">
+                                            <span className="profile-modal-label">Theme</span>
+                                            <button
+                                                className="theme-toggle-btn"
+                                                type="button"
+                                                onClick={toggleTheme}
+                                                aria-label={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                                                title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                                            >
+                                                {theme === "light" ? <Moon size={18} aria-hidden="true"/> : <Sun size={18} aria-hidden="true"/>}
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                </>
+                            )}
                         </div>
                         {profile.isSelfProfile && profile.isDeleteAccountConfirmOpen ? (
                             <div className="delete-account-confirm">
