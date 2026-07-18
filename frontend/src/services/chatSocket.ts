@@ -11,20 +11,81 @@ import type {
 } from "../types/chat";
 import { getValidAccessToken } from "./authToken";
 
-type WsEvent = {
-  event:
-    | "ack"
-    | "error"
-    | "message"
-    | "connected"
-    | "voice_participants"
-    | "voice_user_joined"
-    | "voice_user_left"
-    | "rtc_signal"
-    | "voice_status_changed";
+// Server → client event envelope
+type WsServerEvent = {
+  event: string;
+  request_id?: string;
   error?: string;
   data?: unknown;
 };
+
+// ── Ack data shapes per command ──────────────────────────────────────────────
+
+type CreateChannelAck = {
+  channel_id?: number;
+  server_id?: number;
+  name?: string;
+  type?: "text" | "voice";
+};
+
+type CreateServerAck = {
+  server_id?: number;
+  name?: string;
+};
+
+type GetMessagesAck = {
+  channel_id?: number;
+  messages?: unknown[];
+  next_cursor?: string;
+  has_more?: boolean;
+};
+
+type GetServersAck = {
+  servers?: Array<{ id?: number; name?: string; owner_id?: number }>;
+};
+
+type VoiceParticipantRaw = {
+  user_id?: number;
+  first_name?: string;
+  last_name?: string;
+  nickname?: string;
+  avatar_url?: string;
+  mic_enabled?: boolean;
+  deafened?: boolean;
+};
+
+type GetServerChannelsAck = {
+  channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }>;
+  voice_participants?: Array<{
+    channel_id?: number;
+    participants?: VoiceParticipantRaw[];
+  }>;
+};
+
+type GetUsersOnlineAck = {
+  users?: Array<{
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    user_id?: number;
+    avatar_url?: string;
+    email?: string;
+  }>;
+};
+
+type SearchServersAck = {
+  servers?: Array<{ id?: number; name?: string }>;
+};
+
+type GetUserInfoAck = {
+  user_id?: number;
+  first_name?: string;
+  last_name?: string;
+  nickname?: string;
+  avatar_url?: string;
+};
+
+// ── Internal queue types ─────────────────────────────────────────────────────
 
 type PendingCommand = {
   action: string;
@@ -45,6 +106,53 @@ type ErrorListener = (message: string) => void;
 type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
 type VoiceUserListener = (event: VoiceUserEvent) => void;
 type RTCSignalListener = (event: RTCSignalEvent) => void;
+
+// ── Raw shapes for WS message parsing ───────────────────────────────────────
+
+type AuthorRaw = {
+  first_name?: string;
+  last_name?: string;
+  nickname?: string;
+  firstName?: string;
+  lastName?: string;
+  nickName?: string;
+};
+
+type RawReplyTo = {
+  message_id?: unknown;
+  author_id?: unknown;
+  author_first_name?: unknown;
+  author_last_name?: unknown;
+  author_nickname?: unknown;
+  content?: unknown;
+  has_attachments?: unknown;
+};
+
+type RawMessage = {
+  id?: unknown;
+  channel_id?: unknown;
+  author_id?: unknown;
+  content?: unknown;
+  created_at?: unknown;
+  author_first_name?: unknown;
+  author_last_name?: unknown;
+  author_nickname?: unknown;
+  author_avatar_url?: unknown;
+  auuthor_avatar_url?: unknown; // server-side typo kept for compat
+  authorAvatarUrl?: unknown;
+  avatar_url?: unknown;
+  nickname?: unknown;
+  first_name?: unknown;
+  last_name?: unknown;
+  authorFirstName?: unknown;
+  authorLastName?: unknown;
+  author?: AuthorRaw | null;
+  attachments?: unknown;
+  reply_to_id?: unknown;
+  reply_to?: RawReplyTo | null;
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function resolveWsUrl(): string {
   const token = getValidAccessToken();
@@ -94,31 +202,6 @@ function toMessage(raw: unknown): Message | null {
     return null;
   }
 
-  type RawMessage = Partial<Message> & {
-    author_first_name?: unknown;
-    author_last_name?: unknown;
-    author_nickname?: unknown;
-    auuthor_avatar_url?: unknown;
-    authorAvatarUrl?: unknown;
-    avatar_url?: unknown;
-    nickname?: unknown;
-    first_name?: unknown;
-    last_name?: unknown;
-    authorFirstName?: unknown;
-    authorLastName?: unknown;
-    author?: {
-      first_name?: unknown;
-      last_name?: unknown;
-      nickname?: unknown;
-      firstName?: unknown;
-      lastName?: unknown;
-      nickName?: unknown;
-    } | unknown;
-    attachments?: unknown;
-    reply_to_id?: unknown;
-    reply_to?: unknown;
-  };
-
   const candidate = raw as RawMessage;
   if (
     typeof candidate.channel_id !== "number" ||
@@ -128,38 +211,26 @@ function toMessage(raw: unknown): Message | null {
     return null;
   }
 
-  const authorObject =
-    candidate.author && typeof candidate.author === "object"
-      ? (candidate.author as {
-          first_name?: unknown;
-          last_name?: unknown;
-          nickname?: unknown;
-          firstName?: unknown;
-          lastName?: unknown;
-          nickName?: unknown;
-        })
-      : null;
-
   const authorFirstName =
     (typeof candidate.author_first_name === "string" && candidate.author_first_name) ||
-    (authorObject && typeof authorObject.first_name === "string" ? authorObject.first_name : "") ||
-    (authorObject && typeof authorObject.firstName === "string" ? authorObject.firstName : "") ||
+    (candidate.author?.first_name ?? "") ||
+    (candidate.author?.firstName ?? "") ||
     (typeof candidate.first_name === "string" && candidate.first_name) ||
     (typeof candidate.authorFirstName === "string" && candidate.authorFirstName) ||
     "";
 
   const authorLastName =
     (typeof candidate.author_last_name === "string" && candidate.author_last_name) ||
-    (authorObject && typeof authorObject.last_name === "string" ? authorObject.last_name : "") ||
-    (authorObject && typeof authorObject.lastName === "string" ? authorObject.lastName : "") ||
+    (candidate.author?.last_name ?? "") ||
+    (candidate.author?.lastName ?? "") ||
     (typeof candidate.last_name === "string" && candidate.last_name) ||
     (typeof candidate.authorLastName === "string" && candidate.authorLastName) ||
     "";
 
   const authorNickname =
     (typeof candidate.author_nickname === "string" && candidate.author_nickname) ||
-    (authorObject && typeof authorObject.nickname === "string" ? authorObject.nickname : "") ||
-    (authorObject && typeof authorObject.nickName === "string" ? authorObject.nickName : "") ||
+    (candidate.author?.nickname ?? "") ||
+    (candidate.author?.nickName ?? "") ||
     (typeof candidate.nickname === "string" && candidate.nickname) ||
     "";
 
@@ -176,8 +247,8 @@ function toMessage(raw: unknown): Message | null {
       : undefined;
 
   let replyTo: ReplyPreview | null | undefined = undefined;
-  if (candidate.reply_to && typeof candidate.reply_to === "object") {
-    const r = candidate.reply_to as unknown as Record<string, unknown>;
+  if (candidate.reply_to != null) {
+    const r = candidate.reply_to;
     if (typeof r.message_id === "number") {
       replyTo = {
         message_id: r.message_id,
@@ -208,6 +279,8 @@ function toMessage(raw: unknown): Message | null {
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
 }
+
+// ── ChatSocket class ─────────────────────────────────────────────────────────
 
 export class ChatSocket {
   private socket: WebSocket | null = null;
@@ -334,9 +407,9 @@ export class ChatSocket {
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
-        let parsed: WsEvent;
+        let parsed: WsServerEvent;
         try {
-          parsed = JSON.parse(event.data) as WsEvent;
+          parsed = JSON.parse(event.data) as WsServerEvent;
         } catch {
           return;
         }
@@ -473,8 +546,7 @@ export class ChatSocket {
     name: string,
     type: "text" | "voice" = "text",
   ): Promise<{ channel_id: number; server_id: number; name: string; type: "text" | "voice" }> {
-    const data = await this.sendCommand("create_channel", { server_id: serverId, name, type });
-    const payload = data as { channel_id?: number; server_id?: number; name?: string; type?: "text" | "voice" };
+    const payload = await this.sendCommand<CreateChannelAck>("create_channel", { server_id: serverId, name, type });
 
     if (
       typeof payload?.channel_id !== "number" ||
@@ -494,8 +566,7 @@ export class ChatSocket {
   }
 
   async createServer(name: string): Promise<{ server_id: number; name: string }> {
-    const data = await this.sendCommand("create_server", { name });
-    const payload = data as { server_id?: number; name?: string };
+    const payload = await this.sendCommand<CreateServerAck>("create_server", { name });
 
     if (typeof payload?.server_id !== "number" || typeof payload?.name !== "string") {
       throw new Error("The server returned an invalid response while creating the server.");
@@ -523,8 +594,7 @@ export class ChatSocket {
   }
 
   async getMessages(channelId: number, limit = 100): Promise<Message[]> {
-    const data = await this.sendCommand("get_messages", { channel_id: channelId, limit });
-    const payload = data as { messages?: unknown[] };
+    const payload = await this.sendCommand<GetMessagesAck>("get_messages", { channel_id: channelId, limit });
 
     if (!Array.isArray(payload?.messages)) {
       return [];
@@ -534,8 +604,7 @@ export class ChatSocket {
   }
 
   async getServers(): Promise<Array<{ id: number; name: string; owner_id: number }>> {
-    const data = await this.sendCommand("get_servers", {});
-    const payload = data as { servers?: Array<{ id?: number; name?: string; owner_id?: number }> };
+    const payload = await this.sendCommand<GetServersAck>("get_servers", {});
 
     if (!Array.isArray(payload?.servers)) {
       return [];
@@ -576,22 +645,7 @@ export class ChatSocket {
     channels: Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>;
     voice_participants: VoiceChannelParticipants[];
   }> {
-    const data = await this.sendCommand("get_server_channels", { server_id: serverId });
-    const payload = data as {
-      channels?: Array<{ id?: number; server_id?: number; name?: string; type?: string }>;
-      voice_participants?: Array<{
-        channel_id?: number;
-        participants?: Array<{
-          user_id?: number;
-          first_name?: string;
-          last_name?: string;
-          nickname?: string;
-          avatar_url?: string;
-          mic_enabled?: boolean;
-          deafened?: boolean;
-        }>;
-      }>;
-    };
+    const payload = await this.sendCommand<GetServerChannelsAck>("get_server_channels", { server_id: serverId });
 
     const channels: Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }> = Array.isArray(payload?.channels)
       ? payload.channels
@@ -629,17 +683,7 @@ export class ChatSocket {
   }
 
   async getUsersOnline(serverId: number): Promise<OnlineUser[]> {
-    const data = await this.sendCommand("get_users_online", { server_id: serverId });
-    const payload = data as {
-      users?: Array<{
-        first_name?: string;
-        last_name?: string;
-        nickname?: string;
-        user_id?: number;
-        avatar_url?: string;
-        email?: string;
-      }>;
-    };
+    const payload = await this.sendCommand<GetUsersOnlineAck>("get_users_online", { server_id: serverId });
 
     if (!Array.isArray(payload?.users)) {
       return [];
@@ -664,8 +708,7 @@ export class ChatSocket {
   }
 
   async joinVoiceChannel(channelId: number): Promise<JoinVoiceResponse> {
-    const data = await this.sendCommand("join_voice_channel", { channel_id: channelId });
-    const payload = data as JoinVoiceResponse;
+    const payload = await this.sendCommand<JoinVoiceResponse>("join_voice_channel", { channel_id: channelId });
     if (!payload || typeof payload.channel_id !== "number" || !Array.isArray(payload.participants)) {
       throw new Error("Invalid join voice response");
     }
@@ -699,20 +742,19 @@ export class ChatSocket {
     );
   }
 
-  private sendCommand(action: string, payload: Record<string, unknown>): Promise<unknown> {
+  private sendCommand<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("WebSocket not connected"));
     }
 
-    return new Promise((resolve, reject) => {
-      this.queue.push({ action, payload, resolve, reject });
+    return new Promise<T>((resolve, reject) => {
+      this.queue.push({ action, payload, resolve: resolve as (data: unknown) => void, reject });
       this.flushQueue();
     });
   }
 
   async searchServers(query: string, limit = 20): Promise<Array<{ id: number; name: string }>> {
-    const data = await this.sendCommand("search_servers", { query, limit });
-    const payload = data as { servers?: Array<{ id?: number; name?: string }> };
+    const payload = await this.sendCommand<SearchServersAck>("search_servers", { query, limit });
 
     if (!Array.isArray(payload?.servers)) {
       return [];
@@ -724,8 +766,7 @@ export class ChatSocket {
   }
 
   async getUserInfo(userId: number): Promise<UserProfile> {
-    const data = await this.sendCommand("get_user_info", { user_id: userId });
-    const payload = data as { user_id?: number; first_name?: string; last_name?: string; nickname?: string; avatar_url?: string };
+    const payload = await this.sendCommand<GetUserInfoAck>("get_user_info", { user_id: userId });
     return {
       user_id: typeof payload.user_id === "number" ? payload.user_id : userId,
       first_name: typeof payload.first_name === "string" ? payload.first_name : "",
