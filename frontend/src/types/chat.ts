@@ -99,6 +99,11 @@ export interface RTCSignalEvent {
     sdp_mline_index?: number;
 }
 
+export interface TypingEvent {
+    channel_id: number;
+    user_id: number;
+}
+
 export interface UserProfile {
     user_id: number;
     first_name: string;

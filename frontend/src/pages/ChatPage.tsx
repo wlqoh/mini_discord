@@ -4,6 +4,7 @@ import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, Ref
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
+import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
@@ -19,6 +20,8 @@ import { useVoice } from "../hooks/useVoice.ts";
 import { useServers } from "../hooks/useServers.ts";
 import { useMessages } from "../hooks/useMessages.ts";
 import { useProfile } from "../hooks/useProfile.ts";
+import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
+import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
 import "../styles/chat.css";
 
 const COLOR_THEME_KEY = "color_theme";
@@ -160,6 +163,9 @@ export default function ChatPage() {
         closeModalWithAnim,
     });
 
+    const typingEmitter = useTypingEmitter(socketRef, servers.selectedChannelId);
+    const typingByChannel = useTypingIndicator(socketRef, isConnected, currentUserId);
+
     // Derived values
     const activeChannels = servers.channelsByServer[servers.selectedServerId] ?? [];
     const currentServer = servers.servers.find((server) => server.id === servers.selectedServerId);
@@ -174,6 +180,7 @@ export default function ChatPage() {
     const shouldHideMessageInput = isVoiceChannel;
     const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
     const isMessagesLoading = servers.selectedChannelId > 0 && messagesByChannel[servers.selectedChannelId] === undefined;
+    const typingUserIds = servers.selectedChannelId > 0 ? typingByChannel[servers.selectedChannelId] ?? [] : [];
 
     const userInitial =
         currentUserProfile?.nickname?.[0]?.toUpperCase() ??
@@ -584,18 +591,28 @@ export default function ChatPage() {
                     <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading}/>
                 </div>
                 {shouldHideMessageInput ? null : (
-                    <MessageInput
-                        onSend={messages.handleSend}
-                        disabled={!isConnected || servers.selectedChannelId <= 0}
-                        isOnlinePanelOpen={servers.isOnlinePanelOpen}
-                        onToggleOnlinePanel={() => servers.setIsOnlinePanelOpen((prev) => !prev)}
-                        onlineUsers={servers.onlineUsers}
-                        isOnlineUsersLoading={servers.isOnlineUsersLoading}
-                        onlineUserAvatarByName={onlineUserAvatarByName}
-                        onOpenProfile={profile.openUserProfile}
-                        replyToMessage={messages.replyToMessage}
-                        onCancelReply={() => messages.setReplyToMessage(null)}
-                    />
+                    <>
+                        <TypingIndicator
+                            userIds={typingUserIds}
+                            onlineUsers={servers.onlineUsers}
+                            messages={activeMessages}
+                            socketRef={socketRef}
+                        />
+                        <MessageInput
+                            onSend={messages.handleSend}
+                            disabled={!isConnected || servers.selectedChannelId <= 0}
+                            isOnlinePanelOpen={servers.isOnlinePanelOpen}
+                            onToggleOnlinePanel={() => servers.setIsOnlinePanelOpen((prev) => !prev)}
+                            onlineUsers={servers.onlineUsers}
+                            isOnlineUsersLoading={servers.isOnlineUsersLoading}
+                            onlineUserAvatarByName={onlineUserAvatarByName}
+                            onOpenProfile={profile.openUserProfile}
+                            replyToMessage={messages.replyToMessage}
+                            onCancelReply={() => messages.setReplyToMessage(null)}
+                            onTypingInput={typingEmitter.onInput}
+                            onTypingStop={typingEmitter.stop}
+                        />
+                    </>
                 )}
             </section>
 

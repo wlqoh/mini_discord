@@ -21,6 +21,8 @@ type Props = {
     onOpenProfile?: (userId: number) => void;
     replyToMessage?: Message | null;
     onCancelReply?: () => void;
+    onTypingInput?: (value: string) => void;
+    onTypingStop?: () => void;
 };
 
 const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
@@ -57,6 +59,8 @@ export default function MessageInput({
     onOpenProfile,
     replyToMessage,
     onCancelReply,
+    onTypingInput,
+    onTypingStop,
 }: Props) {
     const { showToast } = useToast();
     const [text, setText] = useState("");
@@ -351,6 +355,7 @@ export default function MessageInput({
         await onSend(value, attachmentIds, replyToMessage?.id ?? undefined);
         setText("");
         setPendingFiles([]);
+        onTypingStop?.();
         if (hadFiles) {
             showToast("success", "File sent");
         }
@@ -466,7 +471,8 @@ export default function MessageInput({
                         className="message-input"
                         placeholder="Write a message"
                         value={text}
-                        onChange={(e) => setText(e.target.value)}
+                        onChange={(e) => { setText(e.target.value); onTypingInput?.(e.target.value); }}
+                        onBlur={() => onTypingStop?.()}
                         onPaste={handlePaste}
                         disabled={disabled || isUploading}
                         inputMode="text"
