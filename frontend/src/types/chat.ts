@@ -116,3 +116,12 @@ export interface UserProfile {
 export type MessagesByChannel = Record<number, Message[]>;
 export type ChannelsByServer = Record<number, Channel[]>;
 export type VoiceParticipantsByChannel = Record<number, VoiceParticipant[]>;
+
+export interface ChannelPagination {
+    cursor: string;
+    hasMore: boolean;
+    isLoadingMore: boolean;
+    error: boolean;
+}
+
+export type PaginationByChannel = Record<number, ChannelPagination>;

@@ -610,14 +610,26 @@ export class ChatSocket {
     await this.sendCommand("send_message", payload);
   }
 
-  async getMessages(channelId: number, limit = 100): Promise<Message[]> {
-    const payload = await this.sendCommand<GetMessagesAck>("get_messages", { channel_id: channelId, limit });
-
-    if (!Array.isArray(payload?.messages)) {
-      return [];
+  async getMessages(
+    channelId: number,
+    limit = 100,
+    cursor?: string,
+  ): Promise<{ messages: Message[]; nextCursor: string; hasMore: boolean }> {
+    const requestPayload: Record<string, unknown> = { channel_id: channelId, limit };
+    if (cursor) {
+      requestPayload.cursor = cursor;
     }
+    const payload = await this.sendCommand<GetMessagesAck>("get_messages", requestPayload);
 
-    return payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null);
+    const messages = Array.isArray(payload?.messages)
+      ? payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null)
+      : [];
+
+    return {
+      messages,
+      nextCursor: typeof payload?.next_cursor === "string" ? payload.next_cursor : "",
+      hasMore: payload?.has_more === true,
+    };
   }
 
   async getServers(): Promise<Array<{ id: number; name: string; owner_id: number }>> {

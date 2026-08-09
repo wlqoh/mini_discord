@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
@@ -34,6 +34,13 @@ export default function ChatPage() {
     const callClientRef = useRef<CallClient | null>(null);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
+    const wasAtBottomRef = useRef(true);
+    const prevScrollTrackRef = useRef<{
+        channelId: number;
+        firstId: number | undefined;
+        lastId: number | undefined;
+        scrollHeight: number;
+    } | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState("");
     const [isPageVisible, setIsPageVisible] = useState(true);
@@ -180,6 +187,10 @@ export default function ChatPage() {
     const shouldHideMessageInput = isVoiceChannel;
     const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
     const isMessagesLoading = servers.selectedChannelId > 0 && messagesByChannel[servers.selectedChannelId] === undefined;
+    const activePagination = messages.paginationByChannel[servers.selectedChannelId];
+    const isLoadingOlder = activePagination?.isLoadingMore ?? false;
+    const hasMoreOlder = activePagination?.hasMore ?? false;
+    const loadOlderError = activePagination?.error ?? false;
     const typingUserIds = servers.selectedChannelId > 0 ? typingByChannel[servers.selectedChannelId] ?? [] : [];
 
     const userInitial =
@@ -240,11 +251,49 @@ export default function ChatPage() {
         return map;
     }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, currentUserProfile?.nickname, avatarUrl]);
 
-    // Scroll to bottom effect
+    // Track whether the user is near the bottom of the scroll container.
     useEffect(() => {
         const el = chatContentRef.current;
         if (!el) return;
-        el.scrollTop = el.scrollHeight;
+        const onScroll = () => {
+            wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+        };
+        el.addEventListener("scroll", onScroll, { passive: true });
+        return () => el.removeEventListener("scroll", onScroll);
+    }, [servers.selectedChannelId]);
+
+    // Scroll positioning: jump to bottom on channel switch, stick to bottom on
+    // new tail messages, and preserve reading position when older history is prepended.
+    useLayoutEffect(() => {
+        const el = chatContentRef.current;
+        if (!el) return;
+
+        const channelId = servers.selectedChannelId;
+        const firstId = activeMessages[0]?.id;
+        const lastId = activeMessages[activeMessages.length - 1]?.id;
+        const prev = prevScrollTrackRef.current;
+
+        if (!prev || prev.channelId !== channelId) {
+            el.scrollTop = el.scrollHeight;
+            wasAtBottomRef.current = true;
+            prevScrollTrackRef.current = { channelId, firstId, lastId, scrollHeight: el.scrollHeight };
+            return;
+        }
+
+        // el.scrollHeight here already reflects the DOM *after* React committed
+        // this update — compare against the height captured at the end of the
+        // previous run to get the delta added by a prepend.
+        const isPrepend = prev.lastId === lastId && prev.firstId !== firstId;
+        const isAppend = prev.firstId === firstId && prev.lastId !== lastId;
+
+        if (isPrepend) {
+            el.scrollTop += el.scrollHeight - prev.scrollHeight;
+        } else if (isAppend && wasAtBottomRef.current) {
+            el.scrollTop = el.scrollHeight;
+        }
+
+        prevScrollTrackRef.current = { channelId, firstId, lastId, scrollHeight: el.scrollHeight };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- firstId/lastId are read fresh from activeMessages each run; length is the correct change signal
     }, [activeMessages.length, servers.selectedChannelId]);
 
     return (
@@ -588,7 +637,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)}/>
                 </div>
                 {shouldHideMessageInput ? null : (
                     <>

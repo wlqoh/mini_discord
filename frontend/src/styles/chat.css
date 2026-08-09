@@ -778,6 +778,46 @@ body {
     animation: notice-in 0.16s ease-out both;
 }
 
+.scroll-sentinel {
+    height: 1px;
+    width: 100%;
+}
+
+.history-loading,
+.history-error,
+.history-start {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 0;
+    font-size: 13px;
+    color: var(--text-3);
+}
+
+.history-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--accent-dim);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: history-spin 0.8s linear infinite;
+}
+
+.history-error button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--accent);
+    text-decoration: underline;
+    font-size: 13px;
+    padding: 0;
+}
+
+@keyframes history-spin {
+    to { transform: rotate(360deg); }
+}
+
 .message-row {
     display: flex;
     gap: 10px;

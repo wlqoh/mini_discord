@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
@@ -14,6 +14,10 @@ type Props = {
     onReply?: (message: Message) => void;
     onScrollToMessage?: (messageId: number) => void;
     isLoading?: boolean;
+    hasMoreOlder?: boolean;
+    isLoadingOlder?: boolean;
+    loadOlderError?: boolean;
+    onLoadOlder?: () => void;
 };
 
 function getAuthorLabel(msg: Message): string {
@@ -194,9 +198,41 @@ function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; 
     );
 }
 
-export default function MessageList({ messages, currentUserId, onOpenProfile, onDeleteMessage, onReply, onScrollToMessage, isLoading }: Props) {
+export default function MessageList({
+    messages,
+    currentUserId,
+    onOpenProfile,
+    onDeleteMessage,
+    onReply,
+    onScrollToMessage,
+    isLoading,
+    hasMoreOlder,
+    isLoadingOlder,
+    loadOlderError,
+    onLoadOlder,
+}: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-    const [initialCount] = useState(() => messages.length);
+    // Messages present at mount (or already seen) never re-animate as "new" —
+    // this stays correct even when older history is prepended, since ids only grow.
+    const [initialMaxId] = useState(() => messages.reduce((max, m) => Math.max(max, m.id), 0));
+    const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        const node = sentinelRef.current;
+        if (!node || !onLoadOlder) return;
+        if (!hasMoreOlder || isLoadingOlder || loadOlderError) return;
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0]?.isIntersecting) {
+                    onLoadOlder();
+                }
+            },
+            { root: node.closest(".chat-content"), rootMargin: "200px 0px 0px 0px", threshold: 0 },
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [hasMoreOlder, isLoadingOlder, loadOlderError, onLoadOlder, messages.length]);
 
     if (isLoading) {
         return (
@@ -218,9 +254,28 @@ export default function MessageList({ messages, currentUserId, onOpenProfile, on
 
     return (
         <div className="messages-list">
-            {messages.map((msg, index) => {
+            {hasMoreOlder && !loadOlderError && <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />}
+
+            {isLoadingOlder && (
+                <div className="history-loading">
+                    <span className="history-spinner" /> Загрузка…
+                </div>
+            )}
+
+            {loadOlderError && (
+                <div className="history-error">
+                    Не удалось загрузить.{" "}
+                    <button type="button" onClick={onLoadOlder}>Повторить</button>
+                </div>
+            )}
+
+            {!hasMoreOlder && !isLoadingOlder && !loadOlderError && (
+                <div className="history-start">Начало истории канала</div>
+            )}
+
+            {messages.map((msg) => {
                 const isOwn = currentUserId !== null && msg.author_id === currentUserId;
-                const isNew = index >= initialCount;
+                const isNew = msg.id > initialMaxId;
 
                 return (
                     <div key={msg.id} id={`message-${msg.id}`} className={`message-row ${isOwn ? "own" : "other"}`} data-new={isNew ? "true" : undefined}>
