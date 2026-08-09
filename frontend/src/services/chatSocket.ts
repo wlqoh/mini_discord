@@ -4,7 +4,7 @@ import type {
   OnlineUser,
   ReplyPreview,
   RTCSignalEvent,
-  RTCSignalPayload, UserProfile,
+  RTCSignalPayload, TypingEvent, UserProfile,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -106,6 +106,7 @@ type ErrorListener = (message: string) => void;
 type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
 type VoiceUserListener = (event: VoiceUserEvent) => void;
 type RTCSignalListener = (event: RTCSignalEvent) => void;
+type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
 
 // ── Raw shapes for WS message parsing ───────────────────────────────────────
 
@@ -307,6 +308,8 @@ export class ChatSocket {
 
   private readonly rtcSignalListeners = new Set<RTCSignalListener>();
 
+  private readonly typingListeners = new Set<TypingListener>();
+
   private flushQueue(): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.pending || !this.queue.length) {
       return;
@@ -476,6 +479,15 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "typing_start" || parsed.event === "typing_stop") {
+          const payload = parsed.data as TypingEvent;
+          if (payload && typeof payload.channel_id === "number" && typeof payload.user_id === "number") {
+            const isTyping = parsed.event === "typing_start";
+            this.typingListeners.forEach((listener) => listener(payload, isTyping));
+          }
+          return;
+        }
+
         if (parsed.event === "error") {
           const text = parsed.error || "Chat error";
           this.handleSocketError(text);
@@ -539,6 +551,11 @@ export class ChatSocket {
   onRTCSignal(listener: RTCSignalListener): () => void {
     this.rtcSignalListeners.add(listener);
     return () => this.rtcSignalListeners.delete(listener);
+  }
+
+  onTyping(listener: TypingListener): () => void {
+    this.typingListeners.add(listener);
+    return () => this.typingListeners.delete(listener);
   }
 
   async createChannel(
@@ -738,6 +755,19 @@ export class ChatSocket {
       JSON.stringify({
         action: "rtc_signal",
         payload,
+      }),
+    );
+  }
+
+  sendTyping(channelId: number, isTyping: boolean): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.socket.send(
+      JSON.stringify({
+        action: isTyping ? "typing_start" : "typing_stop",
+        payload: { channel_id: channelId },
       }),
     );
   }

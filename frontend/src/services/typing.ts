@@ -1,0 +1,3 @@
+export const TYPING_THROTTLE_MS = 3000;
+export const TYPING_INACTIVITY_MS = 5000;
+export const TYPING_RECEIVER_TTL_MS = 6000;

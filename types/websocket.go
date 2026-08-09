@@ -50,6 +50,8 @@ const (
 	WsActionSearchServers     = "search_servers"
 	WsActionGetUserInfo       = "get_user_info"
 	WsActionChangeVoiceStatus = "change_voice_status"
+	WsActionTypingStart       = "typing_start"
+	WsActionTypingStop        = "typing_stop"
 
 	WsEventAck                = "ack"
 	WsEventError              = "error"
@@ -59,6 +61,8 @@ const (
 	WsEventVoiceUserLeft      = "voice_user_left"
 	WsEventVoiceStatusChanged = "voice_status_changed"
 	WsEventRTCSignal          = "rtc_signal"
+	WsEventTypingStart        = "typing_start"
+	WsEventTypingStop         = "typing_stop"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -201,6 +205,15 @@ type WsMessageCursor struct {
 	ChannelID int64     `json:"channel_id"`
 	CreatedAt time.Time `json:"created_at"`
 	ID        int64     `json:"id"`
+}
+
+type WsTypingRequest struct {
+	ChannelID int64 `json:"channel_id"`
+}
+
+type WsTypingEvent struct {
+	ChannelID int64 `json:"channel_id"`
+	UserID    int   `json:"user_id"`
 }
 
 type WsSearchServersRequest struct {

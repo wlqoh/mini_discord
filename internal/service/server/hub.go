@@ -31,6 +31,7 @@ type Hub struct {
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
+	typingChannelByUser  map[int]int64
 
 	jwtSecret []byte
 
@@ -71,6 +72,7 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 		jwtSecret:            jwtSecret,
 		userVoiceChannel:     make(map[int]int64),
 		voiceStatusByUser:    make(map[int]voiceStatus),
+		typingChannelByUser:  make(map[int]int64),
 		pendingAttachments:   make(map[int64]*types.PendingAttachment),
 		log:                  log,
 		Register:             make(chan *Client),
@@ -143,7 +145,37 @@ func (h *Hub) unregisterClient(cl *Client) {
 
 	if removed {
 		h.leaveVoiceChannelInternal(cl, false)
+		h.stopTypingOnDisconnect(cl)
 	}
+}
+
+func (h *Hub) stopTypingOnDisconnect(cl *Client) {
+	h.mu.Lock()
+	typingChannelID, wasTyping := h.typingChannelByUser[cl.UserID]
+	delete(h.typingChannelByUser, cl.UserID)
+	h.mu.Unlock()
+
+	if !wasTyping {
+		return
+	}
+
+	ctx := context.Background()
+	recipients, err := h.storage.ListChannelMemberUserIDs(ctx, typingChannelID)
+	if err != nil {
+		return
+	}
+
+	filtered := recipients[:0:0]
+	for _, id := range recipients {
+		if id != cl.UserID {
+			filtered = append(filtered, id)
+		}
+	}
+
+	h.pushToUsers(filtered, &types.WsEvent{
+		Event: types.WsEventTypingStop,
+		Data:  types.WsTypingEvent{ChannelID: typingChannelID, UserID: cl.UserID},
+	})
 }
 
 func (h *Hub) handleCommand(req wsCommandRequest) {
@@ -184,6 +216,10 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.getUserInfo(req, ctx)
 	case types.WsActionChangeVoiceStatus:
 		h.changeVoiceStatus(req, ctx)
+	case types.WsActionTypingStart:
+		h.handleTyping(req, ctx, true)
+	case types.WsActionTypingStop:
+		h.handleTyping(req, ctx, false)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -235,6 +271,50 @@ func (h *Hub) changeVoiceStatus(req wsCommandRequest, ctx context.Context) {
 	})
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+func (h *Hub) handleTyping(req wsCommandRequest, ctx context.Context, start bool) {
+	var payload types.WsTypingRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		return
+	}
+	if payload.ChannelID <= 0 {
+		return
+	}
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil || !canAccess {
+		return
+	}
+
+	h.mu.Lock()
+	if start {
+		h.typingChannelByUser[req.client.UserID] = payload.ChannelID
+	} else {
+		delete(h.typingChannelByUser, req.client.UserID)
+	}
+	h.mu.Unlock()
+
+	recipientUserIDs, err := h.storage.ListChannelMemberUserIDs(ctx, payload.ChannelID)
+	if err != nil {
+		return
+	}
+
+	filtered := recipientUserIDs[:0:0]
+	for _, id := range recipientUserIDs {
+		if id != req.client.UserID {
+			filtered = append(filtered, id)
+		}
+	}
+
+	event := types.WsEventTypingStart
+	if !start {
+		event = types.WsEventTypingStop
+	}
+	h.pushToUsers(filtered, &types.WsEvent{
+		Event: event,
+		Data:  types.WsTypingEvent{ChannelID: payload.ChannelID, UserID: req.client.UserID},
+	})
 }
 
 func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
