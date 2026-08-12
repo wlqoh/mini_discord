@@ -160,6 +160,33 @@ For docker-compose production build, export the same `VITE_*` variables in shell
 docker compose up -d --build
 ```
 
+## Notifications (sound + browser + Web Push)
+
+- **Sound & in-app notifications** work out of the box for any logged-in session — no config needed. They cover the tab-open case (WS-live) and are governed by per-user settings under `REST /api/v1/notifications/settings` (default level, per-server/per-channel overrides, mute, Do Not Disturb, hide-preview).
+- **Web Push** (notifications while the tab is closed) requires a VAPID key pair and is disabled by default. To enable it:
+
+  1. Generate a key pair:
+     ```bash
+     make genvapid
+     ```
+  2. Add the printed keys to `config/local.yaml` (or the prod config):
+     ```yaml
+     push:
+       enabled: true
+       vapid_public_key: "<public key>"
+       vapid_private_key: "<private key>"
+       vapid_subject: "mailto:admin@example.com"
+       ttl_seconds: 43200
+     ```
+  3. Rebuild/restart the backend. `GET /api/v1/push/public-key` returns `404` whenever `push.enabled` is `false` — the frontend treats that as "push unavailable" and silently falls back to sound + in-tab notifications only.
+
+- **Testing the Service Worker locally**: the dev server only registers `public/sw.js` when `VITE_ENABLE_SW=true` is set (production builds always register it) — without it, push and background notifications can't be exercised in `npm run dev`:
+  ```bash
+  VITE_ENABLE_SW=true npm run dev
+  ```
+- Push delivery uses a small worker pool with a ~10s aggregation window per `(user, channel)` so a burst of ordinary messages collapses into one notification; mentions bypass the window and send immediately with high urgency. See `internal/service/push/`.
+- Migrations `019`–`021` (`sql/schema/`, mirrored without goose markers in `sql/init/`) add mentions, notification settings, and push subscriptions respectively.
+
 Example file: `frontend/.env.production.example`.
 
 ### Required TURN setup for stable production calls
@@ -351,6 +378,7 @@ POST /api/v1/login
 | `make run`   | Сборка и запуск сервера         |
 | `make up`    | Применить миграции БД (goose)   |
 | `make down`  | Откатить миграции БД (goose)    |
+| `make genvapid` | Сгенерировать пару VAPID-ключей для Web Push |
 
 ## Окружения
 

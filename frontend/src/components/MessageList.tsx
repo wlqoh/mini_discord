@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
-import type { Attachment, Message, ReplyPreview } from "../types/chat.ts";
+import type { Attachment, Message, ReplyPreview, ServerMember } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
 import VideoPlayer from "./VideoPlayer";
 import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
+import { memberDisplayName } from "../services/mentions.ts";
 
 type Props = {
     messages: Message[];
@@ -18,7 +19,48 @@ type Props = {
     isLoadingOlder?: boolean;
     loadOlderError?: boolean;
     onLoadOlder?: () => void;
+    serverMembers?: ServerMember[];
 };
+
+const MENTION_TOKEN_PATTERN = /<@(\d+)>|@everyone/g;
+
+function renderMessageContent(content: string, membersById: Map<number, ServerMember>) {
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+
+    MENTION_TOKEN_PATTERN.lastIndex = 0;
+    while ((match = MENTION_TOKEN_PATTERN.exec(content)) !== null) {
+        if (match.index > lastIndex) {
+            parts.push(<Fragment key={lastIndex}>{content.slice(lastIndex, match.index)}</Fragment>);
+        }
+
+        if (match[0] === "@everyone") {
+            parts.push(
+                <span key={match.index} className="mention-chip mention-chip-everyone">
+                    @everyone
+                </span>,
+            );
+        } else {
+            const userId = Number(match[1]);
+            const member = membersById.get(userId);
+            const label = member ? memberDisplayName(member) : `user ${userId}`;
+            parts.push(
+                <span key={match.index} className="mention-chip">
+                    @{label}
+                </span>,
+            );
+        }
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < content.length) {
+        parts.push(<Fragment key={lastIndex}>{content.slice(lastIndex)}</Fragment>);
+    }
+
+    return parts;
+}
 
 function getAuthorLabel(msg: Message): string {
     const nickname = msg.author_nickname?.trim() ?? "";
@@ -210,8 +252,10 @@ export default function MessageList({
     isLoadingOlder,
     loadOlderError,
     onLoadOlder,
+    serverMembers = [],
 }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+    const membersById = useMemo(() => new Map(serverMembers.map((member) => [member.user_id, member])), [serverMembers]);
     // Messages present at mount (or already seen) never re-animate as "new" —
     // this stays correct even when older history is prepended, since ids only grow.
     const [initialMaxId] = useState(() => messages.reduce((max, m) => Math.max(max, m.id), 0));
@@ -276,9 +320,16 @@ export default function MessageList({
             {messages.map((msg) => {
                 const isOwn = currentUserId !== null && msg.author_id === currentUserId;
                 const isNew = msg.id > initialMaxId;
+                const isMentioned =
+                    !isOwn && currentUserId !== null && (msg.mentions?.includes(currentUserId) || msg.mentions_everyone === true);
 
                 return (
-                    <div key={msg.id} id={`message-${msg.id}`} className={`message-row ${isOwn ? "own" : "other"}`} data-new={isNew ? "true" : undefined}>
+                    <div
+                        key={msg.id}
+                        id={`message-${msg.id}`}
+                        className={`message-row ${isOwn ? "own" : "other"} ${isMentioned ? "mentioned" : ""}`}
+                        data-new={isNew ? "true" : undefined}
+                    >
                         <button
                             className="message-avatar-wrap"
                             type="button"
@@ -369,7 +420,7 @@ export default function MessageList({
                             {msg.reply_to && (
                                 <ReplyPreviewBlock reply={msg.reply_to} onScrollToMessage={onScrollToMessage} />
                             )}
-                            {msg.content && <div className="message-content">{msg.content}</div>}
+                            {msg.content && <div className="message-content">{renderMessageContent(msg.content, membersById)}</div>}
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className="message-attachments">
                                     {msg.attachments.map(renderAttachment)}

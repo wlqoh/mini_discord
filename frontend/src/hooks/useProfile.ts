@@ -8,6 +8,7 @@ import { ChatSocket } from "../services/chatSocket.ts";
 import { clearAuthStorage } from "../services/authToken.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
 import { uploadMyAvatar } from "../services/avatarApi.ts";
+import { unsubscribeFromPush } from "../services/notifications";
 import type { MessagesByChannel, UserProfile, VoiceParticipantsByChannel } from "../types/chat.ts";
 
 const MAX_AVATAR_SIZE_BYTES = 1024 * 1024; // 1 MB
@@ -253,6 +254,10 @@ export function useProfile({
         socketRef.current?.close();
         socketRef.current = null;
 
+        // Must run before clearAuthStorage() — unsubscribing tells the server
+        // via an authenticated request, otherwise the next account on this
+        // device would silently inherit this one's push notifications.
+        void unsubscribeFromPush();
         clearAuthStorage();
 
         localStorage.removeItem(CHAT_SERVERS_KEY);

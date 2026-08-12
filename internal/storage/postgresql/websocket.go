@@ -279,8 +279,8 @@ func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 	var err error
 	if msg.ReplyToID != nil && *msg.ReplyToID > 0 {
 		query := `
-		INSERT INTO messages (channel_id, author_id, content, reply_to_id)
-		VALUES ($1,$2,$3,$4)
+		INSERT INTO messages (channel_id, author_id, content, reply_to_id, mentions_everyone)
+		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, created_at
 		`
 		err = s.db.QueryRowContext(
@@ -290,11 +290,12 @@ func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 			msg.AuthorID,
 			content,
 			*msg.ReplyToID,
+			msg.MentionsEveryone,
 		).Scan(&msg.ID, &msg.CreatedAt)
 	} else {
 		query := `
-		INSERT INTO messages (channel_id, author_id, content)
-		VALUES ($1,$2,$3)
+		INSERT INTO messages (channel_id, author_id, content, mentions_everyone)
+		VALUES ($1,$2,$3,$4)
 		RETURNING id, created_at
 		`
 		err = s.db.QueryRowContext(
@@ -303,6 +304,7 @@ func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 			msg.ChannelID,
 			msg.AuthorID,
 			content,
+			msg.MentionsEveryone,
 		).Scan(&msg.ID, &msg.CreatedAt)
 	}
 
@@ -319,7 +321,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
+	query := `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id, m.mentions_everyone
 		 FROM messages m
 		 LEFT JOIN users u ON u.id = m.author_id
 		 WHERE m.channel_id = $1
@@ -328,7 +330,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id
+		query = `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id, m.mentions_everyone
 			 FROM messages m
 			 LEFT JOIN users u ON u.id = m.author_id
 			 WHERE m.channel_id = $1
@@ -361,6 +363,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			&msg.CreatedAt,
 			&msg.EditedAt,
 			&replyToID,
+			&msg.MentionsEveryone,
 		); err != nil {
 			return nil, nil, false, err
 		}
@@ -411,12 +414,20 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			return nil, nil, false, err
 		}
 
+		mentions, err := s.GetMessageMentions(ctx, msgIDs)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
 		for i := range messages {
 			if a, ok := atts[messages[i].ID]; ok {
 				messages[i].Attachments = a
 			}
 			if rt, ok := replyTos[messages[i].ID]; ok {
 				messages[i].ReplyTo = rt
+			}
+			if m, ok := mentions[messages[i].ID]; ok {
+				messages[i].Mentions = m
 			}
 		}
 	}

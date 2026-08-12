@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff, Paperclip, Send, Upload, X } from "lucide-react";
 import { uploadAttachment } from "../services/avatarApi.ts";
-import type { Message, OnlineUser } from "../types/chat.ts";
+import type { Message, OnlineUser, ServerMember } from "../types/chat.ts";
 import { useToast } from "./Toast.tsx";
+import MentionAutocomplete from "./MentionAutocomplete.tsx";
+import { computeMentionResults, detectMentionQuery, type MentionMatch } from "../services/mentions.ts";
 
 type PendingFile = {
     id: string;
@@ -23,6 +25,7 @@ type Props = {
     onCancelReply?: () => void;
     onTypingInput?: (value: string) => void;
     onTypingStop?: () => void;
+    serverMembers?: ServerMember[];
 };
 
 const MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024;
@@ -61,6 +64,7 @@ export default function MessageInput({
     onCancelReply,
     onTypingInput,
     onTypingStop,
+    serverMembers = [],
 }: Props) {
     const { showToast } = useToast();
     const [text, setText] = useState("");
@@ -69,7 +73,71 @@ export default function MessageInput({
     const [isDragOver, setIsDragOver] = useState(false);
     const isUploading = uploadProgress !== null;
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const messageInputRef = useRef<HTMLInputElement | null>(null);
     const dragCounterRef = useRef(0);
+
+    const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
+    const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+    const mentionResults = mentionMatch ? computeMentionResults(serverMembers, mentionMatch.query) : null;
+
+    function updateMentionState(value: string, caretIndex: number) {
+        const match = detectMentionQuery(value, caretIndex);
+        setMentionMatch(match);
+        setMentionActiveIndex(0);
+    }
+
+    function closeMentionAutocomplete() {
+        setMentionMatch(null);
+        setMentionActiveIndex(0);
+    }
+
+    function insertMentionToken(token: string) {
+        if (!mentionMatch) return;
+        const caretEnd = mentionMatch.triggerIndex + 1 + mentionMatch.query.length;
+        const nextText = `${text.slice(0, mentionMatch.triggerIndex)}${token} ${text.slice(caretEnd)}`;
+        const nextCaret = mentionMatch.triggerIndex + token.length + 1;
+
+        setText(nextText);
+        onTypingInput?.(nextText);
+        closeMentionAutocomplete();
+
+        window.setTimeout(() => {
+            messageInputRef.current?.focus();
+            messageInputRef.current?.setSelectionRange(nextCaret, nextCaret);
+        }, 0);
+    }
+
+    function selectMentionMember(member: ServerMember) {
+        insertMentionToken(`<@${member.user_id}>`);
+    }
+
+    function selectMentionEveryone() {
+        insertMentionToken("@everyone");
+    }
+
+    function handleMessageInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+        if (!mentionMatch || !mentionResults || mentionResults.total === 0) return;
+
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setMentionActiveIndex((prev) => (prev + 1) % mentionResults.total);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setMentionActiveIndex((prev) => (prev - 1 + mentionResults.total) % mentionResults.total);
+        } else if (e.key === "Enter" || e.key === "Tab") {
+            e.preventDefault();
+            if (mentionResults.showEveryone && mentionActiveIndex === 0) {
+                selectMentionEveryone();
+            } else {
+                const memberIndex = mentionActiveIndex - (mentionResults.showEveryone ? 1 : 0);
+                const member = mentionResults.members[memberIndex];
+                if (member) selectMentionMember(member);
+            }
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            closeMentionAutocomplete();
+        }
+    }
 
     function getReplyAuthorLabel(msg: Message): string {
         const nickname = msg.author_nickname?.trim() ?? "";
@@ -355,6 +423,7 @@ export default function MessageInput({
         await onSend(value, attachmentIds, replyToMessage?.id ?? undefined);
         setText("");
         setPendingFiles([]);
+        closeMentionAutocomplete();
         onTypingStop?.();
         if (hadFiles) {
             showToast("success", "File sent");
@@ -467,19 +536,35 @@ export default function MessageInput({
             )}
             {!isRecording && (
                 <>
-                    <input
-                        className="message-input"
-                        placeholder="Write a message"
-                        value={text}
-                        onChange={(e) => { setText(e.target.value); onTypingInput?.(e.target.value); }}
-                        onBlur={() => onTypingStop?.()}
-                        onPaste={handlePaste}
-                        disabled={disabled || isUploading}
-                        inputMode="text"
-                        enterKeyHint="send"
-                        autoCapitalize="sentences"
-                        autoComplete="off"
-                    />
+                    <div className="message-input-wrap">
+                        <input
+                            ref={messageInputRef}
+                            className="message-input"
+                            placeholder="Write a message"
+                            value={text}
+                            onChange={(e) => {
+                                setText(e.target.value);
+                                onTypingInput?.(e.target.value);
+                                updateMentionState(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                            }}
+                            onKeyDown={handleMessageInputKeyDown}
+                            onBlur={() => { onTypingStop?.(); closeMentionAutocomplete(); }}
+                            onPaste={handlePaste}
+                            disabled={disabled || isUploading}
+                            inputMode="text"
+                            enterKeyHint="send"
+                            autoCapitalize="sentences"
+                            autoComplete="off"
+                        />
+                        {mentionMatch && mentionResults ? (
+                            <MentionAutocomplete
+                                results={mentionResults}
+                                activeIndex={mentionActiveIndex}
+                                onSelectMember={selectMentionMember}
+                                onSelectEveryone={selectMentionEveryone}
+                            />
+                        ) : null}
+                    </div>
                     <button
                         className="message-voice-btn"
                         type="button"
