@@ -6,6 +6,7 @@ import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
+import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
@@ -23,6 +24,7 @@ import { useProfile } from "../hooks/useProfile.ts";
 import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
 import { useUnread } from "../hooks/useUnread.ts";
+import { useJumpToLatest } from "../hooks/useJumpToLatest.ts";
 import "../styles/chat.css";
 
 const COLOR_THEME_KEY = "color_theme";
@@ -39,7 +41,6 @@ export default function ChatPage() {
     const callClientRef = useRef<CallClient | null>(null);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
-    const wasAtBottomRef = useRef(true);
     const prevScrollTrackRef = useRef<{
         channelId: number;
         firstId: number | undefined;
@@ -266,16 +267,12 @@ export default function ChatPage() {
         return map;
     }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, currentUserProfile?.nickname, avatarUrl]);
 
-    // Track whether the user is near the bottom of the scroll container.
-    useEffect(() => {
-        const el = chatContentRef.current;
-        if (!el) return;
-        const onScroll = () => {
-            wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-        };
-        el.addEventListener("scroll", onScroll, { passive: true });
-        return () => el.removeEventListener("scroll", onScroll);
-    }, [servers.selectedChannelId]);
+    const jump = useJumpToLatest({
+        containerRef: chatContentRef,
+        messages: activeMessages,
+        selectedChannelId: servers.selectedChannelId,
+        currentUserId,
+    });
 
     // Scroll positioning: jump to bottom on channel switch, stick to bottom on
     // new tail messages, and preserve reading position when older history is prepended.
@@ -288,9 +285,13 @@ export default function ChatPage() {
         const lastId = activeMessages[activeMessages.length - 1]?.id;
         const prev = prevScrollTrackRef.current;
 
-        if (!prev || prev.channelId !== channelId) {
+        // prev.lastId is undefined only for the trivial commit captured while
+        // messages were still loading (empty activeMessages) — treat the
+        // loading-to-loaded transition the same as a fresh mount, otherwise it
+        // matches neither isPrepend nor isAppend below and never scrolls down.
+        if (!prev || prev.channelId !== channelId || prev.lastId === undefined) {
             el.scrollTop = el.scrollHeight;
-            wasAtBottomRef.current = true;
+            jump.isAtBottomRef.current = true;
             prevScrollTrackRef.current = { channelId, firstId, lastId, scrollHeight: el.scrollHeight };
             return;
         }
@@ -303,7 +304,7 @@ export default function ChatPage() {
 
         if (isPrepend) {
             el.scrollTop += el.scrollHeight - prev.scrollHeight;
-        } else if (isAppend && wasAtBottomRef.current) {
+        } else if (isAppend && jump.isAtBottomRef.current) {
             el.scrollTop = el.scrollHeight;
         }
 
@@ -548,6 +549,7 @@ export default function ChatPage() {
             </aside>
 
             <section className="chat-main">
+                <div className="chat-content-wrap">
                 <div className="chat-content" ref={chatContentRef}>
                     <div className="chat-header-block">
                         <div className="chat-header-row">
@@ -678,6 +680,12 @@ export default function ChatPage() {
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
                     <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)}/>
+                </div>
+                <JumpToLatestButton
+                    isVisible={jump.isVisible}
+                    newCount={jump.newCount}
+                    onClick={jump.jumpToLatest}
+                />
                 </div>
                 {shouldHideMessageInput ? null : (
                     <>

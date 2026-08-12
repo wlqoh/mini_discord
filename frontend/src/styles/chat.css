@@ -572,6 +572,83 @@ body {
 .chat-content::-webkit-scrollbar-track { background: transparent; }
 .chat-content::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 4px; }
 
+/* Обёртка скролл-области: контекст позиционирования для «Jump to latest».
+   Занимает строку 1fr грида .chat-main, поэтому кнопка внутри неё всегда
+   висит над полем ввода и не участвует в прокрутке. */
+.chat-content-wrap {
+    position: relative;
+    display: grid;
+    min-height: 0;
+}
+
+.jump-latest-btn {
+    position: absolute;
+    right: 24px;
+    bottom: 16px;
+    /* Выше содержимого чата, но ниже sticky-шапки (z-index: 10). */
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--glass-border-hi);
+    border-radius: var(--radius-full);
+    background: var(--glass-3);
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+    box-shadow: var(--shadow-md);
+    color: var(--text-1);
+    cursor: pointer;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(8px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s, background 0.14s;
+}
+
+.jump-latest-btn.visible {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+}
+
+.jump-latest-btn:hover {
+    background: var(--glass-2);
+    border-color: var(--accent);
+}
+
+.jump-latest-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    color: #fff;
+    border: 2px solid var(--bg);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 14px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Пустой бейдж существует в DOM ради aria-live, но не должен быть виден. */
+.jump-latest-badge:empty {
+    display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .jump-latest-btn {
+        transition: none;
+    }
+}
+
 /* Sticky chat header */
 .chat-header-block {
     position: sticky;
@@ -2051,6 +2128,11 @@ body {
 
     .chat-content {
         padding: 0 12px 14px;
+    }
+
+    .jump-latest-btn {
+        right: 14px;
+        bottom: 12px;
     }
 
     .message-form {
