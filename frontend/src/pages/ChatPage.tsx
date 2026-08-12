@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
@@ -6,6 +6,7 @@ import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
+import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
@@ -22,10 +23,16 @@ import { useMessages } from "../hooks/useMessages.ts";
 import { useProfile } from "../hooks/useProfile.ts";
 import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
+import { useUnread } from "../hooks/useUnread.ts";
+import { useJumpToLatest } from "../hooks/useJumpToLatest.ts";
 import "../styles/chat.css";
 
 const COLOR_THEME_KEY = "color_theme";
 type ColorTheme = "dark" | "light";
+
+function formatUnreadCount(count: number): string {
+    return count > 99 ? "99+" : String(count);
+}
 
 export default function ChatPage() {
     const navigate = useNavigate();
@@ -34,6 +41,12 @@ export default function ChatPage() {
     const callClientRef = useRef<CallClient | null>(null);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
+    const prevScrollTrackRef = useRef<{
+        channelId: number;
+        firstId: number | undefined;
+        lastId: number | undefined;
+        scrollHeight: number;
+    } | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState("");
     const [isPageVisible, setIsPageVisible] = useState(true);
@@ -166,6 +179,16 @@ export default function ChatPage() {
     const typingEmitter = useTypingEmitter(socketRef, servers.selectedChannelId);
     const typingByChannel = useTypingIndicator(socketRef, isConnected, currentUserId);
 
+    const unread = useUnread({
+        socketRef,
+        isConnected,
+        isPageVisible,
+        currentUserId,
+        selectedChannelId: servers.selectedChannelId,
+        channelsByServer: servers.channelsByServer,
+        messagesByChannel,
+    });
+
     // Derived values
     const activeChannels = servers.channelsByServer[servers.selectedServerId] ?? [];
     const currentServer = servers.servers.find((server) => server.id === servers.selectedServerId);
@@ -180,6 +203,10 @@ export default function ChatPage() {
     const shouldHideMessageInput = isVoiceChannel;
     const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
     const isMessagesLoading = servers.selectedChannelId > 0 && messagesByChannel[servers.selectedChannelId] === undefined;
+    const activePagination = messages.paginationByChannel[servers.selectedChannelId];
+    const isLoadingOlder = activePagination?.isLoadingMore ?? false;
+    const hasMoreOlder = activePagination?.hasMore ?? false;
+    const loadOlderError = activePagination?.error ?? false;
     const typingUserIds = servers.selectedChannelId > 0 ? typingByChannel[servers.selectedChannelId] ?? [] : [];
 
     const userInitial =
@@ -240,11 +267,49 @@ export default function ChatPage() {
         return map;
     }, [messagesByChannel, currentUserProfile?.first_name, currentUserProfile?.last_name, currentUserProfile?.nickname, avatarUrl]);
 
-    // Scroll to bottom effect
-    useEffect(() => {
+    const jump = useJumpToLatest({
+        containerRef: chatContentRef,
+        messages: activeMessages,
+        selectedChannelId: servers.selectedChannelId,
+        currentUserId,
+    });
+
+    // Scroll positioning: jump to bottom on channel switch, stick to bottom on
+    // new tail messages, and preserve reading position when older history is prepended.
+    useLayoutEffect(() => {
         const el = chatContentRef.current;
         if (!el) return;
-        el.scrollTop = el.scrollHeight;
+
+        const channelId = servers.selectedChannelId;
+        const firstId = activeMessages[0]?.id;
+        const lastId = activeMessages[activeMessages.length - 1]?.id;
+        const prev = prevScrollTrackRef.current;
+
+        // prev.lastId is undefined only for the trivial commit captured while
+        // messages were still loading (empty activeMessages) — treat the
+        // loading-to-loaded transition the same as a fresh mount, otherwise it
+        // matches neither isPrepend nor isAppend below and never scrolls down.
+        if (!prev || prev.channelId !== channelId || prev.lastId === undefined) {
+            el.scrollTop = el.scrollHeight;
+            jump.isAtBottomRef.current = true;
+            prevScrollTrackRef.current = { channelId, firstId, lastId, scrollHeight: el.scrollHeight };
+            return;
+        }
+
+        // el.scrollHeight here already reflects the DOM *after* React committed
+        // this update — compare against the height captured at the end of the
+        // previous run to get the delta added by a prepend.
+        const isPrepend = prev.lastId === lastId && prev.firstId !== firstId;
+        const isAppend = prev.firstId === firstId && prev.lastId !== lastId;
+
+        if (isPrepend) {
+            el.scrollTop += el.scrollHeight - prev.scrollHeight;
+        } else if (isAppend && jump.isAtBottomRef.current) {
+            el.scrollTop = el.scrollHeight;
+        }
+
+        prevScrollTrackRef.current = { channelId, firstId, lastId, scrollHeight: el.scrollHeight };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- firstId/lastId are read fresh from activeMessages each run; length is the correct change signal
     }, [activeMessages.length, servers.selectedChannelId]);
 
     return (
@@ -269,18 +334,30 @@ export default function ChatPage() {
                     <Search size={18} aria-hidden="true"/>
                 </button>
                 <ul className="servers-list">
-                    {servers.servers.map((server) => (
-                        <li key={server.id}>
-                            <button
-                                className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
-                                onClick={() => void servers.handleSelectServer(server.id)}
-                                title={`Server ${server.name} (ID ${server.id})`}
-                                aria-label={`Server ${server.name}`}
-                            >
-                                {server.name?.[0]?.toUpperCase() ?? "?"}
-                            </button>
-                        </li>
-                    ))}
+                    {servers.servers.map((server) => {
+                        const serverUnread = unread.unreadByServer[server.id] ?? 0;
+                        return (
+                            <li key={server.id} className="server-item">
+                                <button
+                                    className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
+                                    onClick={() => void servers.handleSelectServer(server.id)}
+                                    title={`Server ${server.name} (ID ${server.id})`}
+                                    aria-label={`Server ${server.name}`}
+                                >
+                                    {server.name?.[0]?.toUpperCase() ?? "?"}
+                                </button>
+                                {serverUnread > 0 ? (
+                                    <span
+                                        className="server-unread-badge"
+                                        title={`${serverUnread} unread`}
+                                        aria-label={`${serverUnread} непрочитанных сообщений`}
+                                    >
+                                        {formatUnreadCount(serverUnread)}
+                                    </span>
+                                ) : null}
+                            </li>
+                        );
+                    })}
                 </ul>
                 <div className="servers-sidebar-footer">
                     {isChannelsSidebarHidden ? (
@@ -340,18 +417,30 @@ export default function ChatPage() {
                     </div>
                 </div>
                 <ul className="channels-list">
-                    {activeChannels.map((channel) => (
+                    {activeChannels.map((channel) => {
+                        const channelUnread = channel.type === "text" ? unread.unreadByChannel[channel.id] ?? 0 : 0;
+                        return (
                         <li key={channel.id} className="channel-item">
                             <div className="channel-row-wrap">
                                 <button
-                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""}`}
+                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""} ${channelUnread > 0 ? "has-unread" : ""}`}
                                     onClick={() => { servers.setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
                                     type="button"
                                 >
                                     {channel.type === "voice"
                                         ? <Volume2 size={14} aria-hidden="true" />
                                         : <Hash size={14} aria-hidden="true" />
-                                    } {channel.name}
+                                    }
+                                    <span className="channel-row-name">{channel.name}</span>
+                                    {channelUnread > 0 ? (
+                                        <span
+                                            className="channel-unread-badge"
+                                            title={`${channelUnread} unread`}
+                                            aria-label={`${channelUnread} непрочитанных сообщений`}
+                                        >
+                                            {formatUnreadCount(channelUnread)}
+                                        </span>
+                                    ) : null}
                                 </button>
 
                                 {isCurrentServerOwner ? (
@@ -454,11 +543,13 @@ export default function ChatPage() {
                                 </ul>
                             ) : null}
                         </li>
-                    ))}
+                        );
+                    })}
                 </ul>
             </aside>
 
             <section className="chat-main">
+                <div className="chat-content-wrap">
                 <div className="chat-content" ref={chatContentRef}>
                     <div className="chat-header-block">
                         <div className="chat-header-row">
@@ -588,7 +679,13 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)}/>
+                </div>
+                <JumpToLatestButton
+                    isVisible={jump.isVisible}
+                    newCount={jump.newCount}
+                    onClick={jump.jumpToLatest}
+                />
                 </div>
                 {shouldHideMessageInput ? null : (
                     <>

@@ -884,6 +884,60 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 	return &channel, nil
 }
 
+func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsChannelUnread, error) {
+	query := `
+		SELECT c.id, c.server_id, COUNT(m.id)
+		FROM channels c
+		JOIN server_members sm
+		  ON sm.server_id = c.server_id AND sm.user_id = $1
+		LEFT JOIN channel_reads cr
+		  ON cr.user_id = $1 AND cr.channel_id = c.id
+		LEFT JOIN messages m
+		  ON m.channel_id = c.id
+		 AND m.author_id <> $1
+		 AND (CASE
+		        WHEN cr.last_read_message_id IS NOT NULL THEN m.id > cr.last_read_message_id
+		        ELSE m.created_at > sm.joined_at
+		      END)
+		WHERE c.type = $2
+		GROUP BY c.id, c.server_id
+		HAVING COUNT(m.id) > 0
+	`
+
+	rows, err := s.db.QueryContext(ctx, query, userID, types.ChannelTypeText)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]types.WsChannelUnread, 0)
+	for rows.Next() {
+		var item types.WsChannelUnread
+		if err := rows.Scan(&item.ChannelID, &item.ServerID, &item.UnreadCount); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (s *Storage) MarkChannelRead(ctx context.Context, userID int, channelID, messageID int64) error {
+	query := `
+		INSERT INTO channel_reads (user_id, channel_id, last_read_message_id, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (user_id, channel_id) DO UPDATE
+		SET last_read_message_id = GREATEST(channel_reads.last_read_message_id, EXCLUDED.last_read_message_id),
+		    updated_at = now()
+	`
+
+	_, err := s.db.ExecContext(ctx, query, userID, channelID, messageID)
+	return err
+}
+
 func (s *Storage) SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]types.Server, error) {
 	if limit <= 0 {
 		limit = 20

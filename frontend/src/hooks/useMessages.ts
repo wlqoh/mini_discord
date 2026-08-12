@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type React from "react";
 import { ChatSocket } from "../services/chatSocket.ts";
-import type { ChannelsByServer, Message, MessagesByChannel } from "../types/chat.ts";
+import type { ChannelsByServer, Message, MessagesByChannel, PaginationByChannel } from "../types/chat.ts";
 
 type Params = {
     socketRef: React.MutableRefObject<ChatSocket | null>;
@@ -25,6 +25,7 @@ export function useMessages({
     setMessagesByChannel,
 }: Params) {
     const [loadedChannels, setLoadedChannels] = useState<Record<number, boolean>>({});
+    const [paginationByChannel, setPaginationByChannel] = useState<PaginationByChannel>({});
     const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
 
     // Subscribe to socket messages when connected
@@ -77,10 +78,19 @@ export function useMessages({
 
         (async () => {
             try {
-                const data = await socketRef.current?.getMessages(selectedChannelId);
+                const res = await socketRef.current?.getMessages(selectedChannelId, 100);
                 setMessagesByChannel((prev) => ({
                     ...prev,
-                    [selectedChannelId]: data ?? [],
+                    [selectedChannelId]: res?.messages ?? [],
+                }));
+                setPaginationByChannel((prev) => ({
+                    ...prev,
+                    [selectedChannelId]: {
+                        cursor: res?.nextCursor ?? "",
+                        hasMore: res?.hasMore ?? false,
+                        isLoadingMore: false,
+                        error: false,
+                    },
                 }));
                 setLoadedChannels((prev) => ({ ...prev, [selectedChannelId]: true }));
             } catch (err) {
@@ -89,6 +99,46 @@ export function useMessages({
             }
         })();
     }, [selectedChannelId, isConnected, loadedChannels, socketRef, setError, setMessagesByChannel]);
+
+    async function loadOlderMessages(channelId: number): Promise<void> {
+        const socket = socketRef.current;
+        if (!socket || !isConnected || channelId <= 0) return;
+
+        const state = paginationByChannel[channelId];
+        if (!state || state.isLoadingMore || !state.hasMore) return;
+
+        const cursor = state.cursor;
+        if (!cursor) return;
+
+        setPaginationByChannel((prev) => ({
+            ...prev,
+            [channelId]: { ...prev[channelId], isLoadingMore: true, error: false },
+        }));
+
+        try {
+            const res = await socket.getMessages(channelId, 50, cursor);
+
+            setMessagesByChannel((prev) => ({
+                ...prev,
+                [channelId]: [...res.messages, ...(prev[channelId] ?? [])],
+            }));
+
+            setPaginationByChannel((prev) => ({
+                ...prev,
+                [channelId]: {
+                    cursor: res.nextCursor,
+                    hasMore: res.hasMore,
+                    isLoadingMore: false,
+                    error: false,
+                },
+            }));
+        } catch {
+            setPaginationByChannel((prev) => ({
+                ...prev,
+                [channelId]: { ...prev[channelId], isLoadingMore: false, error: true },
+            }));
+        }
+    }
 
     async function handleSend(text: string, attachmentIds?: number[], replyToId?: number | null) {
         if (!socketRef.current || !isConnected || selectedChannelId <= 0) {
@@ -127,10 +177,10 @@ export function useMessages({
             const socket = socketRef.current;
             if (socket) {
                 try {
-                    const data = await socket.getMessages(channelId);
+                    const res = await socket.getMessages(channelId);
                     setMessagesByChannel((prev) => ({
                         ...prev,
-                        [channelId]: data ?? [],
+                        [channelId]: res.messages,
                     }));
                 } catch {
                     // best-effort rollback
@@ -142,6 +192,8 @@ export function useMessages({
     return {
         messagesByChannel,
         loadedChannels,
+        paginationByChannel,
+        loadOlderMessages,
         replyToMessage,
         setReplyToMessage,
         handleSend,

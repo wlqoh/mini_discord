@@ -113,6 +113,23 @@ export interface UserProfile {
 }
 
 
+export interface ChannelUnread {
+    channel_id: number;
+    server_id: number;
+    unread_count: number;
+}
+
 export type MessagesByChannel = Record<number, Message[]>;
 export type ChannelsByServer = Record<number, Channel[]>;
 export type VoiceParticipantsByChannel = Record<number, VoiceParticipant[]>;
+export type UnreadByChannel = Record<number, number>;
+export type UnreadByServer = Record<number, number>;
+
+export interface ChannelPagination {
+    cursor: string;
+    hasMore: boolean;
+    isLoadingMore: boolean;
+    error: boolean;
+}
+
+export type PaginationByChannel = Record<number, ChannelPagination>;
