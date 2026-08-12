@@ -28,6 +28,7 @@ type Hub struct {
 	createServerLimiter  *middleware.TokenBucket
 	createChannelLimiter *middleware.TokenBucket
 	sendMessageLimiter   *middleware.TokenBucket
+	markReadLimiter      *middleware.TokenBucket
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
@@ -68,6 +69,7 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 		createServerLimiter:  middleware.NewTokenBucket(5.0/60.0, 5.0),
 		createChannelLimiter: middleware.NewTokenBucket(5.0/60.0, 5.0),
 		sendMessageLimiter:   middleware.NewTokenBucket(1.0, 1.0),
+		markReadLimiter:      middleware.NewTokenBucket(2.0, 10.0),
 		voiceParticipants:    make(map[int64]map[int]struct{}),
 		jwtSecret:            jwtSecret,
 		userVoiceChannel:     make(map[int]int64),
@@ -220,6 +222,10 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.handleTyping(req, ctx, true)
 	case types.WsActionTypingStop:
 		h.handleTyping(req, ctx, false)
+	case types.WsActionGetUnread:
+		h.getUnread(req, ctx)
+	case types.WsActionMarkRead:
+		h.markRead(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -315,6 +321,43 @@ func (h *Hub) handleTyping(req wsCommandRequest, ctx context.Context, start bool
 		Event: event,
 		Data:  types.WsTypingEvent{ChannelID: payload.ChannelID, UserID: req.client.UserID},
 	})
+}
+
+func (h *Hub) getUnread(req wsCommandRequest, ctx context.Context) {
+	counts, err := h.storage.GetUnreadCounts(ctx, req.client.UserID)
+	if err != nil {
+		h.pushError(req.client, "failed to get unread counts")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  types.WsGetUnreadResponse{Channels: counts},
+	})
+}
+
+// markRead is fire-and-forget: no ack, no error events — the client sends it
+// outside the ack queue, so any response here would resolve an unrelated command.
+func (h *Hub) markRead(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsMarkReadRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		return
+	}
+	if payload.ChannelID <= 0 || payload.MessageID <= 0 {
+		return
+	}
+	if !h.markReadLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		return
+	}
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil || !canAccess {
+		return
+	}
+
+	if err := h.storage.MarkChannelRead(ctx, req.client.UserID, payload.ChannelID, payload.MessageID); err != nil {
+		h.log.Warn("failed to mark channel read", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
+	}
 }
 
 func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {

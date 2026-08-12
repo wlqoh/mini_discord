@@ -22,10 +22,15 @@ import { useMessages } from "../hooks/useMessages.ts";
 import { useProfile } from "../hooks/useProfile.ts";
 import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
+import { useUnread } from "../hooks/useUnread.ts";
 import "../styles/chat.css";
 
 const COLOR_THEME_KEY = "color_theme";
 type ColorTheme = "dark" | "light";
+
+function formatUnreadCount(count: number): string {
+    return count > 99 ? "99+" : String(count);
+}
 
 export default function ChatPage() {
     const navigate = useNavigate();
@@ -173,6 +178,16 @@ export default function ChatPage() {
     const typingEmitter = useTypingEmitter(socketRef, servers.selectedChannelId);
     const typingByChannel = useTypingIndicator(socketRef, isConnected, currentUserId);
 
+    const unread = useUnread({
+        socketRef,
+        isConnected,
+        isPageVisible,
+        currentUserId,
+        selectedChannelId: servers.selectedChannelId,
+        channelsByServer: servers.channelsByServer,
+        messagesByChannel,
+    });
+
     // Derived values
     const activeChannels = servers.channelsByServer[servers.selectedServerId] ?? [];
     const currentServer = servers.servers.find((server) => server.id === servers.selectedServerId);
@@ -318,18 +333,30 @@ export default function ChatPage() {
                     <Search size={18} aria-hidden="true"/>
                 </button>
                 <ul className="servers-list">
-                    {servers.servers.map((server) => (
-                        <li key={server.id}>
-                            <button
-                                className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
-                                onClick={() => void servers.handleSelectServer(server.id)}
-                                title={`Server ${server.name} (ID ${server.id})`}
-                                aria-label={`Server ${server.name}`}
-                            >
-                                {server.name?.[0]?.toUpperCase() ?? "?"}
-                            </button>
-                        </li>
-                    ))}
+                    {servers.servers.map((server) => {
+                        const serverUnread = unread.unreadByServer[server.id] ?? 0;
+                        return (
+                            <li key={server.id} className="server-item">
+                                <button
+                                    className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
+                                    onClick={() => void servers.handleSelectServer(server.id)}
+                                    title={`Server ${server.name} (ID ${server.id})`}
+                                    aria-label={`Server ${server.name}`}
+                                >
+                                    {server.name?.[0]?.toUpperCase() ?? "?"}
+                                </button>
+                                {serverUnread > 0 ? (
+                                    <span
+                                        className="server-unread-badge"
+                                        title={`${serverUnread} unread`}
+                                        aria-label={`${serverUnread} непрочитанных сообщений`}
+                                    >
+                                        {formatUnreadCount(serverUnread)}
+                                    </span>
+                                ) : null}
+                            </li>
+                        );
+                    })}
                 </ul>
                 <div className="servers-sidebar-footer">
                     {isChannelsSidebarHidden ? (
@@ -389,18 +416,30 @@ export default function ChatPage() {
                     </div>
                 </div>
                 <ul className="channels-list">
-                    {activeChannels.map((channel) => (
+                    {activeChannels.map((channel) => {
+                        const channelUnread = channel.type === "text" ? unread.unreadByChannel[channel.id] ?? 0 : 0;
+                        return (
                         <li key={channel.id} className="channel-item">
                             <div className="channel-row-wrap">
                                 <button
-                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""}`}
+                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""} ${channelUnread > 0 ? "has-unread" : ""}`}
                                     onClick={() => { servers.setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
                                     type="button"
                                 >
                                     {channel.type === "voice"
                                         ? <Volume2 size={14} aria-hidden="true" />
                                         : <Hash size={14} aria-hidden="true" />
-                                    } {channel.name}
+                                    }
+                                    <span className="channel-row-name">{channel.name}</span>
+                                    {channelUnread > 0 ? (
+                                        <span
+                                            className="channel-unread-badge"
+                                            title={`${channelUnread} unread`}
+                                            aria-label={`${channelUnread} непрочитанных сообщений`}
+                                        >
+                                            {formatUnreadCount(channelUnread)}
+                                        </span>
+                                    ) : null}
                                 </button>
 
                                 {isCurrentServerOwner ? (
@@ -503,7 +542,8 @@ export default function ChatPage() {
                                 </ul>
                             ) : null}
                         </li>
-                    ))}
+                        );
+                    })}
                 </ul>
             </aside>
 

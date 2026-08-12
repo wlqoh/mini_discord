@@ -1,4 +1,5 @@
 import type {
+  ChannelUnread,
   JoinVoiceResponse,
   Message,
   OnlineUser,
@@ -83,6 +84,10 @@ type GetUserInfoAck = {
   last_name?: string;
   nickname?: string;
   avatar_url?: string;
+};
+
+type GetUnreadAck = {
+  channels?: Array<{ channel_id?: number; server_id?: number; unread_count?: number }>;
 };
 
 // ── Internal queue types ─────────────────────────────────────────────────────
@@ -780,6 +785,36 @@ export class ChatSocket {
       JSON.stringify({
         action: isTyping ? "typing_start" : "typing_stop",
         payload: { channel_id: channelId },
+      }),
+    );
+  }
+
+  async getUnread(): Promise<ChannelUnread[]> {
+    const payload = await this.sendCommand<GetUnreadAck>("get_unread", {});
+
+    if (!Array.isArray(payload?.channels)) {
+      return [];
+    }
+
+    return payload.channels
+      .filter((item) => typeof item.channel_id === "number" && typeof item.unread_count === "number")
+      .map((item) => ({
+        channel_id: item.channel_id as number,
+        server_id: typeof item.server_id === "number" ? item.server_id : 0,
+        unread_count: item.unread_count as number,
+      }));
+  }
+
+  // Fire-and-forget, deliberately bypasses the ack queue (same as sendTyping).
+  sendMarkRead(channelId: number, messageId: number): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.socket.send(
+      JSON.stringify({
+        action: "mark_read",
+        payload: { channel_id: channelId, message_id: messageId },
       }),
     );
   }

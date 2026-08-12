@@ -30,6 +30,8 @@ type ServerStorage interface {
 	GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]Attachment, error)
 	GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3Host string) (map[int64]*WsReplyTo, error)
 	GetReplyPreview(ctx context.Context, messageID int64) (*WsReplyTo, error)
+	GetUnreadCounts(ctx context.Context, userID int) ([]WsChannelUnread, error)
+	MarkChannelRead(ctx context.Context, userID int, channelID, messageID int64) error
 }
 
 const (
@@ -52,6 +54,8 @@ const (
 	WsActionChangeVoiceStatus = "change_voice_status"
 	WsActionTypingStart       = "typing_start"
 	WsActionTypingStop        = "typing_stop"
+	WsActionGetUnread         = "get_unread"
+	WsActionMarkRead          = "mark_read"
 
 	WsEventAck                = "ack"
 	WsEventError              = "error"
@@ -223,6 +227,21 @@ type WsSearchServersRequest struct {
 
 type WsSearchServersResponse struct {
 	Servers []Server `json:"servers"`
+}
+
+type WsMarkReadRequest struct {
+	ChannelID int64 `json:"channel_id"`
+	MessageID int64 `json:"message_id"`
+}
+
+type WsChannelUnread struct {
+	ChannelID   int64 `json:"channel_id"`
+	ServerID    int64 `json:"server_id"`
+	UnreadCount int   `json:"unread_count"`
+}
+
+type WsGetUnreadResponse struct {
+	Channels []WsChannelUnread `json:"channels"`
 }
 
 func EncodeWsMessageCursor(cursor WsMessageCursor) (string, error) {
