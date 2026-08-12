@@ -25,6 +25,7 @@ export function useUnread({
     messagesByChannel,
 }: Params) {
     const [unreadByChannel, setUnreadByChannel] = useState<UnreadByChannel>({});
+    const [unreadMentionByChannel, setUnreadMentionByChannel] = useState<Record<number, boolean>>({});
 
     const lastMessageIdByChannel = useRef<Record<number, number>>({});
     const serverIdByChannelRef = useRef<Record<number, number>>({});
@@ -105,6 +106,7 @@ export function useUnread({
         if (channelId <= 0 || messageId <= 0) return;
 
         setUnreadByChannel((prev) => (prev[channelId] ? { ...prev, [channelId]: 0 } : prev));
+        setUnreadMentionByChannel((prev) => (prev[channelId] ? { ...prev, [channelId]: false } : prev));
         scheduleSend(channelId, messageId, force);
     }, [scheduleSend]);
 
@@ -157,6 +159,13 @@ export function useUnread({
                 ...prev,
                 [incoming.channel_id]: (prev[incoming.channel_id] ?? 0) + 1,
             }));
+
+            const isMentioned =
+                currentUserId !== null &&
+                (incoming.mentions?.includes(currentUserId) || incoming.mentions_everyone === true);
+            if (isMentioned) {
+                setUnreadMentionByChannel((prev) => ({ ...prev, [incoming.channel_id]: true }));
+            }
         });
 
         return () => unsubscribe();
@@ -236,9 +245,21 @@ export function useUnread({
         return acc;
     }, [unreadByChannel, channelsByServer]);
 
+    const totalUnread = useMemo(
+        () => Object.values(unreadByChannel).reduce((sum, count) => sum + count, 0),
+        [unreadByChannel],
+    );
+
+    const hasUnreadMention = useMemo(
+        () => Object.entries(unreadMentionByChannel).some(([channelId, flagged]) => flagged && (unreadByChannel[Number(channelId)] ?? 0) > 0),
+        [unreadMentionByChannel, unreadByChannel],
+    );
+
     return {
         unreadByChannel,
         unreadByServer,
+        totalUnread,
+        hasUnreadMention,
         refreshUnread,
     };
 }

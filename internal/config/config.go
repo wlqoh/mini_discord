@@ -21,6 +21,15 @@ type Config struct {
 	JWTRefreshExpirationInMinutes int        `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
 	Mail                          MailConfig `yaml:"mail"`
 	FrontendBaseURL               string     `yaml:"frontend_base_url" env:"FRONTEND_BASE_URL" env-default:"http://localhost:5173"`
+	Push                          PushConfig `yaml:"push"`
+}
+
+type PushConfig struct {
+	Enabled      bool   `yaml:"enabled" env:"PUSH_ENABLED" env-default:"false"`
+	VAPIDPublic  string `yaml:"vapid_public_key" env:"VAPID_PUBLIC_KEY"`
+	VAPIDPrivate string `yaml:"vapid_private_key" env:"VAPID_PRIVATE_KEY"`
+	Subject      string `yaml:"vapid_subject" env:"VAPID_SUBJECT" env-default:"mailto:admin@example.com"`
+	TTLSeconds   int    `yaml:"ttl_seconds" env:"PUSH_TTL_SECONDS" env-default:"43200"`
 }
 
 type MailConfig struct {

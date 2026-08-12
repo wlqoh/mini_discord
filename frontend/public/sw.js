@@ -1,4 +1,4 @@
-const CACHE = "app-shell-v1";
+const CACHE = "app-shell-v2";
 const SHELL = ["/", "/index.html"];
 
 self.addEventListener("install", (e) => {
@@ -49,5 +49,58 @@ self.addEventListener("fetch", (e) => {
             });
             return cached ?? network;
         }),
+    );
+});
+
+// Web Push arrives here when the tab is backgrounded or fully closed. The
+// payload shape is produced by internal/service/push/payload.go — keep the
+// two in sync (see NOTIFICATIONS_PLAN.md §4.6).
+self.addEventListener("push", (e) => {
+    let payload = {};
+    try {
+        payload = e.data ? e.data.json() : {};
+    } catch {
+        payload = {};
+    }
+
+    const title = payload.title || "MuArAb";
+    const options = {
+        body: payload.body || "",
+        icon: payload.icon,
+        badge: payload.badge || "/favicon-192x192.png",
+        tag: payload.tag,
+        renotify: true,
+        data: payload.data || {},
+    };
+
+    e.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Focus an existing tab and hand it the click's target channel/message via
+// postMessage; if no tab is open, fall back to opening one with the target
+// encoded in the query string (read on boot by ChatPage.tsx).
+self.addEventListener("notificationclick", (e) => {
+    e.notification.close();
+    const data = e.notification.data || {};
+
+    e.waitUntil(
+        (async () => {
+            const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+            const target = allClients.find((c) => {
+                try {
+                    return new URL(c.url).origin === self.location.origin;
+                } catch {
+                    return false;
+                }
+            });
+
+            if (target) {
+                await target.focus();
+                target.postMessage({ type: "notification-click", ...data });
+                return;
+            }
+
+            await self.clients.openWindow(data.url || "/");
+        })(),
     );
 });

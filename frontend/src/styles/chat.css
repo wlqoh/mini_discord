@@ -366,6 +366,10 @@ body {
     font-weight: 600;
 }
 
+.channel-row.muted {
+    opacity: 0.5;
+}
+
 .channel-unread-badge {
     margin-left: auto;
     flex: 0 0 auto;
@@ -1066,6 +1070,25 @@ body {
     font-size: 14px;
 }
 
+.mention-chip {
+    color: var(--accent);
+    background: rgba(224, 37, 53, 0.14);
+    border-radius: 4px;
+    padding: 0 4px;
+    font-weight: 600;
+}
+
+.mention-chip-everyone {
+    color: var(--accent);
+    background: rgba(224, 37, 53, 0.2);
+}
+
+.message-row.mentioned .message-item {
+    background: rgba(224, 37, 53, 0.09);
+    border-color: rgba(224, 37, 53, 0.28);
+    box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* Delete button */
 .message-delete-btn {
     border: none;
@@ -1380,6 +1403,84 @@ body {
 .message-input:disabled {
     opacity: 0.48;
     cursor: not-allowed;
+}
+
+.message-input-wrap {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+}
+
+.message-input-wrap .message-input {
+    width: 100%;
+}
+
+.mention-autocomplete {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--glass-2);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    z-index: 30;
+    -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
+}
+
+.mention-autocomplete-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--text-1);
+    font-size: 14px;
+}
+
+.mention-autocomplete-item.active,
+.mention-autocomplete-item:hover {
+    background: var(--glass-1);
+}
+
+.mention-autocomplete-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.mention-autocomplete-avatar-fallback {
+    background: var(--accent);
+    color: #fff;
+}
+
+.mention-autocomplete-avatar-everyone {
+    background: var(--glass-1);
+    color: var(--text-2);
+}
+
+.mention-autocomplete-name {
+    font-weight: 500;
+}
+
+.mention-autocomplete-hint {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-3);
 }
 
 /* Send button */
@@ -3087,4 +3188,204 @@ body,
 
 .skeleton-profile-value {
     height: 10px;
+}
+
+/* Context menu (right-click quick actions) */
+.context-menu {
+    position: fixed;
+    z-index: 200;
+    background: rgba(9, 10, 13, 0.95);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    border: 1px solid var(--glass-border-hi);
+    border-radius: var(--radius-lg);
+    padding: 6px;
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    animation: modal-enter 0.14s ease-out both;
+}
+
+.context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-1);
+    text-align: left;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.context-menu-item:hover:not(:disabled) {
+    background: var(--glass-2);
+}
+
+.context-menu-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.context-menu-item.danger {
+    color: #ff7070;
+}
+
+.context-menu-item-icon {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--accent);
+}
+
+.context-menu-separator {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--glass-border);
+}
+
+/* Notification settings modal */
+.notification-settings-modal {
+    width: min(480px, 92vw);
+    max-height: 85vh;
+    overflow-y: auto;
+}
+
+.notification-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.notification-settings-section:last-of-type {
+    border-bottom: none;
+}
+
+.notification-settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.notification-settings-toggle input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.notification-settings-dnd-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.notification-settings-volume {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    justify-content: flex-end;
+    color: var(--text-2);
+}
+
+.notification-settings-volume input[type="range"] {
+    accent-color: var(--accent);
+    max-width: 140px;
+}
+
+.notification-settings-test-status {
+    font-size: 12px;
+    color: var(--text-3);
+}
+
+.notification-settings-overrides {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.notification-settings-override-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-1);
+}
+
+.notification-settings-override-detail {
+    color: var(--text-3);
+    font-size: 12px;
+    margin-right: auto;
+}
+
+/* Soft notification-permission pre-prompt banner */
+.notification-permission-banner {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(560px, calc(100vw - 24px));
+    padding: 10px 14px;
+    background: rgba(9, 10, 13, 0.95);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    border: 1px solid var(--glass-border-hi);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    color: var(--accent);
+    animation: modal-enter 0.18s ease-out both;
+}
+
+.notification-permission-banner-text {
+    color: var(--text-1);
+    font-size: 13px;
+    flex: 1;
+    min-width: 0;
+}
+
+.notification-permission-banner-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.notification-permission-banner-close {
+    border: none;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    padding: 4px;
+    flex-shrink: 0;
+}
+
+.notification-permission-banner-close:hover {
+    color: var(--text-1);
+}
+
+@media (max-width: 768px) {
+    .notification-permission-banner {
+        flex-wrap: wrap;
+        top: 8px;
+    }
 }

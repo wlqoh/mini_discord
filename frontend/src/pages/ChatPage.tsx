@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
@@ -25,6 +25,26 @@ import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
 import { useUnread } from "../hooks/useUnread.ts";
 import { useJumpToLatest } from "../hooks/useJumpToLatest.ts";
+import { useNotifications } from "../hooks/useNotifications.ts";
+import { useServerMembers } from "../hooks/useServerMembers.ts";
+import { useNotificationSettings } from "../hooks/useNotificationSettings.ts";
+import NotificationSettingsModal from "../components/NotificationSettingsModal.tsx";
+import NotificationPermissionBanner from "../components/NotificationPermissionBanner.tsx";
+import { useDocumentBadge } from "../hooks/useDocumentBadge.ts";
+import {
+    initSoundUnlock,
+    initLeaderElection,
+    getPermissionState,
+    requestNotificationPermission,
+    resolveLevel,
+    isMuted as isChannelNotificationMuted,
+    subscribeToPush,
+    dismissSoftPrompt,
+    type PermissionState,
+} from "../services/notifications";
+import type { NotificationClickData } from "../types/notifications.ts";
+import ContextMenu from "../components/ContextMenu.tsx";
+import { useNotificationContextMenu } from "../hooks/useNotificationContextMenu.ts";
 import "../styles/chat.css";
 
 const COLOR_THEME_KEY = "color_theme";
@@ -65,6 +85,9 @@ export default function ChatPage() {
     const [closingModal, setClosingModal] = useState<string | null>(null);
     const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
     const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
+    const [notificationPermission, setNotificationPermission] = useState<PermissionState>(() => getPermissionState());
+    const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false);
+    const [showPermissionBanner, setShowPermissionBanner] = useState(false);
     const isMobileDevice = useMediaQuery("(max-width: 1024px) and (pointer: coarse)");
     const isPhone = useMediaQuery("(max-width: 768px)");
 
@@ -107,6 +130,33 @@ export default function ChatPage() {
         document.addEventListener("visibilitychange", handler);
         return () => document.removeEventListener("visibilitychange", handler);
     }, []);
+
+    // Notification sound unlock (first user gesture) + multi-tab leader election.
+    useEffect(() => {
+        const disposeUnlock = initSoundUnlock();
+        const disposeLeader = initLeaderElection();
+        return () => {
+            disposeUnlock();
+            disposeLeader();
+        };
+    }, []);
+
+    async function handleEnableNotifications(): Promise<void> {
+        const result = await requestNotificationPermission();
+        setNotificationPermission(result);
+        if (result === "granted") {
+            void subscribeToPush();
+        }
+    }
+
+    // Ensure a push subscription exists whenever permission is already granted
+    // (e.g. returning to the app, or a fresh device that inherited an OS-level
+    // grant) — subscribeToPush() no-ops safely if push is disabled server-side.
+    useEffect(() => {
+        if (notificationPermission === "granted") {
+            void subscribeToPush();
+        }
+    }, [notificationPermission]);
 
     // Theme effect
     useEffect(() => {
@@ -188,6 +238,85 @@ export default function ChatPage() {
         channelsByServer: servers.channelsByServer,
         messagesByChannel,
     });
+
+    const notificationSettings = useNotificationSettings(currentUserId !== null);
+    const notificationMenu = useNotificationContextMenu(
+        notificationSettings.settings,
+        notificationSettings.updateServer,
+        notificationSettings.updateChannel,
+    );
+
+    useNotifications({
+        socketRef,
+        isConnected,
+        isPageVisible,
+        currentUserId,
+        selectedChannelId: servers.selectedChannelId,
+        channelsByServer: servers.channelsByServer,
+        settings: notificationSettings.settings,
+        onMissedPermission: () => setShowPermissionBanner(true),
+    });
+
+    async function handlePermissionBannerEnable(): Promise<void> {
+        setShowPermissionBanner(false);
+        await handleEnableNotifications();
+    }
+
+    function handlePermissionBannerDismiss(): void {
+        setShowPermissionBanner(false);
+        dismissSoftPrompt();
+    }
+
+    useDocumentBadge(unread.totalUnread, unread.hasUnreadMention);
+
+    const serverMembers = useServerMembers(socketRef, isConnected, servers.selectedServerId);
+
+    // Navigate to a channel/message referenced by a notification click, whether it
+    // arrived over postMessage (tab was already open) or as boot query params
+    // (tab was opened fresh by the Service Worker — see public/sw.js).
+    const navigateFromNotification = useCallback(
+        (data: NotificationClickData) => {
+            if (!data.channel_id) return;
+            (async () => {
+                if (data.server_id && data.server_id !== servers.selectedServerId) {
+                    await servers.handleSelectServer(data.server_id);
+                }
+                servers.setSelectedChannelId(data.channel_id!);
+                if (data.message_id) {
+                    window.setTimeout(() => scrollToMessage(data.message_id!), 300);
+                }
+            })();
+        },
+        [servers],
+    );
+
+    useEffect(() => {
+        if (!("serviceWorker" in navigator)) return;
+        const handler = (event: MessageEvent) => {
+            if (event.data?.type === "notification-click") {
+                navigateFromNotification(event.data as NotificationClickData);
+            }
+        };
+        navigator.serviceWorker.addEventListener("message", handler);
+        return () => navigator.serviceWorker.removeEventListener("message", handler);
+    }, [navigateFromNotification]);
+
+    const hasHandledBootParamsRef = useRef(false);
+    useEffect(() => {
+        if (hasHandledBootParamsRef.current || !isConnected) return;
+
+        const params = new URLSearchParams(window.location.search);
+        const channelId = Number(params.get("channel"));
+        const messageId = Number(params.get("message"));
+        if (channelId > 0) {
+            hasHandledBootParamsRef.current = true;
+            navigateFromNotification({ channel_id: channelId, message_id: messageId > 0 ? messageId : undefined });
+            const url = new URL(window.location.href);
+            url.searchParams.delete("channel");
+            url.searchParams.delete("message");
+            window.history.replaceState({}, "", url.toString());
+        }
+    }, [isConnected, navigateFromNotification]);
 
     // Derived values
     const activeChannels = servers.channelsByServer[servers.selectedServerId] ?? [];
@@ -314,6 +443,12 @@ export default function ChatPage() {
 
     return (
         <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
+            {showPermissionBanner && notificationPermission === "default" ? (
+                <NotificationPermissionBanner
+                    onEnable={() => void handlePermissionBannerEnable()}
+                    onDismiss={handlePermissionBannerDismiss}
+                />
+            ) : null}
             <aside className="servers-sidebar">
                 <button
                     className="server-add-btn"
@@ -341,6 +476,7 @@ export default function ChatPage() {
                                 <button
                                     className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
                                     onClick={() => void servers.handleSelectServer(server.id)}
+                                    onContextMenu={(e) => notificationMenu.openServerMenu(e, server.id)}
                                     title={`Server ${server.name} (ID ${server.id})`}
                                     aria-label={`Server ${server.name}`}
                                 >
@@ -419,12 +555,17 @@ export default function ChatPage() {
                 <ul className="channels-list">
                     {activeChannels.map((channel) => {
                         const channelUnread = channel.type === "text" ? unread.unreadByChannel[channel.id] ?? 0 : 0;
+                        const channelLevel = resolveLevel(notificationSettings.settings, servers.selectedServerId, channel.id);
+                        const isChannelSilenced =
+                            channelLevel === "none" ||
+                            isChannelNotificationMuted(notificationSettings.settings, servers.selectedServerId, channel.id);
                         return (
                         <li key={channel.id} className="channel-item">
                             <div className="channel-row-wrap">
                                 <button
-                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""} ${channelUnread > 0 ? "has-unread" : ""}`}
+                                    className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""} ${channelUnread > 0 ? "has-unread" : ""} ${isChannelSilenced ? "muted" : ""}`}
                                     onClick={() => { servers.setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
+                                    onContextMenu={(e) => notificationMenu.openChannelMenu(e, channel.id)}
                                     type="button"
                                 >
                                     {channel.type === "voice"
@@ -679,7 +820,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
                 </div>
                 <JumpToLatestButton
                     isVisible={jump.isVisible}
@@ -708,6 +849,7 @@ export default function ChatPage() {
                             onCancelReply={() => messages.setReplyToMessage(null)}
                             onTypingInput={typingEmitter.onInput}
                             onTypingStop={typingEmitter.stop}
+                            serverMembers={serverMembers.members}
                         />
                     </>
                 )}
@@ -832,6 +974,18 @@ export default function ChatPage() {
                                                 title={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
                                             >
                                                 {theme === "light" ? <Moon size={18} aria-hidden="true"/> : <Sun size={18} aria-hidden="true"/>}
+                                            </button>
+                                        </div>
+                                    ) : null}
+                                    {profile.isSelfProfile ? (
+                                        <div className="profile-modal-row">
+                                            <span className="profile-modal-label">Notifications</span>
+                                            <button
+                                                className="modal-btn modal-btn-secondary"
+                                                type="button"
+                                                onClick={() => setIsNotificationSettingsOpen(true)}
+                                            >
+                                                <Bell size={16} aria-hidden="true" /> Settings
                                             </button>
                                         </div>
                                     ) : null}
@@ -1062,7 +1216,30 @@ export default function ChatPage() {
                 </div>
             )}
 
+            {isNotificationSettingsOpen && (
+                <NotificationSettingsModal
+                    onClose={() => setIsNotificationSettingsOpen(false)}
+                    settings={notificationSettings.settings}
+                    isLoading={notificationSettings.isLoading}
+                    error={notificationSettings.error}
+                    updateGlobal={notificationSettings.updateGlobal}
+                    updateServer={notificationSettings.updateServer}
+                    updateChannel={notificationSettings.updateChannel}
+                    servers={servers.servers}
+                    channelsByServer={servers.channelsByServer}
+                    permission={notificationPermission}
+                    onRequestPermission={() => void handleEnableNotifications()}
+                />
+            )}
 
+            {notificationMenu.menu && (
+                <ContextMenu
+                    x={notificationMenu.menu.x}
+                    y={notificationMenu.menu.y}
+                    items={notificationMenu.menu.items}
+                    onClose={notificationMenu.closeMenu}
+                />
+            )}
         </div>
     );
 }

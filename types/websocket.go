@@ -32,6 +32,11 @@ type ServerStorage interface {
 	GetReplyPreview(ctx context.Context, messageID int64) (*WsReplyTo, error)
 	GetUnreadCounts(ctx context.Context, userID int) ([]WsChannelUnread, error)
 	MarkChannelRead(ctx context.Context, userID int, channelID, messageID int64) error
+
+	IsChannelServerOwner(ctx context.Context, userID int, channelID int64) (bool, error)
+	ListServerMembers(ctx context.Context, serverID int64, s3Host string) ([]WsServerMember, error)
+	SaveMessageMentions(ctx context.Context, messageID int64, userIDs []int) error
+	GetMessageMentions(ctx context.Context, messageIDs []int64) (map[int64][]int, error)
 }
 
 const (
@@ -56,6 +61,7 @@ const (
 	WsActionTypingStop        = "typing_stop"
 	WsActionGetUnread         = "get_unread"
 	WsActionMarkRead          = "mark_read"
+	WsActionGetServerMembers  = "get_server_members"
 
 	WsEventAck                = "ack"
 	WsEventError              = "error"
@@ -283,19 +289,37 @@ type WsEvent struct {
 }
 
 type WsMessage struct {
-	ID              int64        `json:"id"`
-	ChannelID       int64        `json:"channel_id"`
-	AuthorID        int          `json:"author_id"`
-	AuthorFirstName string       `json:"author_first_name"`
-	AuthorLastName  string       `json:"author_last_name"`
-	AuthorNickname  string       `json:"author_nickname,omitempty"`
-	AuthorAvatarURL string       `json:"author_avatar_url,omitempty"`
-	Content         string       `json:"content"`
-	Attachments     []Attachment `json:"attachments,omitempty"`
-	ReplyToID       *int64       `json:"reply_to_id,omitempty"`
-	ReplyTo         *WsReplyTo   `json:"reply_to,omitempty"`
-	CreatedAt       time.Time    `json:"created_at"`
-	EditedAt        *time.Time   `json:"edited_at,omitempty"`
+	ID               int64        `json:"id"`
+	ChannelID        int64        `json:"channel_id"`
+	AuthorID         int          `json:"author_id"`
+	AuthorFirstName  string       `json:"author_first_name"`
+	AuthorLastName   string       `json:"author_last_name"`
+	AuthorNickname   string       `json:"author_nickname,omitempty"`
+	AuthorAvatarURL  string       `json:"author_avatar_url,omitempty"`
+	Content          string       `json:"content"`
+	Attachments      []Attachment `json:"attachments,omitempty"`
+	ReplyToID        *int64       `json:"reply_to_id,omitempty"`
+	ReplyTo          *WsReplyTo   `json:"reply_to,omitempty"`
+	Mentions         []int        `json:"mentions,omitempty"`
+	MentionsEveryone bool         `json:"mentions_everyone,omitempty"`
+	CreatedAt        time.Time    `json:"created_at"`
+	EditedAt         *time.Time   `json:"edited_at,omitempty"`
+}
+
+type WsServerMember struct {
+	UserID    int    `json:"user_id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Nickname  string `json:"nickname,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+type WsGetServerMembersRequest struct {
+	ServerID int64 `json:"server_id"`
+}
+
+type WsGetServerMembersResponse struct {
+	Members []WsServerMember `json:"members"`
 }
 
 type WsReplyTo struct {

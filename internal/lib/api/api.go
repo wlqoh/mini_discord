@@ -13,6 +13,8 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
+	"github.com/wlqoh/mini_discord.git/internal/service/notification"
+	"github.com/wlqoh/mini_discord.git/internal/service/push"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
 	"github.com/wlqoh/mini_discord.git/internal/storage/objectStorage"
@@ -52,13 +54,17 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	api := app.Group("/api")
 	v1 := api.Group("/v1")
 
-	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret))
+	pushSender := push.NewSender(s.db, cfg.Push, log)
+	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret), pushSender)
 
 	userHandler := user.NewHandler(s.db, s.db, cfg, log, s3Client, hub)
 	userHandler.RegisterRoutes(v1)
 
 	wsHandler := server.NewHandler(hub, cfg.HTTPServer.WSAllowedOrigins)
 	wsHandler.RegisterRoutes(v1)
+
+	notificationHandler := notification.NewHandler(s.db, cfg, log)
+	notificationHandler.RegisterRoutes(v1)
 	go hub.Run()
 	go func() {
 		if err := app.Listen(cfg.Address); err != nil {

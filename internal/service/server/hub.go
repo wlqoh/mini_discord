@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
+	"github.com/wlqoh/mini_discord.git/internal/service/push"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -23,6 +25,7 @@ type Hub struct {
 	storage              types.ServerStorage
 	s3Client             types.S3ClientStorage
 	s3Host               string
+	pushSender           *push.Sender
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
 	createServerLimiter  *middleware.TokenBucket
@@ -59,12 +62,17 @@ type voiceStatus struct {
 
 const maxServerChannelNameLen = 16
 const maxAttachmentsPerMessage = 10
+const maxMentionsPerMessage = 50
+const everyoneMentionToken = "@everyone"
 
-func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte) *Hub {
+var mentionTokenRegex = regexp.MustCompile(`<@(\d+)>`)
+
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender) *Hub {
 	return &Hub{
 		storage:              storage,
 		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
+		pushSender:           pushSender,
 		clientsByUser:        make(map[int]*Client),
 		createServerLimiter:  middleware.NewTokenBucket(5.0/60.0, 5.0),
 		createChannelLimiter: middleware.NewTokenBucket(5.0/60.0, 5.0),
@@ -226,6 +234,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.getUnread(req, ctx)
 	case types.WsActionMarkRead:
 		h.markRead(req, ctx)
+	case types.WsActionGetServerMembers:
+		h.getServerMembers(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -646,6 +656,42 @@ func (h *Hub) createChannel(req wsCommandRequest, ctx context.Context) {
 	})
 }
 
+// getServerMembers backs the @-mention autocomplete: unlike get_users_online
+// it returns every member (not just online ones) together with their user_id,
+// which get_users_online's response shape does not carry.
+func (h *Hub) getServerMembers(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsGetServerMembersRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid get_server_members payload")
+		return
+	}
+	if payload.ServerID <= 0 {
+		h.pushError(req.client, "server_id is required")
+		return
+	}
+
+	isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+	if err != nil {
+		h.pushError(req.client, "failed to check server membership")
+		return
+	}
+	if !isMember {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	members, err := h.storage.ListServerMembers(ctx, payload.ServerID, h.s3Host)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve server members")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  types.WsGetServerMembersResponse{Members: members},
+	})
+}
+
 func (h *Hub) getUsersOnline(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsGetUsersOnlineRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
@@ -700,6 +746,47 @@ func (h *Hub) getUsersOnline(req wsCommandRequest, ctx context.Context) {
 			Users:    onlineUsers,
 		},
 	})
+}
+
+// resolveMentions extracts <@id> tokens from message content and validates
+// each id against the channel's actual recipients — a hand-crafted mention of
+// a non-member is dropped silently rather than trusted. @everyone is only
+// honored for the server owner to prevent it being used as a spam tool.
+func (h *Hub) resolveMentions(ctx context.Context, content string, authorID int, channelID int64, recipientUserIDs []int) ([]int, bool) {
+	memberSet := make(map[int]struct{}, len(recipientUserIDs))
+	for _, id := range recipientUserIDs {
+		memberSet[id] = struct{}{}
+	}
+
+	seen := make(map[int]struct{})
+	var mentioned []int
+	for _, match := range mentionTokenRegex.FindAllStringSubmatch(content, -1) {
+		if len(mentioned) >= maxMentionsPerMessage {
+			break
+		}
+		id, err := strconv.Atoi(match[1])
+		if err != nil || id == authorID {
+			continue
+		}
+		if _, ok := memberSet[id]; !ok {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		mentioned = append(mentioned, id)
+	}
+
+	everyone := false
+	if strings.Contains(content, everyoneMentionToken) {
+		isOwner, err := h.storage.IsChannelServerOwner(ctx, authorID, channelID)
+		if err == nil && isOwner {
+			everyone = true
+		}
+	}
+
+	return mentioned, everyone
 }
 
 func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
@@ -779,26 +866,36 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	mentionedUserIDs, mentionsEveryone := h.resolveMentions(ctx, payload.Content, req.client.UserID, payload.ChannelID, recipientUserIDs)
+
 	content := payload.Content
 	if content == "" {
 		content = " "
 	}
 
 	msg := &types.WsMessage{
-		ChannelID:       payload.ChannelID,
-		AuthorID:        req.client.UserID,
-		AuthorFirstName: user.FirstName,
-		AuthorLastName:  user.LastName,
-		AuthorNickname:  user.Nickname,
-		AuthorAvatarURL: utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
-		Content:         content,
-		ReplyToID:       payload.ReplyToID,
-		ReplyTo:         replyTo,
-		CreatedAt:       time.Now().UTC(),
+		ChannelID:        payload.ChannelID,
+		AuthorID:         req.client.UserID,
+		AuthorFirstName:  user.FirstName,
+		AuthorLastName:   user.LastName,
+		AuthorNickname:   user.Nickname,
+		AuthorAvatarURL:  utils.AvatarURLFromKey(user.AvatarKey, h.s3Host),
+		Content:          content,
+		ReplyToID:        payload.ReplyToID,
+		ReplyTo:          replyTo,
+		Mentions:         mentionedUserIDs,
+		MentionsEveryone: mentionsEveryone,
+		CreatedAt:        time.Now().UTC(),
 	}
 	if err := h.storage.SaveMessage(ctx, msg); err != nil {
 		h.pushError(req.client, "failed to save message")
 		return
+	}
+
+	if len(mentionedUserIDs) > 0 {
+		if err := h.storage.SaveMessageMentions(ctx, msg.ID, mentionedUserIDs); err != nil {
+			h.log.Error("failed to save message mentions", "message_id", msg.ID, "error", err.Error())
+		}
 	}
 
 	if len(pendingAtts) > 0 {
@@ -834,8 +931,54 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
 	h.pushToUsers(recipientUserIDs, event)
+	h.enqueuePush(ctx, payload.ChannelID, recipientUserIDs, msg, replyTo)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+// enqueuePush hands the message off to the push.Sender for offline
+// recipients. Non-fatal on any failure here — the message has already been
+// saved and broadcast over WS; push is best-effort on top of that.
+func (h *Hub) enqueuePush(ctx context.Context, channelID int64, recipientUserIDs []int, msg *types.WsMessage, replyTo *types.WsReplyTo) {
+	if h.pushSender == nil {
+		return
+	}
+
+	channel, err := h.storage.GetChannelByID(ctx, channelID)
+	if err != nil || channel == nil {
+		h.log.Error("failed to resolve channel for push", "channel_id", channelID)
+		return
+	}
+
+	isMention := make(map[int]bool, len(recipientUserIDs))
+	for _, userID := range msg.Mentions {
+		isMention[userID] = true
+	}
+	if replyTo != nil {
+		isMention[replyTo.AuthorID] = true
+	}
+	if msg.MentionsEveryone {
+		for _, userID := range recipientUserIDs {
+			isMention[userID] = true
+		}
+	}
+
+	h.mu.RLock()
+	onlineIDs := make(map[int]bool, len(h.clientsByUser))
+	for userID := range h.clientsByUser {
+		onlineIDs[userID] = true
+	}
+	h.mu.RUnlock()
+
+	h.pushSender.Enqueue(push.Event{
+		RecipientIDs: recipientUserIDs,
+		ChannelID:    channelID,
+		ServerID:     channel.ServerID,
+		ChannelName:  channel.Name,
+		Message:      msg,
+		IsMention:    isMention,
+		OnlineIDs:    onlineIDs,
+	})
 }
 
 func (h *Hub) deleteMessage(req wsCommandRequest, ctx context.Context) {

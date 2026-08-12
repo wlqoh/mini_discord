@@ -5,7 +5,7 @@ import type {
   OnlineUser,
   ReplyPreview,
   RTCSignalEvent,
-  RTCSignalPayload, TypingEvent, UserProfile,
+  RTCSignalPayload, ServerMember, TypingEvent, UserProfile,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -76,6 +76,16 @@ type GetUsersOnlineAck = {
 
 type SearchServersAck = {
   servers?: Array<{ id?: number; name?: string }>;
+};
+
+type GetServerMembersAck = {
+  members?: Array<{
+    user_id?: number;
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    avatar_url?: string;
+  }>;
 };
 
 type GetUserInfoAck = {
@@ -156,6 +166,8 @@ type RawMessage = {
   attachments?: unknown;
   reply_to_id?: unknown;
   reply_to?: RawReplyTo | null;
+  mentions?: unknown;
+  mentions_everyone?: unknown;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -282,6 +294,10 @@ function toMessage(raw: unknown): Message | null {
     attachments: parseAttachments(candidate.attachments),
     reply_to_id: replyToId,
     reply_to: replyTo,
+    mentions: Array.isArray(candidate.mentions)
+      ? candidate.mentions.filter((id): id is number => typeof id === "number")
+      : undefined,
+    mentions_everyone: typeof candidate.mentions_everyone === "boolean" ? candidate.mentions_everyone : undefined,
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
 }
@@ -738,6 +754,24 @@ export class ChatSocket {
         user_id: typeof user.user_id === "number" ? user.user_id : undefined,
         avatar_url: typeof user.avatar_url === "string" ? user.avatar_url : undefined,
         email: typeof user.email === "string" ? user.email : undefined,
+      }));
+  }
+
+  async getServerMembers(serverId: number): Promise<ServerMember[]> {
+    const payload = await this.sendCommand<GetServerMembersAck>("get_server_members", { server_id: serverId });
+
+    if (!Array.isArray(payload?.members)) {
+      return [];
+    }
+
+    return payload.members
+      .filter((member) => typeof member.user_id === "number")
+      .map((member) => ({
+        user_id: member.user_id as number,
+        first_name: typeof member.first_name === "string" ? member.first_name : undefined,
+        last_name: typeof member.last_name === "string" ? member.last_name : undefined,
+        nickname: typeof member.nickname === "string" ? member.nickname : undefined,
+        avatar_url: typeof member.avatar_url === "string" ? member.avatar_url : undefined,
       }));
   }
 

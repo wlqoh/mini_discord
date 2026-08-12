@@ -42,7 +42,17 @@ export interface Message {
     attachments?: Attachment[];
     reply_to_id?: number | null;
     reply_to?: ReplyPreview | null;
+    mentions?: number[];
+    mentions_everyone?: boolean;
     created_at: string;
+}
+
+export interface ServerMember {
+    user_id: number;
+    first_name?: string;
+    last_name?: string;
+    nickname?: string;
+    avatar_url?: string;
 }
 
 export interface VoiceParticipant {
