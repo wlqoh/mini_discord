@@ -63,6 +63,27 @@ export function useVoice({
     const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
 
     const micBeforeDeafenRef = useRef(true);
+    const voiceChannelIdRef = useRef(0);
+    useEffect(() => {
+        voiceChannelIdRef.current = voiceChannelId;
+    }, [voiceChannelId]);
+
+    // Fired when ChatSocket reconnects after an unplanned disconnect. The
+    // server drops the user from the voice channel as soon as its socket
+    // closes (see hub.go unregisterClient), so the client must actively
+    // rejoin — without this, anyone who briefly lost their WS connection
+    // mid-call (idle timeout, network blip, backend restart) stays silently
+    // dropped from the call until they reload the page.
+    const onReconnectRestored = useCallback(() => {
+        const channelId = voiceChannelIdRef.current;
+        if (channelId <= 0) {
+            return;
+        }
+        void callClientRef.current?.rejoin(channelId).catch((err) => {
+            const message = err instanceof Error ? err.message : "Failed to restore voice connection";
+            setError(message);
+        });
+    }, [callClientRef, setError]);
 
     // Voice volume persistence effect
     useEffect(() => {
@@ -81,6 +102,18 @@ export function useVoice({
             });
         });
     }, [remoteStreams, isDeafened]);
+
+    // Feeds the server's authoritative participant list (refreshed by the
+    // periodic get_server_channels poll in useServers) into CallClient's
+    // reconciliation loop, so a peer that never got created — or one whose
+    // participant left without a voice_user_left event arriving — gets fixed
+    // within one reconcile tick instead of staying wrong for the whole call.
+    useEffect(() => {
+        if (voiceChannelId <= 0) {
+            return;
+        }
+        callClientRef.current?.syncParticipants(voiceChannelId, voiceParticipantsByChannel[voiceChannelId] ?? []);
+    }, [voiceChannelId, voiceParticipantsByChannel, callClientRef]);
 
     const toParticipantLabel = useCallback((participant: VoiceParticipant): string => {
         const nickname = participant.nickname?.trim();
@@ -464,5 +497,6 @@ export function useVoice({
         voiceParticipantsInChannel,
         callClientCallbacks,
         voiceSocketHandlers,
+        onReconnectRestored,
     };
 }

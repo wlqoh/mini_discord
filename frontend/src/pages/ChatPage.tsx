@@ -197,6 +197,7 @@ export default function ChatPage() {
         setMessagesByChannel,
         callClientCallbacks: voice.callClientCallbacks,
         voiceSocketHandlers: voice.voiceSocketHandlers,
+        onSocketReconnectRestored: voice.onReconnectRestored,
         currentUserId,
     });
 
@@ -813,7 +814,7 @@ export default function ChatPage() {
                                         const effectiveVolume = voice.isDeafened ? 0 : userVolume;
                                         return (
                                             <VideoTile
-                                                key={`${participant.user_id}-${voice.isDeafened ? "deaf" : "live"}`}
+                                                key={participant.user_id}
                                                 stream={stream}
                                                 label={label}
                                                 muted={voice.isDeafened}

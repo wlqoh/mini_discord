@@ -41,6 +41,7 @@ type Params = {
         onVoiceUserLeft: (event: { channel_id: number; user: VoiceParticipant }) => void;
         onVoiceStatusChanged: (event: { channel_id: number; user: VoiceParticipant }) => void;
     };
+    onSocketReconnectRestored: () => void;
     currentUserId: number | null;
 };
 
@@ -57,6 +58,7 @@ export function useServers({
     setMessagesByChannel,
     callClientCallbacks,
     voiceSocketHandlers,
+    onSocketReconnectRestored,
     currentUserId,
 }: Params) {
     const [servers, setServers] = useState<Server[]>([]);
@@ -223,6 +225,22 @@ export function useServers({
         const unsubscribeVoiceUserLeft = socket.onVoiceUserLeft(voiceSocketHandlers.onVoiceUserLeft);
         const unsubscribeVoiceStatusChanged = socket.onVoiceStatusChanged(voiceSocketHandlers.onVoiceStatusChanged);
 
+        // An unplanned disconnect (idle proxy timeout, network blip, backend
+        // restart) previously left isConnected stuck at true forever and the
+        // user in voice silently dropped with no way back short of a reload.
+        const unsubscribeReconnect = socket.onReconnect((phase) => {
+            if (phase === "restored") {
+                setIsConnected(true);
+                setIsConnectedLocal(true);
+                setError("");
+                onSocketReconnectRestored();
+                void syncServersAndChannels();
+            } else {
+                setIsConnected(false);
+                setIsConnectedLocal(false);
+            }
+        });
+
         (async () => {
             try {
                 await socket.connect();
@@ -252,6 +270,7 @@ export function useServers({
             unsubscribeVoiceUserJoined();
             unsubscribeVoiceUserLeft();
             unsubscribeVoiceStatusChanged();
+            unsubscribeReconnect();
             callClientRef.current?.dispose();
             callClientRef.current = null;
             socketRef.current?.close();
@@ -259,7 +278,7 @@ export function useServers({
             setIsConnected(false);
             setIsConnectedLocal(false);
         };
-    }, [handleAuthFailure, syncServersAndChannels, currentUserId, callClientCallbacks, voiceSocketHandlers, socketRef, callClientRef, setIsConnected, setError]);
+    }, [handleAuthFailure, syncServersAndChannels, currentUserId, callClientCallbacks, voiceSocketHandlers, onSocketReconnectRestored, socketRef, callClientRef, setIsConnected, setError]);
 
     // Periodic sync effect
     useEffect(() => {

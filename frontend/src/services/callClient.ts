@@ -31,12 +31,19 @@ type LocalStreamListener = (stream: MediaStream | null) => void;
 type ErrorListener = (message: string) => void;
 type QualityListener = (quality: Record<number, PeerQuality>) => void;
 type CameraFacingMode = "user" | "environment";
+type PeerHealth = "ok" | "connecting" | "broken";
 
 type PeerState = {
   pc: RTCPeerConnection;
   stream: MediaStream;
   user: VoiceParticipant;
   pendingCandidates: RTCIceCandidateInit[];
+  // Perfect-negotiation bookkeeping (see ensurePeer/handleDescription below).
+  // The polite side accepts an implicit rollback on glare; the impolite side wins.
+  polite: boolean;
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+  isSettingRemoteAnswerPending: boolean;
 };
 
 function isWebRTCDebugEnabled(): boolean {
@@ -168,6 +175,9 @@ export class CallClient {
   private iceServers = buildIceServers();
 
   private turnCredentialsPromise: Promise<void> | null = null;
+  // 0 means "static creds (never expire) or not fetched yet". Only set for
+  // dynamically-issued (short-TTL) credentials from getTurnCredentials().
+  private turnExpiresAt = 0;
   private preferredFacingMode: CameraFacingMode = "user";
   private switchCameraPromise: Promise<void> | null = null;
   private screenSharePromise: Promise<boolean> | null = null;
@@ -192,15 +202,35 @@ export class CallClient {
 
   private lastQualitySignature = "";
 
-  private readonly renegotiateRetryTimers = new Map<number, number>();
   private readonly iceRestartTimers = new Map<number, number>();
-  private readonly iceRestartAttempts = new Map<number, number>();
+
+  // Peer reconciliation: periodically reconciles the server's authoritative
+  // participant list against the live peer map, recreating any peer that's
+  // missing or stuck (lost signaling events, unresolved glare, dead ICE).
+  private reconcileTimer: number | null = null;
+  private readonly peerAttempts = new Map<number, number>();
+  private readonly peerSince = new Map<number, number>();
+  private static readonly RECONCILE_INTERVAL_MS = 4000;
+  private static readonly CONNECT_GRACE_MS = 15000;
+  private static readonly MAX_PEER_ATTEMPTS = 8;
+
+  // Serializes signal handling per remote peer so an offer and the ICE
+  // candidates that immediately follow it can't race each other.
+  private readonly signalQueues = new Map<number, Promise<void>>();
 
   private rnnoiseAudioContext: AudioContext | null = null;
 
   private rnnoiseSource: MediaStreamAudioSourceNode | null = null;
 
   private rnnoiseNode: RnnoiseWorkletNode | null = null;
+
+  // Timestamp of when the RNNoise AudioContext first went "suspended"
+  // (browser autoplay policy, background-tab throttling, device change), or
+  // null when it isn't. If it stays suspended too long the outgoing audio
+  // track goes silent while the UI still shows the mic as enabled — checked
+  // by the reconciliation loop (see checkRnnoiseWatchdog).
+  private rnnoiseSuspendedSince: number | null = null;
+  private static readonly RNNOISE_SUSPENDED_FALLBACK_MS = 3000;
 
   private static rnnoiseBinaryPromise: Promise<ArrayBuffer> | null = null;
 
@@ -223,7 +253,26 @@ export class CallClient {
 
     this.unsubscribers.push(this.socket.onVoiceUserJoined((event) => this.handleVoiceUserJoined(event)));
     this.unsubscribers.push(this.socket.onVoiceUserLeft((event) => this.handleVoiceUserLeft(event)));
-    this.unsubscribers.push(this.socket.onRTCSignal((event) => void this.handleRTCSignal(event)));
+    this.unsubscribers.push(
+      this.socket.onRTCSignal((event) => this.enqueueSignal(event.from_user_id, () => this.handleRTCSignal(event))),
+    );
+  }
+
+  /**
+   * Serializes signal processing per remote peer. Without this, an offer and
+   * the ICE candidates that immediately follow it can be handled concurrently,
+   * racing setRemoteDescription against itself (InvalidStateError) and
+   * silently dropping the signal.
+   */
+  private enqueueSignal(fromUserID: number, task: () => Promise<void>): void {
+    const previous = this.signalQueues.get(fromUserID) ?? Promise.resolve();
+    const next = previous.then(task).catch((err) => debugLog("signal:queue-failed", { fromUserID, err }));
+    this.signalQueues.set(fromUserID, next);
+    void next.finally(() => {
+      if (this.signalQueues.get(fromUserID) === next) {
+        this.signalQueues.delete(fromUserID);
+      }
+    });
   }
 
   async join(channelID: number): Promise<JoinVoiceResponse> {
@@ -239,11 +288,10 @@ export class CallClient {
     await this.ensureTurnCredentials();
     debugLog("join:start", { channelID, iceServers: this.iceServers, policy: buildIceTransportPolicy() });
 
-    const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
-
-    this.currentChannelID = response.channel_id;
-    debugLog("join:channel-joined", { channelID: response.channel_id, participants: response.participants.map((p) => p.user_id) });
-
+    // Media is acquired BEFORE joining the channel. If we joined first, an
+    // incoming offer could create a peer while localStream is still null,
+    // which gives that peer recvonly transceivers — and nothing ever re-adds
+    // tracks to an already-created peer, so it stays one-way deaf forever.
     try {
       this.localStream = await this.acquireLocalStream();
       // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
@@ -259,15 +307,49 @@ export class CallClient {
       this.onError(`${message}. Joined voice in listen-only mode.`);
     }
 
+    const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
+
+    this.currentChannelID = response.channel_id;
+    debugLog("join:channel-joined", { channelID: response.channel_id, participants: response.participants.map((p) => p.user_id) });
+
     response.participants.forEach((participant) => {
       this.participants.set(participant.user_id, participant);
-      const shouldInitiate = this.selfUserID < participant.user_id;
-      void this.ensurePeer(participant, shouldInitiate);
+      void this.ensurePeer(participant);
     });
 
     this.startQualityMonitor();
+    this.startReconciliation();
 
     return response;
+  }
+
+  /**
+   * Re-establishes voice after the underlying WebSocket reconnects. The
+   * server drops the user from its voice-channel map on disconnect (see
+   * hub.go unregisterClient), so on the wire this is a fresh join — but
+   * unlike join() it reuses the already-acquired localStream instead of
+   * re-prompting for mic/camera access.
+   */
+  async rejoin(channelID: number): Promise<void> {
+    if (channelID <= 0) {
+      return;
+    }
+
+    this.stopReconciliation();
+    this.closeAllPeers();
+    this.currentChannelID = 0;
+
+    const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
+    this.currentChannelID = response.channel_id;
+    debugLog("rejoin:channel-joined", { channelID: response.channel_id, participants: response.participants.map((p) => p.user_id) });
+
+    this.participants.clear();
+    response.participants.forEach((participant) => {
+      this.participants.set(participant.user_id, participant);
+      void this.ensurePeer(participant);
+    });
+
+    this.startReconciliation();
   }
 
   async startScreenShare(): Promise<void> {
@@ -347,8 +429,17 @@ export class CallClient {
     }
   }
 
+  // Dynamically-issued TURN credentials expire (default TTL 600s server-side)
+  // and a call can easily outlast that. Static creds never need this.
+  private turnCredentialsNeedRefresh(): boolean {
+    if (this.hasStaticTurnCredentials() || this.turnExpiresAt === 0) {
+      return false;
+    }
+    return Date.now() > this.turnExpiresAt - 60_000;
+  }
+
   private async ensureTurnCredentials(): Promise<void> {
-    if (!this.turnCredentialsPromise) {
+    if (!this.turnCredentialsPromise || this.turnCredentialsNeedRefresh()) {
       this.turnCredentialsPromise = (async () => {
         if (this.hasStaticTurnCredentials()) {
           this.iceServers = buildIceServers();
@@ -359,6 +450,8 @@ export class CallClient {
         try {
           const turnCredentials = await getTurnCredentials();
           this.iceServers = buildIceServers(turnCredentials);
+          this.turnExpiresAt =
+            Date.parse(turnCredentials.expires_at) || Date.now() + turnCredentials.ttl_seconds * 1000;
           this.ensureRelayTurnReady();
         } catch (err) {
           this.turnCredentialsPromise = null;
@@ -418,6 +511,7 @@ export class CallClient {
 
   async leave(): Promise<void> {
     this.stopQualityMonitor();
+    this.stopReconciliation();
 
     if (this.currentChannelID > 0) {
       try {
@@ -429,6 +523,8 @@ export class CallClient {
 
     this.closeAllPeers();
     this.participants.clear();
+    this.peerAttempts.clear();
+    this.peerSince.clear();
     this.currentChannelID = 0;
     this.stopLocalTracks();
   }
@@ -576,15 +672,11 @@ export class CallClient {
   }
 
   private closeAllPeers(): void {
-    this.renegotiateRetryTimers.forEach((timerId) => {
-      window.clearTimeout(timerId);
-    });
-    this.renegotiateRetryTimers.clear();
     this.iceRestartTimers.forEach((timerId) => {
       window.clearTimeout(timerId);
     });
     this.iceRestartTimers.clear();
-    this.iceRestartAttempts.clear();
+    this.signalQueues.clear();
 
     this.peers.forEach((state, userID) => {
       state.pc.close();
@@ -593,7 +685,7 @@ export class CallClient {
     this.peers.clear();
   }
 
-  private async ensurePeer(user: VoiceParticipant, initiateOffer: boolean): Promise<RTCPeerConnection> {
+  private async ensurePeer(user: VoiceParticipant): Promise<RTCPeerConnection> {
     const existing = this.peers.get(user.user_id);
     if (existing) {
       existing.user = user;
@@ -605,7 +697,46 @@ export class CallClient {
       iceServers: this.iceServers,
       iceTransportPolicy: buildIceTransportPolicy(),
     });
-    debugLog("peer:create", { userID: user.user_id, initiateOffer });
+    // Perfect negotiation (W3C canonical pattern): the polite side always
+    // accepts the other side's offer (via implicit rollback) on glare; the
+    // impolite side's offer always wins. Politeness must be role-symmetric
+    // across the pair, so it's derived the same way both sides compute it.
+    const polite = this.selfUserID > user.user_id;
+    debugLog("peer:create", { userID: user.user_id, polite });
+
+    const state: PeerState = {
+      pc,
+      stream: remoteStream,
+      user,
+      pendingCandidates: [],
+      polite,
+      makingOffer: false,
+      ignoreOffer: false,
+      isSettingRemoteAnswerPending: false,
+    };
+    this.peers.set(user.user_id, state);
+    this.peerSince.set(user.user_id, Date.now());
+
+    // Single point of (re)negotiation: adding/removing tracks, changing a
+    // transceiver's direction, or calling pc.restartIce() all schedule this
+    // automatically — no manual "who offers first" bookkeeping needed.
+    pc.onnegotiationneeded = async () => {
+      try {
+        state.makingOffer = true;
+        await pc.setLocalDescription();
+        debugLog("signal:offer-send", { userID: user.user_id, sdpSize: pc.localDescription?.sdp?.length ?? 0 });
+        await this.socket.sendRTCSignal({
+          channel_id: this.currentChannelID,
+          to_user_id: user.user_id,
+          signal_type: "offer",
+          sdp: pc.localDescription?.sdp,
+        });
+      } catch (err) {
+        debugLog("peer:negotiation-failed", { userID: user.user_id, err });
+      } finally {
+        state.makingOffer = false;
+      }
+    };
 
     pc.ontrack = (event) => {
       debugLog("peer:ontrack", {
@@ -648,6 +779,14 @@ export class CallClient {
     };
     pc.onconnectionstatechange = () => {
       debugLog("peer:connection-state", { userID: user.user_id, state: pc.connectionState });
+      if (pc.connectionState === "connected") {
+        this.peerAttempts.delete(user.user_id);
+      } else if (pc.connectionState === "failed") {
+        // connectionState "failed" covers DTLS failures that iceConnectionState
+        // alone won't catch (e.g. both sides ended up "active" after a glare
+        // that wasn't resolved — see the perfect-negotiation setup above).
+        this.scheduleIceRestart(user.user_id, "failed");
+      }
     };
     pc.onsignalingstatechange = () => {
       debugLog("peer:signaling-state", { userID: user.user_id, state: pc.signalingState });
@@ -674,9 +813,7 @@ export class CallClient {
       void this.socket.sendRTCSignal(payload);
     };
 
-    this.localStream?.getTracks().forEach((track) => {
-      pc.addTrack(track, this.localStream as MediaStream);
-    });
+    this.syncLocalTracksToPeer(pc);
     const hasLocalAudio = (this.localStream?.getAudioTracks().length ?? 0) > 0;
     const hasLocalVideo = (this.localStream?.getVideoTracks().length ?? 0) > 0;
     if (!hasLocalAudio) {
@@ -686,39 +823,40 @@ export class CallClient {
       pc.addTransceiver("video", { direction: "recvonly" });
     }
 
-    this.peers.set(user.user_id, { pc, stream: remoteStream, user, pendingCandidates: [] });
-
-    if (initiateOffer) {
-      await this.createAndSendOffer(user.user_id);
-    }
-
     return pc;
   }
 
-  private async createAndSendOffer(remoteUserID: number, options?: { iceRestart?: boolean }): Promise<void> {
-    const peer = this.peers.get(remoteUserID);
-    if (!peer || this.currentChannelID <= 0) {
+  /**
+   * Ensures every local track has a matching sender on this peer. Called when
+   * a peer is created and from the reconciliation loop after localStream
+   * appears or changes (e.g. mic access resolved late, camera switched).
+   * Idempotent: safe to call on every reconcile tick. Renegotiation itself is
+   * driven automatically by onnegotiationneeded once a sender's track or a
+   * transceiver's direction actually changes — this never sends offers itself.
+   */
+  private syncLocalTracksToPeer(pc: RTCPeerConnection): void {
+    const stream = this.localStream;
+    if (!stream) {
       return;
     }
 
-    if (peer.pc.signalingState !== "stable") {
-      this.scheduleRenegotiationRetry(remoteUserID);
-      return;
-    }
+    for (const track of stream.getTracks()) {
+      const transceiver = pc
+        .getTransceivers()
+        .find((t) => (t.sender.track?.kind ?? t.receiver.track?.kind) === track.kind);
 
-    try {
-      const offer = await peer.pc.createOffer({ iceRestart: options?.iceRestart });
-      await peer.pc.setLocalDescription(offer);
-      debugLog("signal:offer-send", { remoteUserID, sdpSize: offer.sdp?.length ?? 0, iceRestart: Boolean(options?.iceRestart) });
+      if (!transceiver) {
+        pc.addTrack(track, stream);
+        continue;
+      }
+      if (transceiver.sender.track?.id === track.id) {
+        continue;
+      }
 
-      await this.socket.sendRTCSignal({
-        channel_id: this.currentChannelID,
-        to_user_id: remoteUserID,
-        signal_type: "offer",
-        sdp: offer.sdp,
-      });
-    } catch {
-      this.onError("Failed to create WebRTC offer");
+      void transceiver.sender.replaceTrack(track);
+      if (transceiver.direction === "recvonly" || transceiver.direction === "inactive") {
+        transceiver.direction = "sendrecv";
+      }
     }
   }
 
@@ -728,7 +866,6 @@ export class CallClient {
       window.clearTimeout(timerId);
       this.iceRestartTimers.delete(remoteUserID);
     }
-    this.iceRestartAttempts.delete(remoteUserID);
   }
 
   private scheduleIceRestart(remoteUserID: number, reason: "failed" | "disconnected"): void {
@@ -736,12 +873,10 @@ export class CallClient {
       return;
     }
 
-    const attempt = (this.iceRestartAttempts.get(remoteUserID) ?? 0) + 1;
-    if (attempt > 3) {
-      this.iceRestartAttempts.set(remoteUserID, attempt);
-      return;
-    }
-
+    // A single quick ICE restart attempt; if the peer is still broken
+    // afterwards, reconcilePeers() takes over and fully recreates it (with
+    // its own attempt cap and backoff — see recreatePeer) instead of retrying
+    // ICE restarts forever.
     const delayMs = reason === "failed" ? 1500 : 4000;
     const timerId = window.setTimeout(() => {
       this.iceRestartTimers.delete(remoteUserID);
@@ -749,44 +884,27 @@ export class CallClient {
     }, delayMs);
 
     this.iceRestartTimers.set(remoteUserID, timerId);
-    this.iceRestartAttempts.set(remoteUserID, attempt);
   }
 
-  private async restartIce(remoteUserID: number): Promise<void> {
+  private restartIce(remoteUserID: number): void {
     const peer = this.peers.get(remoteUserID);
     if (!peer || this.currentChannelID <= 0) {
       return;
     }
 
-    if (peer.pc.signalingState !== "stable") {
-      this.scheduleRenegotiationRetry(remoteUserID);
-      return;
-    }
-
     try {
+      // restartIce() marks the transport for restart and schedules
+      // onnegotiationneeded itself; the resulting offer automatically carries
+      // fresh ICE credentials without needing an explicit iceRestart option.
       peer.pc.restartIce();
     } catch {
-      // restartIce is best-effort; fallback to offer-based restart.
+      // Best-effort; if unsupported, recreatePeer() will eventually replace
+      // this peer wholesale once reconcilePeers() notices it's still broken.
     }
-
-    await this.createAndSendOffer(remoteUserID, { iceRestart: true });
-  }
-
-  private scheduleRenegotiationRetry(remoteUserID: number): void {
-    if (this.renegotiateRetryTimers.has(remoteUserID)) {
-      return;
-    }
-    const timerId = window.setTimeout(() => {
-      this.renegotiateRetryTimers.delete(remoteUserID);
-      void this.createAndSendOffer(remoteUserID);
-    }, 250);
-    this.renegotiateRetryTimers.set(remoteUserID, timerId);
   }
 
   private async updateVideoTrackForPeers(track: MediaStreamTrack | null, stream: MediaStream | null): Promise<void> {
-    const renegotiateTargets: number[] = [];
-
-    for (const [userID, { pc }] of this.peers) {
+    for (const [, { pc }] of this.peers) {
       const videoTransceiver = pc
         .getTransceivers()
         .find((t) => t.sender.track?.kind === "video" || t.receiver.track?.kind === "video");
@@ -801,11 +919,11 @@ export class CallClient {
       } else if (track && stream) {
         pc.addTrack(track, stream);
       }
-
-      renegotiateTargets.push(userID);
     }
-
-    await Promise.all(renegotiateTargets.map((userID) => this.createAndSendOffer(userID)));
+    // No manual offer here: replaceTrack never needs renegotiation, and a
+    // direction/track change that does need it raises onnegotiationneeded
+    // automatically (see ensurePeer) — sending an offer manually on top would
+    // race the perfect-negotiation flow.
   }
 
   private async enforceAudioProcessing(stream: MediaStream): Promise<void> {
@@ -842,6 +960,17 @@ export class CallClient {
 
     try {
       const audioContext = new AudioContext({ sampleRate: 48000 });
+      audioContext.onstatechange = () => {
+        debugLog("rnnoise:state-change", { state: audioContext.state });
+        if (audioContext.state === "suspended") {
+          if (this.rnnoiseSuspendedSince === null) {
+            this.rnnoiseSuspendedSince = Date.now();
+          }
+          void audioContext.resume();
+        } else {
+          this.rnnoiseSuspendedSince = null;
+        }
+      };
       await audioContext.audioWorklet.addModule(rnnoiseWorkletPath);
 
       const wasmBinary = await CallClient.loadRnnoiseBinary();
@@ -908,6 +1037,42 @@ export class CallClient {
     this.rnnoiseSource = null;
     this.rnnoiseNode = null;
     this.rnnoiseAudioContext = null;
+    this.rnnoiseSuspendedSince = null;
+  }
+
+  /**
+   * If the RNNoise AudioContext has been stuck "suspended" for too long, the
+   * outgoing audio track is silent even though track.enabled/readyState both
+   * look fine and the UI shows the mic as on — nothing else would ever
+   * detect or recover from this. Falls back to the unfiltered mic track on
+   * every peer so the user stays audible; deliberately does not attempt to
+   * switch back to RNNoise later, to avoid flapping.
+   */
+  private checkRnnoiseWatchdog(): void {
+    if (!this.rnnoiseAudioContext || this.rnnoiseSuspendedSince === null) {
+      return;
+    }
+    if (Date.now() - this.rnnoiseSuspendedSince < CallClient.RNNOISE_SUSPENDED_FALLBACK_MS) {
+      return;
+    }
+
+    const rawAudioTrack = this.rawLocalStream?.getAudioTracks()[0];
+    if (!rawAudioTrack) {
+      return;
+    }
+
+    debugLog("rnnoise:suspended-fallback", { suspendedForMs: Date.now() - this.rnnoiseSuspendedSince });
+    this.onError("Noise suppression stalled; switched to unfiltered microphone audio so you stay audible.");
+    this.rnnoiseSuspendedSince = null;
+
+    for (const { pc } of this.peers.values()) {
+      const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
+      void sender?.replaceTrack(rawAudioTrack);
+    }
+    if (this.localStream) {
+      this.localStream = new MediaStream([rawAudioTrack, ...this.localStream.getVideoTracks()]);
+      this.onLocalStream(this.localStream);
+    }
   }
 
   private static loadRnnoiseBinary(): Promise<ArrayBuffer> {
@@ -926,8 +1091,7 @@ export class CallClient {
     }
 
     this.participants.set(event.user.user_id, event.user);
-    const shouldInitiate = this.selfUserID < event.user.user_id;
-    void this.ensurePeer(event.user, shouldInitiate);
+    void this.ensurePeer(event.user);
   }
 
   private handleVoiceUserLeft(event: VoiceUserEvent): void {
@@ -936,22 +1100,137 @@ export class CallClient {
     }
 
     this.participants.delete(event.user.user_id);
+    this.peerAttempts.delete(event.user.user_id);
+    this.peerSince.delete(event.user.user_id);
+    this.dropPeer(event.user.user_id);
+  }
 
-    const state = this.peers.get(event.user.user_id);
+  private dropPeer(userID: number): void {
+    const state = this.peers.get(userID);
     if (!state) {
       return;
     }
 
-    const timerId = this.iceRestartTimers.get(event.user.user_id);
-    if (timerId) {
-      window.clearTimeout(timerId);
-      this.iceRestartTimers.delete(event.user.user_id);
-    }
-    this.iceRestartAttempts.delete(event.user.user_id);
-
+    this.clearIceRestart(userID);
+    this.signalQueues.delete(userID);
     state.pc.close();
-    this.peers.delete(event.user.user_id);
-    this.onRemoteLeft(event.user.user_id);
+    this.peers.delete(userID);
+    this.onRemoteLeft(userID);
+  }
+
+  /**
+   * Reconciles the server's authoritative participant list (pushed from
+   * useVoice on every periodic get_server_channels poll) against the live
+   * peer map. This is the safety net for lost voice_user_joined/left events
+   * and dropped signaling: without it, a peer that never got created (or
+   * whose participant left silently) stays wrong until someone rejoins.
+   */
+  syncParticipants(channelID: number, participants: VoiceParticipant[]): void {
+    if (channelID !== this.currentChannelID || this.currentChannelID <= 0) {
+      return;
+    }
+
+    const alive = new Set<number>();
+    for (const participant of participants) {
+      if (participant.user_id === this.selfUserID) {
+        continue;
+      }
+      alive.add(participant.user_id);
+      this.participants.set(participant.user_id, { ...this.participants.get(participant.user_id), ...participant });
+    }
+
+    for (const userID of [...this.peers.keys(), ...this.participants.keys()]) {
+      if (userID !== this.selfUserID && !alive.has(userID)) {
+        this.participants.delete(userID);
+        this.peerAttempts.delete(userID);
+        this.peerSince.delete(userID);
+        this.dropPeer(userID);
+      }
+    }
+  }
+
+  private peerHealth(userID: number, pc: RTCPeerConnection): PeerHealth {
+    if (pc.connectionState === "connected") {
+      return "ok";
+    }
+    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+      return "broken";
+    }
+    const since = this.peerSince.get(userID) ?? 0;
+    return Date.now() - since > CallClient.CONNECT_GRACE_MS ? "broken" : "connecting";
+  }
+
+  private reconcilePeers(): void {
+    if (this.currentChannelID <= 0) {
+      return;
+    }
+
+    // Refresh dynamic TURN credentials in the background before they expire,
+    // so any peer created later in a long call still gets a usable relay.
+    // Fire-and-forget: ensurePeer reads this.iceServers synchronously and
+    // must never block on a network round-trip.
+    if (this.turnCredentialsNeedRefresh()) {
+      void this.ensureTurnCredentials().catch(() => {
+        // Failure already surfaced via onError inside ensureTurnCredentials.
+      });
+    }
+
+    this.checkRnnoiseWatchdog();
+
+    for (const [userID, participant] of this.participants) {
+      if (userID === this.selfUserID) {
+        continue;
+      }
+
+      const state = this.peers.get(userID);
+
+      if (!state) {
+        // No peer at all: a voice_user_joined event or an offer was lost.
+        this.recreatePeer(userID, participant, "missing");
+        continue;
+      }
+
+      // Local tracks may have appeared/changed after this peer was created
+      // (e.g. mic access resolved late, or a rejoin reused an older stream).
+      this.syncLocalTracksToPeer(state.pc);
+
+      if (this.peerHealth(userID, state.pc) === "broken") {
+        this.recreatePeer(userID, participant, `state=${state.pc.connectionState}`);
+      }
+    }
+  }
+
+  private recreatePeer(userID: number, participant: VoiceParticipant, reason: string): void {
+    const attempt = (this.peerAttempts.get(userID) ?? 0) + 1;
+    if (attempt > CallClient.MAX_PEER_ATTEMPTS) {
+      return;
+    }
+
+    // Exponential backoff: recreating faster than ICE can settle is pointless.
+    const backoffMs = Math.min(30000, 2000 * 2 ** (attempt - 1));
+    const since = this.peerSince.get(userID) ?? 0;
+    if (since && Date.now() - since < backoffMs) {
+      return;
+    }
+
+    debugLog("peer:recreate", { userID, reason, attempt });
+    this.peerAttempts.set(userID, attempt);
+    this.dropPeer(userID);
+    void this.ensurePeer(participant);
+  }
+
+  private startReconciliation(): void {
+    if (this.reconcileTimer !== null) {
+      return;
+    }
+    this.reconcileTimer = window.setInterval(() => this.reconcilePeers(), CallClient.RECONCILE_INTERVAL_MS);
+  }
+
+  private stopReconciliation(): void {
+    if (this.reconcileTimer !== null) {
+      window.clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
   }
 
   private async handleRTCSignal(event: RTCSignalEvent): Promise<void> {
@@ -963,40 +1242,15 @@ export class CallClient {
     this.participants.set(event.from_user_id, participant);
     debugLog("signal:incoming", { from: event.from_user_id, signal_type: event.signal_type });
 
-    const pc = await this.ensurePeer(participant, false);
+    const pc = await this.ensurePeer(participant);
     const peer = this.peers.get(event.from_user_id);
     if (!peer) {
       return;
     }
 
     try {
-      if (event.signal_type === "offer") {
-        if (!event.sdp) {
-          return;
-        }
-        if (pc.signalingState !== "stable") {
-          await pc.setLocalDescription({ type: "rollback" });
-        }
-        await pc.setRemoteDescription({ type: "offer", sdp: event.sdp });
-        await this.flushPendingCandidates(peer);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        await this.socket.sendRTCSignal({
-          channel_id: this.currentChannelID,
-          to_user_id: event.from_user_id,
-          signal_type: "answer",
-          sdp: answer.sdp,
-        });
-        return;
-      }
-
-      if (event.signal_type === "answer") {
-        if (!event.sdp) {
-          return;
-        }
-        await pc.setRemoteDescription({ type: "answer", sdp: event.sdp });
-        await this.flushPendingCandidates(peer);
+      if (event.signal_type === "offer" || event.signal_type === "answer") {
+        await this.handleDescription(peer, event);
         return;
       }
 
@@ -1015,9 +1269,64 @@ export class CallClient {
         return;
       }
 
-      await pc.addIceCandidate(candidate);
+      try {
+        await pc.addIceCandidate(candidate);
+      } catch (err) {
+        // Candidates that arrive for an offer we deliberately ignored (see
+        // handleDescription) are expected to fail — that offer's generation
+        // never became our remote description.
+        if (!peer.ignoreOffer) {
+          throw err;
+        }
+      }
     } catch {
       this.onError("Failed to handle WebRTC signal");
+    }
+  }
+
+  /**
+   * Perfect-negotiation glare resolution (W3C canonical pattern). Neither
+   * side pre-decides who offers: onnegotiationneeded (see ensurePeer) fires
+   * on whichever side has something to negotiate, and if both fire at once,
+   * this resolves the collision deterministically instead of the old
+   * symmetric-rollback approach, which left both sides "active" and the DTLS
+   * handshake never completing.
+   */
+  private async handleDescription(peer: PeerState, event: RTCSignalEvent): Promise<void> {
+    const { pc } = peer;
+    if (!event.sdp) {
+      return;
+    }
+
+    const isOffer = event.signal_type === "offer";
+    const readyForOffer = !peer.makingOffer && (pc.signalingState === "stable" || peer.isSettingRemoteAnswerPending);
+    const offerCollision = isOffer && !readyForOffer;
+
+    peer.ignoreOffer = !peer.polite && offerCollision;
+    if (peer.ignoreOffer) {
+      debugLog("signal:offer-ignored (impolite)", { from: event.from_user_id });
+      return;
+    }
+
+    peer.isSettingRemoteAnswerPending = !isOffer;
+    try {
+      // The polite side relies on implicit rollback here: setRemoteDescription
+      // with an incoming offer while we have a pending local offer discards it.
+      await pc.setRemoteDescription({ type: isOffer ? "offer" : "answer", sdp: event.sdp });
+    } finally {
+      peer.isSettingRemoteAnswerPending = false;
+    }
+
+    await this.flushPendingCandidates(peer);
+
+    if (isOffer) {
+      await pc.setLocalDescription();
+      await this.socket.sendRTCSignal({
+        channel_id: this.currentChannelID,
+        to_user_id: event.from_user_id,
+        signal_type: "answer",
+        sdp: pc.localDescription?.sdp,
+      });
     }
   }
 

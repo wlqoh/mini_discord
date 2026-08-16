@@ -123,6 +123,8 @@ type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
 type VoiceUserListener = (event: VoiceUserEvent) => void;
 type RTCSignalListener = (event: RTCSignalEvent) => void;
 type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
+type ReconnectPhase = "lost" | "restored";
+type ReconnectListener = (phase: ReconnectPhase) => void;
 
 export type MessageEmbedsEvent = {
   channel_id: number;
@@ -342,6 +344,15 @@ export class ChatSocket {
 
   private static readonly COMMAND_TIMEOUT_MS = 10000;
 
+  // Autoreconnect: nginx (and most intermediate proxies) close an idle WS
+  // after ~60s, and the server-side ping alone can't prevent every network
+  // hiccup. Without this, a dropped connection stranded the user until they
+  // reloaded the page — including mid voice call.
+  private reconnectAttempt = 0;
+  private reconnectTimer: number | null = null;
+  private closedByUser = false;
+  private readonly reconnectListeners = new Set<ReconnectListener>();
+
   private readonly messageListeners = new Set<MessageListener>();
 
   private readonly messageEmbedsListeners = new Set<MessageEmbedsListener>();
@@ -432,6 +443,40 @@ export class ChatSocket {
     }
   }
 
+  /**
+   * Subscribes to reconnect lifecycle. "lost" fires as soon as the socket
+   * drops (before any retry); "restored" fires once a reconnect attempt
+   * actually reopens the connection. Callers that hold state tied to a
+   * connection's lifetime (e.g. voice channel membership, which the server
+   * drops on disconnect) should re-establish it on "restored".
+   */
+  onReconnect(listener: ReconnectListener): () => void {
+    this.reconnectListeners.add(listener);
+    return () => this.reconnectListeners.delete(listener);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closedByUser || this.reconnectTimer !== null) {
+      return;
+    }
+
+    const attempt = ++this.reconnectAttempt;
+    // 0.5s, 1s, 2s, 4s, 8s, capped at 15s, plus jitter to avoid every tab
+    // reconnecting in lockstep after a backend restart.
+    const base = Math.min(15000, 500 * 2 ** (attempt - 1));
+    const delay = base + Math.floor(Math.random() * 500);
+
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect()
+        .then(() => {
+          this.reconnectAttempt = 0;
+          this.reconnectListeners.forEach((listener) => listener("restored"));
+        })
+        .catch(() => this.scheduleReconnect());
+    }, delay);
+  }
+
   connect(): Promise<void> {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       return Promise.resolve();
@@ -440,6 +485,8 @@ export class ChatSocket {
     if (this.connectionPromise) {
       return this.connectionPromise;
     }
+
+    this.closedByUser = false;
 
     this.connectionPromise = new Promise((resolve, reject) => {
       const ws = new WebSocket(resolveWsUrl());
@@ -457,6 +504,10 @@ export class ChatSocket {
       ws.onclose = () => {
         this.connectionPromise = null;
         this.rejectAllPending(new Error("The WebSocket connection was closed."));
+        if (!this.closedByUser) {
+          this.reconnectListeners.forEach((listener) => listener("lost"));
+          this.scheduleReconnect();
+        }
       };
 
       ws.onmessage = (event: MessageEvent<string>) => {
@@ -551,6 +602,15 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "rtc_signal_error") {
+          // rtc_signal is sent fire-and-forget (see sendRTCSignal below), so
+          // this must never resolve/reject whatever command is currently
+          // pending in the ack queue — only handleSocketError does that.
+          const text = parsed.error || "RTC signal error";
+          this.errorListeners.forEach((listener) => listener(text));
+          return;
+        }
+
         if (parsed.event === "error") {
           const text = parsed.error || "Chat error";
           this.handleSocketError(text);
@@ -575,6 +635,11 @@ export class ChatSocket {
   }
 
   close(): void {
+    this.closedByUser = true;
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.connectionPromise = null;
     this.rejectAllPending(new Error("The WebSocket connection was closed."));
     this.socket?.close();

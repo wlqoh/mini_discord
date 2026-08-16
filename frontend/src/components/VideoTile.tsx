@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Maximize2, MicOff, VolumeOff } from "lucide-react";
 import ConnectionQualityIcon from "./ConnectionQualityIcon";
 import type { PeerQuality } from "../services/connectionQuality";
@@ -25,6 +25,10 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
   const ref = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gainStateRef = useRef<GainState | null>(null);
+  // A rejected play() previously only surfaced under webrtc_debug — in prod
+  // it silently left the tile frozen/muted with no indication anything was
+  // wrong ("I don't hear anyone" despite a fully healthy peer connection).
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const isDebugEnabled = (() => {
     try {
       return window.localStorage.getItem("webrtc_debug") === "1";
@@ -75,16 +79,34 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
         tracks: stream?.getTracks().map((t) => ({ kind: t.kind, id: t.id, muted: t.muted, readyState: t.readyState })) ?? [],
       });
     }
-    const playPromise = el.play();
-    if (playPromise) {
-      void playPromise.catch((err) => {
+    // Both branches update state asynchronously (inside the promise
+    // callback), never synchronously within the effect body itself.
+    void el.play().then(
+      () => setAutoplayBlocked(false),
+      (err) => {
         if (isDebugEnabled) {
           console.log("[webrtc][video-tile] play rejected", { label, err });
         }
-      });
-    }
+        setAutoplayBlocked(true);
+      },
+    );
     // GainNode lifecycle is managed entirely in the volume/muted effect below.
   }, [stream, label, isDebugEnabled]);
+
+  const retryPlay = () => {
+    const el = ref.current;
+    if (!el) {
+      return;
+    }
+    void el
+      .play()
+      .then(() => setAutoplayBlocked(false))
+      .catch((err) => {
+        if (isDebugEnabled) {
+          console.log("[webrtc][video-tile] retry play rejected", { label, err });
+        }
+      });
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -160,6 +182,16 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
   return (
     <div className="video-tile" ref={containerRef}>
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
+      {autoplayBlocked ? (
+        <button
+          type="button"
+          className="video-autoplay-blocked-btn"
+          onClick={retryPlay}
+          aria-label={`Click to enable audio/video for ${label}`}
+        >
+          Click to enable
+        </button>
+      ) : null}
       <div className="video-label">
         {quality ? <ConnectionQualityIcon quality={quality} size={10} /> : null}
         <span className="video-label-text">{label}</span>

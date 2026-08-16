@@ -18,6 +18,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/service/push"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
 	"github.com/wlqoh/mini_discord.git/internal/service/user"
+	"github.com/wlqoh/mini_discord.git/internal/service/webrtc"
 	"github.com/wlqoh/mini_discord.git/internal/storage/objectStorage"
 	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
 )
@@ -78,6 +79,9 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	embedHandler := embed.NewHandler(s.db, cfg.LinkPreview, log)
 	embedHandler.RegisterRoutes(v1)
+
+	webrtcHandler := webrtc.NewHandler(s.db, cfg, log)
+	webrtcHandler.RegisterRoutes(v1)
 	go hub.Run()
 	go func() {
 		if err := app.Listen(cfg.Address); err != nil {
