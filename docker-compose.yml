@@ -36,7 +36,11 @@ services:
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/07_messages_reply_to.sql &&
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/08_users_soft_delete.sql &&
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/09_users_email_verification.sql &&
-      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/10_channel_reads.sql
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/10_channel_reads.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/11_message_mentions.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/12_notification_settings.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/13_push_subscriptions.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/14_link_previews.sql
       "
 
   backend:

@@ -2136,6 +2136,16 @@ body {
         font-size: 12px;
     }
 
+    .link-preview {
+        max-width: 100%;
+        padding: 8px 10px;
+    }
+
+    .link-preview-thumb {
+        width: 56px;
+        height: 56px;
+    }
+
     .voice-member-name {
         font-size: 12px;
     }
@@ -2669,6 +2679,103 @@ button:active:not(:disabled) {
     width: 100%;
     max-width: 320px;
     display: block;
+}
+
+/* ---- Ссылки в тексте сообщения ------------------------------ */
+
+.message-link {
+    color: var(--accent-text);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    /* Длинная ссылка не должна распирать пузырь по горизонтали. */
+    word-break: break-all;
+}
+
+.message-link:hover {
+    border-bottom-color: var(--accent-text);
+}
+
+/* ---- Карточка превью ---------------------------------------- */
+
+.message-embeds {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.link-preview {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: 400px;
+    padding: 10px 12px;
+    border: 1px solid var(--glass-border);
+    /* Акцентная полоска слева — тот же приём, что у выделения упоминаний. */
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-md);
+    background: var(--glass-1);
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.link-preview:hover {
+    background: var(--glass-2);
+    border-color: var(--glass-border-hi);
+    border-left-color: var(--accent-hover);
+}
+
+.link-preview-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    /* Без min-width: 0 flex-элемент не даёт тексту переноситься и карточка
+       разъезжается по ширине содержимого. */
+    min-width: 0;
+    flex: 1;
+}
+
+.link-preview-site {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+
+.link-preview-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--accent-text);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+
+.link-preview-desc {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-2);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+}
+
+.link-preview-thumb {
+    width: 80px;
+    height: 80px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    background: var(--glass-2);
 }
 
 .file-attachment {

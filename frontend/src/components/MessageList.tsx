@@ -3,9 +3,11 @@ import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
 import type { Attachment, Message, ReplyPreview, ServerMember } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
 import VideoPlayer from "./VideoPlayer";
+import LinkPreviewCard from "./LinkPreviewCard.tsx";
 import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
 import { memberDisplayName } from "../services/mentions.ts";
+import { trimUrlTail } from "../services/links.ts";
 
 type Props = {
     messages: Message[];
@@ -22,26 +24,30 @@ type Props = {
     serverMembers?: ServerMember[];
 };
 
-const MENTION_TOKEN_PATTERN = /<@(\d+)>|@everyone/g;
+// Один проход по тексту на все виды токенов. `<@id>` начинается с угловой
+// скобки, а URL-часть шаблона её исключает, поэтому ветки не конфликтуют.
+const TOKEN_PATTERN = /<@(\d+)>|@everyone|https?:\/\/[^\s<>"']+/g;
 
 function renderMessageContent(content: string, membersById: Map<number, ServerMember>) {
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
     let match: RegExpExecArray | null;
 
-    MENTION_TOKEN_PATTERN.lastIndex = 0;
-    while ((match = MENTION_TOKEN_PATTERN.exec(content)) !== null) {
+    TOKEN_PATTERN.lastIndex = 0;
+    while ((match = TOKEN_PATTERN.exec(content)) !== null) {
+        const token = match[0];
+
         if (match.index > lastIndex) {
             parts.push(<Fragment key={lastIndex}>{content.slice(lastIndex, match.index)}</Fragment>);
         }
 
-        if (match[0] === "@everyone") {
+        if (token === "@everyone") {
             parts.push(
                 <span key={match.index} className="mention-chip mention-chip-everyone">
                     @everyone
                 </span>,
             );
-        } else {
+        } else if (token.startsWith("<@")) {
             const userId = Number(match[1]);
             const member = membersById.get(userId);
             const label = member ? memberDisplayName(member) : `user ${userId}`;
@@ -50,9 +56,28 @@ function renderMessageContent(content: string, membersById: Map<number, ServerMe
                     @{label}
                 </span>,
             );
+        } else {
+            // Шаблон гарантирует схему http/https, поэтому в href не может
+            // попасть javascript:/data: — отдельная санитизация не нужна.
+            const href = trimUrlTail(token);
+            parts.push(
+                <a
+                    key={match.index}
+                    className="message-link"
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer nofollow"
+                >
+                    {href}
+                </a>,
+            );
+            // Сдвигаемся на длину ссылки, а не всего совпадения: отрезанные
+            // знаки препинания должны вернуться в текст следующей итерацией.
+            lastIndex = match.index + href.length;
+            continue;
         }
 
-        lastIndex = match.index + match[0].length;
+        lastIndex = match.index + token.length;
     }
 
     if (lastIndex < content.length) {
@@ -424,6 +449,15 @@ export default function MessageList({
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className="message-attachments">
                                     {msg.attachments.map(renderAttachment)}
+                                </div>
+                            )}
+                            {/* Карточки внизу сообщения: они приезжают позже остального
+                                и не должны сдвигать уже отрисованный текст и вложения. */}
+                            {msg.embeds && msg.embeds.length > 0 && (
+                                <div className="message-embeds">
+                                    {msg.embeds.map((preview) => (
+                                        <LinkPreviewCard key={preview.url} preview={preview} />
+                                    ))}
                                 </div>
                             )}
                             <div className="message-timestamp">{formatMessageTimestamp(msg.created_at)}</div>

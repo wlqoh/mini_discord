@@ -20,6 +20,14 @@ export interface Attachment {
     size_bytes?: number;
 }
 
+export interface LinkPreview {
+    url: string;
+    title?: string;
+    description?: string;
+    site_name?: string;
+    image_token?: string;
+}
+
 export interface ReplyPreview {
     message_id: number;
     author_id: number;
@@ -44,6 +52,7 @@ export interface Message {
     reply_to?: ReplyPreview | null;
     mentions?: number[];
     mentions_everyone?: boolean;
+    embeds?: LinkPreview[];
     created_at: string;
 }
 

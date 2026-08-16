@@ -253,6 +253,34 @@ Configure allowed browser origins in backend config:
 - `http_server.cors_allowed_origins`
 - `http_server.ws_allowed_origins`
 
+## Link previews
+
+Сообщение со ссылкой получает карточку с метаданными страницы (Open Graph / Twitter Card / `<title>`).
+
+- Метаданные забирает бэкенд (`internal/service/embed/`) **асинхронно**, воркер-пулом: горутина `Hub.Run()` последовательна и не может ждать внешний сайт. Готовое превью прилетает отдельным WS-событием `message_embeds`, фронт домёрживает его в сообщение по `message_id`.
+- Превью делается только для **первой** подходящей ссылки в сообщении. Ссылки на собственный фронтенд и на S3-бакет пропускаются.
+- Кэш трёхуровневый: память (`internal/storage/cache`) → `link_previews` в Postgres → сеть. Параллельные запросы одного URL схлопываются через `single_flight`. Неудачные фетчи кэшируются отдельным, более коротким TTL.
+- Картинка `og:image` **проксируется** через `GET /api/v1/embeds/image/:token`, чтобы IP пользователей не утекали на чужие сайты. Токен случайный (128 бит) и хранится в `link_previews.image_token`; сырой URL наружу не отдаётся. `image/svg+xml` отклоняется.
+- SSRF закрыт на уровне сокета: `DialContext` отклоняет приватные, loopback, link-local (включая `169.254.169.254`) и CGNAT-адреса и разрешает только порты 80/443. Проверка идёт по фактическому IP, поэтому устойчива к DNS-rebinding и повторяется на каждом редиректе.
+- Превью получают только сообщения, отправленные после включения фичи: бэкфилла истории нет.
+
+Настройки — блок `link_preview` в конфиге (включён по умолчанию):
+
+```yaml
+link_preview:
+  enabled: true
+  timeout: 5s
+  max_body_bytes: 524288
+  max_image_bytes: 2097152
+  max_redirects: 3
+  cache_ttl: 168h
+  negative_cache_ttl: 6h
+  workers: 4
+  user_agent: "MiniDiscordBot/1.0 (+link preview)"
+```
+
+Миграция `022` (`sql/schema/`, зеркало без goose-маркеров в `sql/init/14_link_previews.sql`) добавляет таблицы `link_previews` и `message_embeds`.
+
 ## Media Player (frontend)
 
 Audio message attachments render with a custom, reusable player instead of the bare native `<audio>` control.

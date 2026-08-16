@@ -65,8 +65,27 @@ export function useMessages({
             });
         });
 
+        // Превью приезжает отдельным событием через 0.3–2 сек после сообщения:
+        // хаб не может ждать внешний сайт, поэтому карточка догоняет сообщение.
+        const unsubscribeEmbeds = socket.onMessageEmbeds((event) => {
+            setMessagesByChannel((prev) => {
+                const channelMessages = prev[event.channel_id];
+                if (!channelMessages) return prev;
+
+                const index = channelMessages.findIndex((message) => message.id === event.message_id);
+                // Сообщения нет в кэше (канал не открывали) — событие просто игнорируем:
+                // при загрузке канала превью придёт вместе с историей.
+                if (index === -1) return prev;
+
+                const next = channelMessages.slice();
+                next[index] = { ...next[index], embeds: event.embeds };
+                return { ...prev, [event.channel_id]: next };
+            });
+        });
+
         return () => {
             unsubscribeMessage();
+            unsubscribeEmbeds();
         };
     }, [isConnected, socketRef, selectedServerIdRef, setChannelsByServer, setMessagesByChannel]);
 

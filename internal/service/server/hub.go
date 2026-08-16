@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
+	"github.com/wlqoh/mini_discord.git/internal/service/embed"
 	"github.com/wlqoh/mini_discord.git/internal/service/push"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
@@ -26,6 +27,7 @@ type Hub struct {
 	s3Client             types.S3ClientStorage
 	s3Host               string
 	pushSender           *push.Sender
+	embedService         *embed.Service
 	mu                   sync.RWMutex
 	clientsByUser        map[int]*Client
 	createServerLimiter  *middleware.TokenBucket
@@ -67,12 +69,13 @@ const everyoneMentionToken = "@everyone"
 
 var mentionTokenRegex = regexp.MustCompile(`<@(\d+)>`)
 
-func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender) *Hub {
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender, embedService *embed.Service) *Hub {
 	return &Hub{
 		storage:              storage,
 		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
 		pushSender:           pushSender,
+		embedService:         embedService,
 		clientsByUser:        make(map[int]*Client),
 		createServerLimiter:  middleware.NewTokenBucket(5.0/60.0, 5.0),
 		createChannelLimiter: middleware.NewTokenBucket(5.0/60.0, 5.0),
@@ -932,8 +935,44 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
 	h.pushToUsers(recipientUserIDs, event)
 	h.enqueuePush(ctx, payload.ChannelID, recipientUserIDs, msg, replyTo)
+	h.enqueueEmbeds(payload.ChannelID, recipientUserIDs, msg)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+// enqueueEmbeds отдаёт сообщение конвейеру превью. Как и push, это
+// best-effort поверх уже сохранённого и разосланного сообщения — здесь нельзя
+// ни блокироваться, ни возвращать ошибку: мы в единственной горутине хаба.
+func (h *Hub) enqueueEmbeds(channelID int64, recipientUserIDs []int, msg *types.WsMessage) {
+	if h.embedService == nil || msg.Content == "" {
+		return
+	}
+
+	h.embedService.Enqueue(embed.Job{
+		MessageID:    msg.ID,
+		ChannelID:    channelID,
+		AuthorID:     msg.AuthorID,
+		Content:      msg.Content,
+		RecipientIDs: recipientUserIDs,
+	})
+}
+
+// BroadcastEmbeds вызывается из горутины воркера превью, а не из Hub.Run().
+// Это безопасно: pushToUsers работает под RWMutex, а enqueueEvent не блокирует
+// отправителя — переполненная очередь клиента просто теряет событие.
+func (h *Hub) BroadcastEmbeds(channelID, messageID int64, recipientIDs []int, embeds []types.WsLinkPreview) {
+	if len(embeds) == 0 {
+		return
+	}
+
+	h.pushToUsers(recipientIDs, &types.WsEvent{
+		Event: types.WsEventMessageEmbeds,
+		Data: types.WsMessageEmbedsEvent{
+			ChannelID: channelID,
+			MessageID: messageID,
+			Embeds:    embeds,
+		},
+	})
 }
 
 // enqueuePush hands the message off to the push.Sender for offline

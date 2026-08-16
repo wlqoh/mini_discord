@@ -66,6 +66,7 @@ const (
 	WsEventAck                = "ack"
 	WsEventError              = "error"
 	WsEventMessage            = "message"
+	WsEventMessageEmbeds      = "message_embeds"
 	WsEventConnected          = "connected"
 	WsEventVoiceUserJoined    = "voice_user_joined"
 	WsEventVoiceUserLeft      = "voice_user_left"
@@ -302,6 +303,7 @@ type WsMessage struct {
 	ReplyTo          *WsReplyTo   `json:"reply_to,omitempty"`
 	Mentions         []int        `json:"mentions,omitempty"`
 	MentionsEveryone bool         `json:"mentions_everyone,omitempty"`
+	Embeds           []WsLinkPreview `json:"embeds,omitempty"`
 	CreatedAt        time.Time    `json:"created_at"`
 	EditedAt         *time.Time   `json:"edited_at,omitempty"`
 }
