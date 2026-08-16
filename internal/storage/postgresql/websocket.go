@@ -419,6 +419,13 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			return nil, nil, false, err
 		}
 
+		// Превью — необязательная часть сообщения: если таблица недоступна,
+		// историю всё равно нужно отдать, просто без карточек.
+		embeds, err := s.GetMessageEmbeds(ctx, msgIDs)
+		if err != nil {
+			embeds = nil
+		}
+
 		for i := range messages {
 			if a, ok := atts[messages[i].ID]; ok {
 				messages[i].Attachments = a
@@ -428,6 +435,9 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 			}
 			if m, ok := mentions[messages[i].ID]; ok {
 				messages[i].Mentions = m
+			}
+			if e, ok := embeds[messages[i].ID]; ok {
+				messages[i].Embeds = e
 			}
 		}
 	}

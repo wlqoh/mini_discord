@@ -1,6 +1,7 @@
 import type {
   ChannelUnread,
   JoinVoiceResponse,
+  LinkPreview,
   Message,
   OnlineUser,
   ReplyPreview,
@@ -123,6 +124,14 @@ type VoiceUserListener = (event: VoiceUserEvent) => void;
 type RTCSignalListener = (event: RTCSignalEvent) => void;
 type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
 
+export type MessageEmbedsEvent = {
+  channel_id: number;
+  message_id: number;
+  embeds: LinkPreview[];
+};
+
+type MessageEmbedsListener = (event: MessageEmbedsEvent) => void;
+
 // ── Raw shapes for WS message parsing ───────────────────────────────────────
 
 type AuthorRaw = {
@@ -168,6 +177,7 @@ type RawMessage = {
   reply_to?: RawReplyTo | null;
   mentions?: unknown;
   mentions_everyone?: unknown;
+  embeds?: unknown;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -211,6 +221,22 @@ function parseAttachments(raw: unknown): Message["attachments"] {
       url: typeof item.url === "string" ? item.url : "",
       file_name: typeof item.file_name === "string" ? item.file_name : "",
       content_type: typeof item.content_type === "string" ? item.content_type : "",
+    }))
+    .filter((item) => Boolean(item.url));
+}
+
+function parseEmbeds(raw: unknown): LinkPreview[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((item): item is Record<string, unknown> => item !== null && typeof item === "object")
+    .map((item) => ({
+      url: typeof item.url === "string" ? item.url : "",
+      title: typeof item.title === "string" ? item.title : undefined,
+      description: typeof item.description === "string" ? item.description : undefined,
+      site_name: typeof item.site_name === "string" ? item.site_name : undefined,
+      image_token: typeof item.image_token === "string" ? item.image_token : undefined,
     }))
     .filter((item) => Boolean(item.url));
 }
@@ -298,6 +324,7 @@ function toMessage(raw: unknown): Message | null {
       ? candidate.mentions.filter((id): id is number => typeof id === "number")
       : undefined,
     mentions_everyone: typeof candidate.mentions_everyone === "boolean" ? candidate.mentions_everyone : undefined,
+    embeds: parseEmbeds(candidate.embeds),
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
   };
 }
@@ -316,6 +343,8 @@ export class ChatSocket {
   private static readonly COMMAND_TIMEOUT_MS = 10000;
 
   private readonly messageListeners = new Set<MessageListener>();
+
+  private readonly messageEmbedsListeners = new Set<MessageEmbedsListener>();
 
   private readonly errorListeners = new Set<ErrorListener>();
 
@@ -448,6 +477,19 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "message_embeds") {
+          const payload = parsed.data as { channel_id?: unknown; message_id?: unknown; embeds?: unknown };
+          if (payload && typeof payload.channel_id === "number" && typeof payload.message_id === "number") {
+            const event: MessageEmbedsEvent = {
+              channel_id: payload.channel_id,
+              message_id: payload.message_id,
+              embeds: parseEmbeds(payload.embeds),
+            };
+            this.messageEmbedsListeners.forEach((listener) => listener(event));
+          }
+          return;
+        }
+
         if (parsed.event === "voice_participants") {
           const payload = parsed.data as { participants?: VoiceParticipant[] };
           if (Array.isArray(payload?.participants)) {
@@ -542,6 +584,11 @@ export class ChatSocket {
   onMessage(listener: MessageListener): () => void {
     this.messageListeners.add(listener);
     return () => this.messageListeners.delete(listener);
+  }
+
+  onMessageEmbeds(listener: MessageEmbedsListener): () => void {
+    this.messageEmbedsListeners.add(listener);
+    return () => this.messageEmbedsListeners.delete(listener);
   }
 
   onError(listener: ErrorListener): () => void {

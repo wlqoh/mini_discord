@@ -13,6 +13,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
+	"github.com/wlqoh/mini_discord.git/internal/service/embed"
 	"github.com/wlqoh/mini_discord.git/internal/service/notification"
 	"github.com/wlqoh/mini_discord.git/internal/service/push"
 	"github.com/wlqoh/mini_discord.git/internal/service/server"
@@ -55,7 +56,16 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	v1 := api.Group("/v1")
 
 	pushSender := push.NewSender(s.db, cfg.Push, log)
-	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret), pushSender)
+
+	// Хосты, для которых превью не делаем: собственный фронтенд и бакет с
+	// вложениями — они уже отрисованы в интерфейсе как есть.
+	skipHosts := embed.HostsFromURLs([]string{cfg.FrontendBaseURL, cfg.S3HOST, cfg.S3.Endpoint})
+	embedService := embed.NewService(s.db, cfg.LinkPreview, log, skipHosts)
+
+	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret), pushSender, embedService)
+	// Замыкаем связь в обе стороны: сервису нужен хаб для рассылки готовых
+	// превью, хабу — сервис для постановки задач.
+	embedService.SetBroadcaster(hub)
 
 	userHandler := user.NewHandler(s.db, s.db, cfg, log, s3Client, hub)
 	userHandler.RegisterRoutes(v1)
@@ -65,6 +75,9 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	notificationHandler := notification.NewHandler(s.db, cfg, log)
 	notificationHandler.RegisterRoutes(v1)
+
+	embedHandler := embed.NewHandler(s.db, cfg.LinkPreview, log)
+	embedHandler.RegisterRoutes(v1)
 	go hub.Run()
 	go func() {
 		if err := app.Listen(cfg.Address); err != nil {

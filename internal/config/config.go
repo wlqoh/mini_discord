@@ -22,6 +22,23 @@ type Config struct {
 	Mail                          MailConfig `yaml:"mail"`
 	FrontendBaseURL               string     `yaml:"frontend_base_url" env:"FRONTEND_BASE_URL" env-default:"http://localhost:5173"`
 	Push                          PushConfig `yaml:"push"`
+	LinkPreview                   LinkPreviewConfig `yaml:"link_preview"`
+}
+
+type LinkPreviewConfig struct {
+	Enabled bool `yaml:"enabled" env:"LINK_PREVIEW_ENABLED" env-default:"true"`
+	// Общий дедлайн одного исходящего запроса. Держим заметно ниже
+	// http_server.timeout (4s), чтобы прокси картинок успевал ответить.
+	Timeout       time.Duration `yaml:"timeout" env:"LINK_PREVIEW_TIMEOUT" env-default:"5s"`
+	MaxBodyBytes  int64         `yaml:"max_body_bytes" env:"LINK_PREVIEW_MAX_BODY_BYTES" env-default:"524288"`
+	MaxImageBytes int64         `yaml:"max_image_bytes" env:"LINK_PREVIEW_MAX_IMAGE_BYTES" env-default:"2097152"`
+	MaxRedirects  int           `yaml:"max_redirects" env:"LINK_PREVIEW_MAX_REDIRECTS" env-default:"3"`
+	// Сколько живёт удачное превью и сколько — отрицательный результат.
+	// Негативный TTL короче: сайт мог просто временно лежать.
+	CacheTTL    time.Duration `yaml:"cache_ttl" env:"LINK_PREVIEW_CACHE_TTL" env-default:"168h"`
+	NegativeTTL time.Duration `yaml:"negative_cache_ttl" env:"LINK_PREVIEW_NEGATIVE_TTL" env-default:"6h"`
+	Workers     int           `yaml:"workers" env:"LINK_PREVIEW_WORKERS" env-default:"4"`
+	UserAgent   string        `yaml:"user_agent" env:"LINK_PREVIEW_USER_AGENT" env-default:"MiniDiscordBot/1.0 (+link preview)"`
 }
 
 type PushConfig struct {
