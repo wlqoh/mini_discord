@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Maximize2, MicOff, VolumeOff } from "lucide-react";
+import ConnectionQualityIcon from "./ConnectionQualityIcon";
+import type { PeerQuality } from "../services/connectionQuality";
 
 type Props = {
   stream: MediaStream | null;
@@ -8,6 +10,8 @@ type Props = {
   volume?: number;
   micEnabled?: boolean;
   deafened?: boolean;
+  /** null для своего тайла: у локального превью нет соединения. */
+  quality?: PeerQuality | null;
 };
 
 type GainState = {
@@ -17,7 +21,7 @@ type GainState = {
   stream: MediaStream;
 };
 
-export default function VideoTile({ stream, label, muted = false, volume = 1, micEnabled, deafened }: Props) {
+export default function VideoTile({ stream, label, muted = false, volume = 1, micEnabled, deafened, quality }: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gainStateRef = useRef<GainState | null>(null);
@@ -156,7 +160,10 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
   return (
     <div className="video-tile" ref={containerRef}>
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
-      <div className="video-label">{label}</div>
+      <div className="video-label">
+        {quality ? <ConnectionQualityIcon quality={quality} size={10} /> : null}
+        <span className="video-label-text">{label}</span>
+      </div>
       {micEnabled === false || deafened ? (
         <div className="video-status">
           {micEnabled === false ? <MicOff size={14} aria-hidden="true" /> : null}
