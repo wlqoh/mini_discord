@@ -8,6 +8,7 @@ import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
 import { memberDisplayName } from "../services/mentions.ts";
 import { trimUrlTail } from "../services/links.ts";
+import { formatMessageTimestamp } from "../services/formatTimestamp.ts";
 
 type Props = {
     messages: Message[];
@@ -21,6 +22,12 @@ type Props = {
     isLoadingOlder?: boolean;
     loadOlderError?: boolean;
     onLoadOlder?: () => void;
+    // Present only while the channel is showing a windowed view (opened by
+    // jumping to a search hit, reply, or notification target) rather than its
+    // live tail — see the hasMoreNewer guard in useMessages.
+    hasMoreNewer?: boolean;
+    isLoadingNewer?: boolean;
+    onLoadNewer?: () => void;
     serverMembers?: ServerMember[];
 };
 
@@ -122,36 +129,6 @@ function getAuthorInitials(msg: Message): string {
     }
 
     return `U${msg.author_id}`;
-}
-
-function formatMessageTimestamp(isoDate: string): string {
-    const date = new Date(isoDate);
-
-    if (Number.isNaN(date.getTime())) {
-        return "";
-    }
-
-    const now = new Date();
-    const isSameDay =
-        date.getFullYear() === now.getFullYear() &&
-        date.getMonth() === now.getMonth() &&
-        date.getDate() === now.getDate();
-
-    const time = new Intl.DateTimeFormat("ru-RU", {
-        hour: "2-digit",
-        minute: "2-digit",
-    }).format(date);
-
-    if (isSameDay) {
-        return time;
-    }
-
-    const dayAndMonth = new Intl.DateTimeFormat("ru-RU", {
-        day: "2-digit",
-        month: "short",
-    }).format(date);
-
-    return `${dayAndMonth}, ${time}`;
 }
 
 function isImageType(contentType: string): boolean {
@@ -277,6 +254,9 @@ export default function MessageList({
     isLoadingOlder,
     loadOlderError,
     onLoadOlder,
+    hasMoreNewer,
+    isLoadingNewer,
+    onLoadNewer,
     serverMembers = [],
 }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
@@ -285,6 +265,7 @@ export default function MessageList({
     // this stays correct even when older history is prepended, since ids only grow.
     const [initialMaxId] = useState(() => messages.reduce((max, m) => Math.max(max, m.id), 0));
     const sentinelRef = useRef<HTMLDivElement | null>(null);
+    const bottomSentinelRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         const node = sentinelRef.current;
@@ -302,6 +283,26 @@ export default function MessageList({
         observer.observe(node);
         return () => observer.disconnect();
     }, [hasMoreOlder, isLoadingOlder, loadOlderError, onLoadOlder, messages.length]);
+
+    // Mirrors the sentinel above but at the tail: only relevant while a
+    // windowed view is open (hasMoreNewer), since a live-tail channel has
+    // nothing further down to load.
+    useEffect(() => {
+        const node = bottomSentinelRef.current;
+        if (!node || !onLoadNewer) return;
+        if (!hasMoreNewer || isLoadingNewer) return;
+
+        const observer = new IntersectionObserver(
+            (entries) => {
+                if (entries[0]?.isIntersecting) {
+                    onLoadNewer();
+                }
+            },
+            { root: node.closest(".chat-content"), rootMargin: "0px 0px 200px 0px", threshold: 0 },
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [hasMoreNewer, isLoadingNewer, onLoadNewer, messages.length]);
 
     if (isLoading) {
         return (
@@ -465,6 +466,14 @@ export default function MessageList({
                     </div>
                 );
             })}
+
+            {isLoadingNewer && (
+                <div className="history-loading">
+                    <span className="history-spinner" /> Загрузка…
+                </div>
+            )}
+
+            {hasMoreNewer && <div ref={bottomSentinelRef} className="scroll-sentinel" aria-hidden="true" />}
         </div>
     );
 }

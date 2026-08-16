@@ -6,7 +6,7 @@ import type {
   OnlineUser,
   ReplyPreview,
   RTCSignalEvent,
-  RTCSignalPayload, ServerMember, TypingEvent, UserProfile,
+  RTCSignalPayload, SearchFilters, SearchHit, SearchScope, ServerMember, TypingEvent, UserProfile,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -44,6 +44,39 @@ type GetMessagesAck = {
 
 type GetServersAck = {
   servers?: Array<{ id?: number; name?: string; owner_id?: number }>;
+};
+
+type GetMessagesAroundAck = {
+  channel_id?: number;
+  messages?: unknown[];
+  older_cursor?: string;
+  newer_cursor?: string;
+  has_more_older?: boolean;
+  has_more_newer?: boolean;
+};
+
+type GetMessagesAfterAck = {
+  channel_id?: number;
+  messages?: unknown[];
+  next_cursor?: string;
+  has_more?: boolean;
+};
+
+type SearchMessagesAck = {
+  hits?: Array<{
+    message_id?: number;
+    channel_id?: number;
+    channel_name?: string;
+    author_id?: number;
+    author_first_name?: string;
+    author_last_name?: string;
+    author_nickname?: string;
+    author_avatar_url?: string;
+    headline?: string;
+    created_at?: string;
+  }>;
+  next_cursor?: string;
+  has_more?: boolean;
 };
 
 type VoiceParticipantRaw = {
@@ -105,6 +138,7 @@ type GetUnreadAck = {
 
 type PendingCommand = {
   action: string;
+  requestId: string;
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   timeoutId: number;
@@ -340,6 +374,14 @@ export class ChatSocket {
 
   private queue: QueuedCommand[] = [];
 
+  // Only handlers dispatched off the hub's Run() loop (search_messages,
+  // get_messages_around/after) echo this back — see the comment on
+  // types.WsCommand.RequestID server-side. It exists so a response that
+  // arrives after the client already timed out and moved on to the next
+  // queued command can be recognized as stale instead of resolving that next
+  // command with the wrong data.
+  private nextRequestId = 1;
+
   private connectionPromise: Promise<void> | null = null;
 
   private static readonly COMMAND_TIMEOUT_MS = 10000;
@@ -381,6 +423,8 @@ export class ChatSocket {
       return;
     }
 
+    const requestId = `r${this.nextRequestId++}`;
+
     const timeoutId = window.setTimeout(() => {
       if (!this.pending) {
         return;
@@ -395,6 +439,7 @@ export class ChatSocket {
 
     this.pending = {
       action: next.action,
+      requestId,
       resolve: (data) => {
         window.clearTimeout(timeoutId);
         next.resolve(data);
@@ -410,6 +455,7 @@ export class ChatSocket {
       JSON.stringify({
         action: next.action,
         payload: next.payload,
+        request_id: requestId,
       }),
     );
   }
@@ -428,7 +474,15 @@ export class ChatSocket {
     }
   }
 
-  private handleSocketError(text: string): void {
+  private handleSocketError(text: string, requestId?: string): void {
+    // A request_id that doesn't match the current pending command means this
+    // error belongs to one the client already timed out on and abandoned —
+    // surface it as a generic error, but don't reject whatever is pending now.
+    if (requestId && this.pending && this.pending.requestId !== requestId) {
+      this.errorListeners.forEach((listener) => listener(text));
+      return;
+    }
+
     const pendingAction = this.pending?.action;
     const isUnsupportedGetUserInfo =
       pendingAction === "get_user_info" && text.toLowerCase().includes("unknown action");
@@ -613,11 +667,17 @@ export class ChatSocket {
 
         if (parsed.event === "error") {
           const text = parsed.error || "Chat error";
-          this.handleSocketError(text);
+          this.handleSocketError(text, parsed.request_id);
           return;
         }
 
         if (parsed.event === "ack" && this.pending) {
+          // Same staleness guard as handleSocketError: only handlers dispatched
+          // off the hub's main loop echo request_id, so this only ever rejects
+          // a response for a command the client has already timed out on.
+          if (parsed.request_id && parsed.request_id !== this.pending.requestId) {
+            return;
+          }
           this.pending.resolve(parsed.data);
           this.pending = null;
           this.flushQueue();
@@ -626,7 +686,7 @@ export class ChatSocket {
 
         // Some gateway/proxy responses may come without `event`, but with `error`.
         if (typeof parsed.error === "string" && parsed.error.trim()) {
-          this.handleSocketError(parsed.error);
+          this.handleSocketError(parsed.error, parsed.request_id);
         }
       };
     });
@@ -760,6 +820,115 @@ export class ChatSocket {
 
     return {
       messages,
+      nextCursor: typeof payload?.next_cursor === "string" ? payload.next_cursor : "",
+      hasMore: payload?.has_more === true,
+    };
+  }
+
+  /**
+   * Opens a two-sided window of history centered on messageId, for jumping
+   * straight to an arbitrary message (a search hit, a reply preview, a push
+   * notification target) without walking getMessages backward page by page.
+   */
+  async getMessagesAround(
+    channelId: number,
+    messageId: number,
+    limit = 25,
+  ): Promise<{
+    messages: Message[];
+    olderCursor: string;
+    newerCursor: string;
+    hasMoreOlder: boolean;
+    hasMoreNewer: boolean;
+  }> {
+    const payload = await this.sendCommand<GetMessagesAroundAck>("get_messages_around", {
+      channel_id: channelId,
+      message_id: messageId,
+      limit,
+    });
+
+    const messages = Array.isArray(payload?.messages)
+      ? payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null)
+      : [];
+
+    return {
+      messages,
+      olderCursor: typeof payload?.older_cursor === "string" ? payload.older_cursor : "",
+      newerCursor: typeof payload?.newer_cursor === "string" ? payload.newer_cursor : "",
+      hasMoreOlder: payload?.has_more_older === true,
+      hasMoreNewer: payload?.has_more_newer === true,
+    };
+  }
+
+  /**
+   * Forward-pagination counterpart to getMessages (which only loads
+   * backward) — used to walk a windowed view opened by getMessagesAround
+   * back down to the live tail.
+   */
+  async getMessagesAfter(
+    channelId: number,
+    cursor: string,
+    limit = 50,
+  ): Promise<{ messages: Message[]; nextCursor: string; hasMore: boolean }> {
+    const payload = await this.sendCommand<GetMessagesAfterAck>("get_messages_after", {
+      channel_id: channelId,
+      cursor,
+      limit,
+    });
+
+    const messages = Array.isArray(payload?.messages)
+      ? payload.messages.map((item) => toMessage(item)).filter((item): item is Message => item !== null)
+      : [];
+
+    return {
+      messages,
+      nextCursor: typeof payload?.next_cursor === "string" ? payload.next_cursor : "",
+      hasMore: payload?.has_more === true,
+    };
+  }
+
+  async searchMessages(
+    query: string,
+    scope: SearchScope,
+    scopeId: number,
+    filters?: SearchFilters,
+    cursor?: string,
+    limit = 25,
+  ): Promise<{ hits: SearchHit[]; nextCursor: string; hasMore: boolean }> {
+    const requestPayload: Record<string, unknown> = { query, limit };
+    if (scope === "server") {
+      requestPayload.server_id = scopeId;
+    } else {
+      requestPayload.channel_id = scopeId;
+    }
+    if (filters?.authorId) requestPayload.author_id = filters.authorId;
+    if (filters?.hasFile) requestPayload.has_file = true;
+    if (filters?.hasLink) requestPayload.has_link = true;
+    if (filters?.before) requestPayload.before = filters.before;
+    if (filters?.after) requestPayload.after = filters.after;
+    if (cursor) requestPayload.cursor = cursor;
+
+    const payload = await this.sendCommand<SearchMessagesAck>("search_messages", requestPayload);
+
+    const hits: SearchHit[] = Array.isArray(payload?.hits)
+      ? payload.hits
+        .filter((hit) => hit != null && typeof hit.message_id === "number" && typeof hit.channel_id === "number")
+        .map((hit) => ({
+          message_id: hit.message_id as number,
+          channel_id: hit.channel_id as number,
+          channel_name: typeof hit.channel_name === "string" ? hit.channel_name : "",
+          author_id: typeof hit.author_id === "number" ? hit.author_id : 0,
+          author_first_name: hit.author_first_name,
+          author_last_name: hit.author_last_name,
+          author_nickname: hit.author_nickname,
+          author_avatar_url: hit.author_avatar_url,
+          headline: typeof hit.headline === "string" ? hit.headline : "",
+          created_at: typeof hit.created_at === "string" ? hit.created_at : new Date().toISOString(),
+        }))
+      : [];
+
+    return {
+      hits,
       nextCursor: typeof payload?.next_cursor === "string" ? payload.next_cursor : "",
       hasMore: payload?.has_more === true,
     };

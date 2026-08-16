@@ -239,6 +239,23 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.markRead(req, ctx)
 	case types.WsActionGetServerMembers:
 		h.getServerMembers(req, ctx)
+	case types.WsActionGetMessagesAround:
+		// Read-only and independent of hub state, so unlike every other case
+		// here it runs off the Run() loop instead of blocking it — see the
+		// comment on searchMessages below for why that's safe.
+		go h.getMessagesAround(req, ctx)
+	case types.WsActionGetMessagesAfter:
+		go h.getMessagesAfter(req, ctx)
+	case types.WsActionSearchMessages:
+		// The only command whose latency is inherently unpredictable (full-text
+		// scan across an arbitrary date range): running it synchronously would
+		// stall send_message/typing/rtc_signal for every other connected client
+		// until the query returns. Safe to hand off because pushEvent takes
+		// h.mu.RLock before touching clientsByUser, and unregisterClient closes
+		// Outbound under the paired write lock — so a client that disconnects
+		// mid-search can't race this goroutine into a send-on-closed-channel
+		// panic.
+		go h.searchMessages(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -446,6 +463,14 @@ func (h *Hub) enqueueEvent(cl *Client, event *types.WsEvent) {
 
 func (h *Hub) pushError(cl *Client, message string) {
 	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventError, Error: message})
+}
+
+// pushErrorWithRequestID is pushError plus the request_id echo. Used only by
+// handlers dispatched off the Run() loop (search_messages, get_messages_around,
+// get_messages_after) — see the RequestID field comment on types.WsCommand for
+// why the rest of the hub doesn't need this.
+func (h *Hub) pushErrorWithRequestID(cl *Client, requestID, message string) {
+	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventError, Error: message, RequestID: requestID})
 }
 
 func (h *Hub) listOnlineServerUserIDs(ctx context.Context, serverID int64, excludeUserID int) ([]int, error) {
@@ -1118,6 +1143,135 @@ func (h *Hub) getMessages(req wsCommandRequest, ctx context.Context) {
 	})
 }
 
+func (h *Hub) getMessagesAfter(req wsCommandRequest, ctx context.Context) {
+	requestID := req.command.RequestID
+	var payload types.WsGetMessagesAfterRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "invalid get_messages_after payload")
+		return
+	}
+	if payload.ChannelID <= 0 {
+		h.pushErrorWithRequestID(req.client, requestID, "channel_id is required")
+		return
+	}
+
+	cursor, err := types.DecodeWsMessageCursor(payload.Cursor)
+	if err != nil || cursor == nil {
+		h.pushErrorWithRequestID(req.client, requestID, "invalid cursor")
+		return
+	}
+	if cursor.ChannelID != payload.ChannelID {
+		h.pushErrorWithRequestID(req.client, requestID, "cursor channel mismatch")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushErrorWithRequestID(req.client, requestID, "access denied")
+		return
+	}
+
+	messages, nextCursor, hasMore, err := h.storage.GetMessagesAfter(ctx, payload.ChannelID, payload.Limit, cursor, h.s3Host)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "failed to get messages")
+		return
+	}
+
+	var nextCursorRaw string
+	if nextCursor != nil {
+		nextCursorRaw, err = types.EncodeWsMessageCursor(*nextCursor)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to encode cursor")
+			return
+		}
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event:     types.WsEventAck,
+		RequestID: requestID,
+		Data: map[string]any{
+			"channel_id":  payload.ChannelID,
+			"messages":    messages,
+			"next_cursor": nextCursorRaw,
+			"has_more":    hasMore,
+		},
+	})
+}
+
+// getMessagesAround serves both the "jump to a search hit" and the "jump to a
+// reply/notification target" cases: it opens a two-sided window around an
+// arbitrary message id instead of requiring the caller to already have it
+// loaded, which GetMessages (backward-only) cannot do.
+func (h *Hub) getMessagesAround(req wsCommandRequest, ctx context.Context) {
+	requestID := req.command.RequestID
+	var payload types.WsGetMessagesAroundRequest
+
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "invalid get_messages_around payload")
+		return
+	}
+	if payload.ChannelID <= 0 || payload.MessageID <= 0 {
+		h.pushErrorWithRequestID(req.client, requestID, "channel_id and message_id are required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushErrorWithRequestID(req.client, requestID, "access denied")
+		return
+	}
+
+	messages, olderCursor, newerCursor, hasMoreOlder, hasMoreNewer, err := h.storage.GetMessagesAround(ctx, payload.ChannelID, payload.MessageID, payload.Limit, h.s3Host)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, err.Error())
+		return
+	}
+
+	var olderCursorRaw, newerCursorRaw string
+	if olderCursor != nil {
+		olderCursorRaw, err = types.EncodeWsMessageCursor(*olderCursor)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to encode cursor")
+			return
+		}
+	}
+	if newerCursor != nil {
+		newerCursorRaw, err = types.EncodeWsMessageCursor(*newerCursor)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to encode cursor")
+			return
+		}
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event:     types.WsEventAck,
+		RequestID: requestID,
+		Data: types.WsGetMessagesAroundResponse{
+			ChannelID:    payload.ChannelID,
+			Messages:     messages,
+			OlderCursor:  olderCursorRaw,
+			NewerCursor:  newerCursorRaw,
+			HasMoreOlder: hasMoreOlder,
+			HasMoreNewer: hasMoreNewer,
+		},
+	})
+}
+
 func (h *Hub) getServers(req wsCommandRequest, ctx context.Context) {
 	servers, err := h.storage.GetServersByUserID(ctx, req.client.UserID)
 	if err != nil {
@@ -1408,6 +1562,127 @@ func normalizeChannelType(raw string) string {
 	default:
 		return ""
 	}
+}
+
+// searchMessages resolves a search_messages command. Runs off Run() (see the
+// dispatch comment in handleCommand) since a full-text scan across an
+// arbitrary date range has no bounded latency the way the rest of the hub's
+// commands do.
+func (h *Hub) searchMessages(req wsCommandRequest, ctx context.Context) {
+	requestID := req.command.RequestID
+	var payload types.WsSearchMessagesRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "invalid search_messages payload")
+		return
+	}
+
+	payload.Query = strings.TrimSpace(payload.Query)
+	if len([]rune(payload.Query)) < 2 {
+		h.pushEvent(req.client, &types.WsEvent{
+			Event:     types.WsEventAck,
+			RequestID: requestID,
+			Data:      types.WsSearchMessagesResponse{Hits: []types.WsMessageSearchHit{}},
+		})
+		return
+	}
+
+	if payload.ServerID <= 0 && payload.ChannelID <= 0 {
+		h.pushErrorWithRequestID(req.client, requestID, "channel_id or server_id is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	// Scope determines which access check applies: a server-wide search is
+	// gated on membership, a single-channel search on that channel's access —
+	// checked before the query runs, not inferred from its results.
+	if payload.ServerID > 0 {
+		isMember, err := h.storage.IsServerMember(ctx, req.client.UserID, payload.ServerID)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to check server membership")
+			return
+		}
+		if !isMember {
+			h.pushErrorWithRequestID(req.client, requestID, "access denied")
+			return
+		}
+	} else {
+		canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to check channel access")
+			return
+		}
+		if !canAccess {
+			h.pushErrorWithRequestID(req.client, requestID, "access denied")
+			return
+		}
+	}
+
+	params := types.MessageSearchParams{
+		Query:     payload.Query,
+		ChannelID: payload.ChannelID,
+		ServerID:  payload.ServerID,
+		AuthorID:  payload.AuthorID,
+		HasFile:   payload.HasFile,
+		HasLink:   payload.HasLink,
+		Limit:     payload.Limit,
+	}
+
+	if payload.Before != nil {
+		t, err := time.Parse(time.RFC3339, *payload.Before)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "invalid before date")
+			return
+		}
+		params.Before = &t
+	}
+	if payload.After != nil {
+		t, err := time.Parse(time.RFC3339, *payload.After)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "invalid after date")
+			return
+		}
+		params.After = &t
+	}
+
+	// At server scope the cursor's channel_id belongs to whichever channel
+	// produced the last page's final hit, not the search's own scope, so
+	// unlike get_messages there is nothing here to cross-check it against.
+	cursor, err := types.DecodeWsMessageCursor(payload.Cursor)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "invalid cursor")
+		return
+	}
+	params.Cursor = cursor
+
+	hits, nextCursor, hasMore, err := h.storage.SearchMessages(ctx, params, h.s3Host)
+	if err != nil {
+		h.pushErrorWithRequestID(req.client, requestID, "search failed")
+		return
+	}
+
+	var nextCursorRaw string
+	if nextCursor != nil {
+		nextCursorRaw, err = types.EncodeWsMessageCursor(*nextCursor)
+		if err != nil {
+			h.pushErrorWithRequestID(req.client, requestID, "failed to encode cursor")
+			return
+		}
+	}
+
+	// Query text is user message content — never logged, only its length.
+	h.log.Info("ws search_messages", "user_id", req.client.UserID, "query_len", len(payload.Query), "hits", len(hits))
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event:     types.WsEventAck,
+		RequestID: requestID,
+		Data: types.WsSearchMessagesResponse{
+			Hits:       hits,
+			NextCursor: nextCursorRaw,
+			HasMore:    hasMore,
+		},
+	})
 }
 
 func (h *Hub) searchServers(req wsCommandRequest, ctx context.Context) {
