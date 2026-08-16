@@ -72,8 +72,16 @@ const (
 	WsEventVoiceUserLeft      = "voice_user_left"
 	WsEventVoiceStatusChanged = "voice_status_changed"
 	WsEventRTCSignal          = "rtc_signal"
-	WsEventTypingStart        = "typing_start"
-	WsEventTypingStop         = "typing_stop"
+	// WsEventRTCSignalError reports a validation failure from relayRTCSignal
+	// (e.g. sender/recipient not yet registered as in-voice — a common race
+	// right after joining). rtc_signal is sent fire-and-forget on the client
+	// (it bypasses the request/ack queue — see chatSocket.ts sendRTCSignal),
+	// so its errors must NOT be dispatched as a plain WsEventError: that would
+	// reject whatever unrelated command the client happens to be awaiting at
+	// that moment (e.g. join_voice_channel failing with an rtc_signal error).
+	WsEventRTCSignalError = "rtc_signal_error"
+	WsEventTypingStart    = "typing_start"
+	WsEventTypingStop     = "typing_stop"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -128,7 +136,7 @@ type WsSendMessageRequest struct {
 	ChannelID     int64   `json:"channel_id"`
 	Content       string  `json:"content"`
 	AttachmentIDs []int64 `json:"attachment_ids,omitempty"`
-	ReplyToID    *int64  `json:"reply_to_id,omitempty"`
+	ReplyToID     *int64  `json:"reply_to_id,omitempty"`
 }
 
 type WsDeleteMessageRequest struct {
@@ -290,22 +298,22 @@ type WsEvent struct {
 }
 
 type WsMessage struct {
-	ID               int64        `json:"id"`
-	ChannelID        int64        `json:"channel_id"`
-	AuthorID         int          `json:"author_id"`
-	AuthorFirstName  string       `json:"author_first_name"`
-	AuthorLastName   string       `json:"author_last_name"`
-	AuthorNickname   string       `json:"author_nickname,omitempty"`
-	AuthorAvatarURL  string       `json:"author_avatar_url,omitempty"`
-	Content          string       `json:"content"`
-	Attachments      []Attachment `json:"attachments,omitempty"`
-	ReplyToID        *int64       `json:"reply_to_id,omitempty"`
-	ReplyTo          *WsReplyTo   `json:"reply_to,omitempty"`
-	Mentions         []int        `json:"mentions,omitempty"`
-	MentionsEveryone bool         `json:"mentions_everyone,omitempty"`
+	ID               int64           `json:"id"`
+	ChannelID        int64           `json:"channel_id"`
+	AuthorID         int             `json:"author_id"`
+	AuthorFirstName  string          `json:"author_first_name"`
+	AuthorLastName   string          `json:"author_last_name"`
+	AuthorNickname   string          `json:"author_nickname,omitempty"`
+	AuthorAvatarURL  string          `json:"author_avatar_url,omitempty"`
+	Content          string          `json:"content"`
+	Attachments      []Attachment    `json:"attachments,omitempty"`
+	ReplyToID        *int64          `json:"reply_to_id,omitempty"`
+	ReplyTo          *WsReplyTo      `json:"reply_to,omitempty"`
+	Mentions         []int           `json:"mentions,omitempty"`
+	MentionsEveryone bool            `json:"mentions_everyone,omitempty"`
 	Embeds           []WsLinkPreview `json:"embeds,omitempty"`
-	CreatedAt        time.Time    `json:"created_at"`
-	EditedAt         *time.Time   `json:"edited_at,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+	EditedAt         *time.Time      `json:"edited_at,omitempty"`
 }
 
 type WsServerMember struct {

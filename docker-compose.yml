@@ -50,6 +50,13 @@ services:
     restart: unless-stopped
     environment:
       CONFIG_PATH: ./config/prod.yaml
+      # Backs GET /api/v1/webrtc/turn-credentials (short-lived, per-user TURN
+      # creds). TURN_STATIC_AUTH_SECRET must match coturn's static-auth-secret
+      # (with use-auth-secret enabled) — without it, the endpoint 404s and the
+      # frontend silently falls back to STUN-only, which fails for anyone
+      # behind a symmetric NAT/CGNAT.
+      TURN_URLS: ${TURN_URLS:-turn:45.155.205.212:3478?transport=udp,turn:45.155.205.212:3478?transport=tcp,turn:45.155.205.212:5349?transport=udp,turn:45.155.205.212:5349?transport=tcp}
+      TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -65,8 +72,12 @@ services:
       args:
         VITE_WEBRTC_STUN_URLS: ${VITE_WEBRTC_STUN_URLS:-stun:stun.l.google.com:19302}
         VITE_WEBRTC_TURN_URLS: ${VITE_WEBRTC_TURN_URLS:-turn:45.155.205.212:3478?transport=udp,turn:45.155.205.212:3478?transport=tcp,turn:45.155.205.212:5349?transport=udp,turn:45.155.205.212:5349?transport=tcp}
-        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-mini discord}
-        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-${TURN_PASSWORD:-StrongPassword123}}
+        # Deliberately no default username/credential here: leaving both
+        # unset makes the frontend call GET /webrtc/turn-credentials for
+        # short-lived, per-user creds instead (see backend.environment above).
+        # Set these explicitly only to force the old static-credential mode.
+        VITE_WEBRTC_TURN_USERNAME: ${VITE_WEBRTC_TURN_USERNAME:-}
+        VITE_WEBRTC_TURN_CREDENTIAL: ${VITE_WEBRTC_TURN_CREDENTIAL:-}
         VITE_WEBRTC_FORCE_RELAY: ${VITE_WEBRTC_FORCE_RELAY:-false}
     restart: unless-stopped
     depends_on:

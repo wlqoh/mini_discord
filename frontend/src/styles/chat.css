@@ -953,6 +953,33 @@ body {
     background: rgba(0, 0, 0, 0.82);
 }
 
+.video-autoplay-blocked-btn {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-md);
+    padding: 8px 14px;
+    background: rgba(0, 0, 0, 0.72);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    color: var(--text-1);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.14s;
+}
+
+.video-autoplay-blocked-btn:hover {
+    background: var(--accent);
+    color: var(--accent-text);
+}
+
 .video-tile:fullscreen,
 .video-tile:-webkit-full-screen {
     width: 100%;

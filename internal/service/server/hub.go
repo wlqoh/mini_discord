@@ -403,21 +403,45 @@ func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 	h.mu.RUnlock()
 }
 
+// isCriticalVoiceEvent identifies events whose silent loss leaves a client in
+// a state it cannot recover from on its own: a missed rtc_signal breaks one
+// P2P link forever, and a missed voice_user_joined/left/status_changed
+// desyncs the client's view of who's in the call from the server's.
+func isCriticalVoiceEvent(event string) bool {
+	switch event {
+	case types.WsEventRTCSignal,
+		types.WsEventVoiceUserJoined,
+		types.WsEventVoiceUserLeft,
+		types.WsEventVoiceStatusChanged:
+		return true
+	}
+	return false
+}
+
 func (h *Hub) enqueueEvent(cl *Client, event *types.WsEvent) {
-	if event != nil && event.Event == types.WsEventRTCSignal {
-		select {
-		case cl.Outbound <- event:
-		case <-time.After(300 * time.Millisecond):
-			h.log.Warn("drop rtc_signal event: outbound queue timeout", "user_id", cl.UserID)
-		}
+	if event == nil {
 		return
 	}
 
 	select {
 	case cl.Outbound <- event:
+		return
 	default:
-		h.log.Debug("drop websocket event: outbound queue full", "event", event.Event, "user_id", cl.UserID)
 	}
+
+	if !isCriticalVoiceEvent(event.Event) {
+		h.log.Debug("drop websocket event: outbound queue full", "event", event.Event, "user_id", cl.UserID)
+		return
+	}
+
+	// The outbound queue is full and this event can't be silently dropped:
+	// the client would end up with a peer it never learns about, or a
+	// signaling message that permanently breaks one P2P link. Closing the
+	// connection is the correct response — the client's own reconnect logic
+	// (see ChatSocket) reconnects and pulls a fresh, consistent snapshot,
+	// which a half-delivered event stream never would.
+	h.log.Warn("closing slow client: critical event would be dropped", "user_id", cl.UserID, "event", event.Event)
+	_ = cl.Conn.Close()
 }
 
 func (h *Hub) pushError(cl *Client, message string) {
@@ -1230,30 +1254,40 @@ func (h *Hub) leaveVoiceChannel(req wsCommandRequest) {
 	h.leaveVoiceChannelInternal(req.client, true)
 }
 
+// pushRTCSignalError reports a rtc_signal validation failure. It deliberately
+// uses a dedicated event type instead of pushError/WsEventError: rtc_signal
+// is sent fire-and-forget (it bypasses the client's request/ack queue), so a
+// plain "error" event here would be misattributed to whatever unrelated
+// command the client happens to be awaiting (e.g. rejecting a perfectly
+// successful join_voice_channel because of a stale rtc_signal race).
+func (h *Hub) pushRTCSignalError(cl *Client, message string) {
+	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventRTCSignalError, Error: message})
+}
+
 func (h *Hub) relayRTCSignal(req wsCommandRequest, ctx context.Context) {
 	var payload types.WsRTCSignalRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-		h.pushError(req.client, "invalid rtc_signal payload")
+		h.pushRTCSignalError(req.client, "invalid rtc_signal payload")
 		return
 	}
 
 	payload.SignalType = strings.TrimSpace(strings.ToLower(payload.SignalType))
 	if payload.ChannelID <= 0 || payload.ToUserID <= 0 || payload.SignalType == "" {
-		h.pushError(req.client, "channel_id, to_user_id and signal_type are required")
+		h.pushRTCSignalError(req.client, "channel_id, to_user_id and signal_type are required")
 		return
 	}
 	if payload.SignalType != "offer" && payload.SignalType != "answer" && payload.SignalType != "candidate" {
-		h.pushError(req.client, "unsupported signal_type")
+		h.pushRTCSignalError(req.client, "unsupported signal_type")
 		return
 	}
 
 	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
 	if err != nil {
-		h.pushError(req.client, "failed to check channel access")
+		h.pushRTCSignalError(req.client, "failed to check channel access")
 		return
 	}
 	if !canAccess {
-		h.pushError(req.client, "access denied")
+		h.pushRTCSignalError(req.client, "access denied")
 		return
 	}
 
@@ -1264,11 +1298,11 @@ func (h *Hub) relayRTCSignal(req wsCommandRequest, ctx context.Context) {
 	h.mu.RUnlock()
 
 	if !senderInVoice || senderChannelID != payload.ChannelID {
-		h.pushError(req.client, "join voice channel before signaling")
+		h.pushRTCSignalError(req.client, "join voice channel before signaling")
 		return
 	}
 	if !targetInVoice || targetChannelID != payload.ChannelID || !targetConnected {
-		h.pushError(req.client, "recipient not in channel")
+		h.pushRTCSignalError(req.client, "recipient not in channel")
 		return
 	}
 
