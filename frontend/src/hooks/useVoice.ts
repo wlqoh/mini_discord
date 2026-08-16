@@ -5,6 +5,7 @@ import { ChatSocket } from "../services/chatSocket.ts";
 import { playJoinSound, playLeaveSound } from "../services/sounds.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
 import type { VoiceParticipant, VoiceParticipantsByChannel } from "../types/chat.ts";
+import { aggregateQuality, type PeerQuality } from "../services/connectionQuality.ts";
 
 const VOICE_VOLUME_KEY = "voice_volume_by_user";
 
@@ -33,6 +34,7 @@ export function useVoice({
         stream: MediaStream;
     }>>([]);
     const [voiceParticipantsByChannel, setVoiceParticipantsByChannel] = useState<VoiceParticipantsByChannel>({});
+    const [qualityByUserId, setQualityByUserId] = useState<Record<number, PeerQuality>>({});
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
         try {
             const stored = localStorage.getItem(VOICE_VOLUME_KEY);
@@ -128,12 +130,17 @@ export function useVoice({
         setError(message);
     }, [setError]);
 
+    const onQualityChange = useCallback((quality: Record<number, PeerQuality>) => {
+        setQualityByUserId(quality);
+    }, []);
+
     const callClientCallbacks = useMemo(() => ({
         onParticipantStream,
         onParticipantLeft,
         onLocalStream,
         onError,
-    }), [onParticipantStream, onParticipantLeft, onLocalStream, onError]);
+        onQualityChange,
+    }), [onParticipantStream, onParticipantLeft, onLocalStream, onError, onQualityChange]);
 
     const onVoiceUserJoined = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
         setVoiceParticipantsByChannel((prev) => {
@@ -274,6 +281,7 @@ export function useVoice({
         } finally {
             setVoiceChannelId(0);
             setRemoteStreams([]);
+            setQualityByUserId({});
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
@@ -421,12 +429,21 @@ export function useVoice({
         [voiceParticipantsByChannel, voiceChannelId],
     );
 
+    // Агрегат «ваше соединение»: худший из линков. null, когда пиров нет —
+    // в одиночку в канале измерять нечего, индикатор не рендерится.
+    const connectionQuality = useMemo(
+        () => aggregateQuality(Object.values(qualityByUserId)),
+        [qualityByUserId],
+    );
+
     return {
         voiceChannelId,
         localStream,
         remoteStreams,
         voiceParticipantsByChannel,
         setVoiceParticipantsByChannel,
+        qualityByUserId,
+        connectionQuality,
         voiceVolumeByUserId,
         setVoiceVolumeByUserId,
         activeVolumeUserId,

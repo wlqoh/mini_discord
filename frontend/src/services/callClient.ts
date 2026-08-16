@@ -11,11 +11,25 @@ import rnnoiseWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
 import rnnoiseSimdWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
 import { ChatSocket } from "./chatSocket";
 import { getTurnCredentials, type TurnCredentialsResponse } from "./turnApi";
+import {
+  QUALITY_SAMPLE_INTERVAL_MS,
+  EMPTY_METRICS,
+  applyHysteresis,
+  buildQuality,
+  createQualityTracker,
+  qualitySignature,
+  readForcedLevel,
+  readQualitySample,
+  type PeerQuality,
+  type QualityLevel,
+  type QualityTracker,
+} from "./connectionQuality";
 
 type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => void;
 type RemoteLeftListener = (userId: number) => void;
 type LocalStreamListener = (stream: MediaStream | null) => void;
 type ErrorListener = (message: string) => void;
+type QualityListener = (quality: Record<number, PeerQuality>) => void;
 type CameraFacingMode = "user" | "environment";
 
 type PeerState = {
@@ -116,6 +130,24 @@ function hasUsableTurnServer(servers: RTCIceServer[]): boolean {
   });
 }
 
+/**
+ * Состояния, которые не нужно измерять: их авторитетно сообщает сам
+ * RTCPeerConnection. Возвращает null, когда соединение живо и метрики осмысленны.
+ */
+function serviceLevelOf(pc: RTCPeerConnection): QualityLevel | null {
+  switch (pc.connectionState) {
+    case "new":
+    case "connecting":
+      return "connecting";
+    case "disconnected":
+    case "failed":
+    case "closed":
+      return "disconnected";
+    default:
+      return null;
+  }
+}
+
 export class CallClient {
   private readonly socket: ChatSocket;
 
@@ -152,6 +184,14 @@ export class CallClient {
 
   private readonly onError: ErrorListener;
 
+  private readonly onQualityChange: QualityListener;
+
+  private qualitySampleTimer: number | null = null;
+
+  private readonly qualityTrackers = new Map<number, QualityTracker>();
+
+  private lastQualitySignature = "";
+
   private readonly renegotiateRetryTimers = new Map<number, number>();
   private readonly iceRestartTimers = new Map<number, number>();
   private readonly iceRestartAttempts = new Map<number, number>();
@@ -171,6 +211,7 @@ export class CallClient {
     onRemoteLeft: RemoteLeftListener,
     onLocalStream: LocalStreamListener,
     onError: ErrorListener,
+    onQualityChange: QualityListener,
   ) {
     this.socket = socket;
     this.selfUserID = selfUserID;
@@ -178,6 +219,7 @@ export class CallClient {
     this.onRemoteLeft = onRemoteLeft;
     this.onLocalStream = onLocalStream;
     this.onError = onError;
+    this.onQualityChange = onQualityChange;
 
     this.unsubscribers.push(this.socket.onVoiceUserJoined((event) => this.handleVoiceUserJoined(event)));
     this.unsubscribers.push(this.socket.onVoiceUserLeft((event) => this.handleVoiceUserLeft(event)));
@@ -222,6 +264,8 @@ export class CallClient {
       const shouldInitiate = this.selfUserID < participant.user_id;
       void this.ensurePeer(participant, shouldInitiate);
     });
+
+    this.startQualityMonitor();
 
     return response;
   }
@@ -373,6 +417,8 @@ export class CallClient {
   }
 
   async leave(): Promise<void> {
+    this.stopQualityMonitor();
+
     if (this.currentChannelID > 0) {
       try {
         await this.socket.leaveVoiceChannel();
@@ -973,6 +1019,107 @@ export class CallClient {
     } catch {
       this.onError("Failed to handle WebRTC signal");
     }
+  }
+
+  private startQualityMonitor(): void {
+    if (this.qualitySampleTimer !== null) {
+      return;
+    }
+    this.qualitySampleTimer = window.setInterval(() => {
+      void this.sampleQuality();
+    }, QUALITY_SAMPLE_INTERVAL_MS);
+  }
+
+  private stopQualityMonitor(): void {
+    if (this.qualitySampleTimer !== null) {
+      window.clearInterval(this.qualitySampleTimer);
+      this.qualitySampleTimer = null;
+    }
+    this.qualityTrackers.clear();
+    this.lastQualitySignature = "";
+    this.onQualityChange({});
+  }
+
+  private ensureQualityTracker(userID: number): QualityTracker {
+    const existing = this.qualityTrackers.get(userID);
+    if (existing) {
+      return existing;
+    }
+    const tracker = createQualityTracker();
+    this.qualityTrackers.set(userID, tracker);
+    return tracker;
+  }
+
+  private async sampleQuality(): Promise<void> {
+    // Между запуском таймера и его срабатыванием мог произойти leave().
+    if (this.currentChannelID <= 0) {
+      return;
+    }
+
+    const forcedLevel = readForcedLevel();
+    const entries = await Promise.all(
+      Array.from(this.peers.entries()).map(
+        async ([userID, state]) => [userID, await this.samplePeer(userID, state, forcedLevel)] as const,
+      ),
+    );
+
+    // getStats асинхронный — за время ожидания звонок мог закончиться.
+    if (this.currentChannelID <= 0) {
+      return;
+    }
+
+    const snapshot: Record<number, PeerQuality> = {};
+    entries.forEach(([userID, quality]) => {
+      snapshot[userID] = quality;
+    });
+
+    this.qualityTrackers.forEach((_, userID) => {
+      if (!this.peers.has(userID)) {
+        this.qualityTrackers.delete(userID);
+      }
+    });
+
+    const signature = qualitySignature(snapshot);
+    if (signature === this.lastQualitySignature) {
+      return;
+    }
+    this.lastQualitySignature = signature;
+    this.onQualityChange(snapshot);
+  }
+
+  private async samplePeer(
+    userID: number,
+    state: PeerState,
+    forcedLevel: QualityLevel | null,
+  ): Promise<PeerQuality> {
+    const tracker = this.ensureQualityTracker(userID);
+
+    if (forcedLevel) {
+      tracker.level = forcedLevel;
+      return buildQuality(forcedLevel, EMPTY_METRICS, null);
+    }
+
+    const serviceLevel = serviceLevelOf(state.pc);
+    if (serviceLevel) {
+      return buildQuality(applyHysteresis(tracker, serviceLevel), EMPTY_METRICS, null);
+    }
+
+    let report: RTCStatsReport;
+    try {
+      report = await state.pc.getStats();
+    } catch {
+      return buildQuality(applyHysteresis(tracker, "connecting"), EMPTY_METRICS, null);
+    }
+
+    const sample = readQualitySample(report, tracker);
+    debugLog("quality:sample", { userID, level: sample.level, ...sample.metrics });
+
+    // Первый замер (нет предыдущих счётчиков) или поток без пакетов — измерять нечего.
+    if (!sample.level) {
+      return buildQuality(applyHysteresis(tracker, "connecting"), sample.metrics, null);
+    }
+
+    return buildQuality(applyHysteresis(tracker, sample.level), sample.metrics, sample.direction);
   }
 
   private async flushPendingCandidates(peer: PeerState): Promise<void> {

@@ -6,6 +6,7 @@ import MessageList from "../components/MessageList.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
+import ConnectionQualityIcon from "../components/ConnectionQualityIcon.tsx";
 import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
@@ -772,6 +773,13 @@ export default function ChatPage() {
                                             {voice.isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}
                                         </button>
+                                        {voice.connectionQuality ? (
+                                            <ConnectionQualityIcon
+                                                quality={voice.connectionQuality}
+                                                size={16}
+                                                className="voice-quality-badge"
+                                            />
+                                        ) : null}
                                         {isVoiceChannel && !isInSelectedVoiceChannel && (
                                             <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
                                                 Switch
@@ -812,6 +820,7 @@ export default function ChatPage() {
                                                 volume={effectiveVolume}
                                                 micEnabled={participant.mic_enabled}
                                                 deafened={participant.deafened}
+                                                quality={voice.qualityByUserId[participant.user_id] ?? null}
                                             />
                                         );
                                     })}
