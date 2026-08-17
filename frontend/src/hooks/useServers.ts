@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
-import { CallClient } from "../services/callClient.ts";
+import { VoiceClientFactory } from "../services/callClientFactory.ts";
+import type { VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
 import type {
@@ -20,7 +21,7 @@ const MAX_SERVER_CHANNEL_NAME_LENGTH = 16;
 
 type Params = {
     socketRef: React.MutableRefObject<ChatSocket | null>;
-    callClientRef: React.MutableRefObject<CallClient | null>;
+    callClientRef: React.MutableRefObject<VoiceClient | null>;
     setIsConnected: (v: boolean) => void;
     isPageVisible: boolean;
     showToast: (type: "success" | "error", message: string) => void;
@@ -40,6 +41,9 @@ type Params = {
         onVoiceUserJoined: (event: { channel_id: number; user: VoiceParticipant }) => void;
         onVoiceUserLeft: (event: { channel_id: number; user: VoiceParticipant }) => void;
         onVoiceStatusChanged: (event: { channel_id: number; user: VoiceParticipant }) => void;
+        onVoiceUserDetached: (event: { channel_id: number; user: VoiceParticipant }) => void;
+        onVoiceUserResumed: (event: { channel_id: number; user: VoiceParticipant }) => void;
+        onSfuActiveSpeakers: (event: { channel_id: number; user_ids: number[] }) => void;
     };
     onSocketReconnectRestored: () => void;
     currentUserId: number | null;
@@ -178,7 +182,7 @@ export function useServers({
         socketRef.current = socket;
 
         if (currentUserId && currentUserId > 0) {
-            callClientRef.current = new CallClient(
+            callClientRef.current = new VoiceClientFactory(
                 socket,
                 currentUserId,
                 callClientCallbacks.onParticipantStream,
@@ -224,6 +228,9 @@ export function useServers({
         const unsubscribeVoiceUserJoined = socket.onVoiceUserJoined(voiceSocketHandlers.onVoiceUserJoined);
         const unsubscribeVoiceUserLeft = socket.onVoiceUserLeft(voiceSocketHandlers.onVoiceUserLeft);
         const unsubscribeVoiceStatusChanged = socket.onVoiceStatusChanged(voiceSocketHandlers.onVoiceStatusChanged);
+        const unsubscribeVoiceUserDetached = socket.onVoiceUserDetached(voiceSocketHandlers.onVoiceUserDetached);
+        const unsubscribeVoiceUserResumed = socket.onVoiceUserResumed(voiceSocketHandlers.onVoiceUserResumed);
+        const unsubscribeSfuActiveSpeakers = socket.onSfuActiveSpeakers(voiceSocketHandlers.onSfuActiveSpeakers);
 
         // An unplanned disconnect (idle proxy timeout, network blip, backend
         // restart) previously left isConnected stuck at true forever and the
@@ -270,6 +277,9 @@ export function useServers({
             unsubscribeVoiceUserJoined();
             unsubscribeVoiceUserLeft();
             unsubscribeVoiceStatusChanged();
+            unsubscribeVoiceUserDetached();
+            unsubscribeVoiceUserResumed();
+            unsubscribeSfuActiveSpeakers();
             unsubscribeReconnect();
             callClientRef.current?.dispose();
             callClientRef.current = null;

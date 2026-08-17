@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { CallClient } from "../services/callClient.ts";
+import type { VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import { playJoinSound, playLeaveSound } from "../services/sounds.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
@@ -11,7 +11,7 @@ const VOICE_VOLUME_KEY = "voice_volume_by_user";
 
 type Params = {
     socketRef: React.MutableRefObject<ChatSocket | null>;
-    callClientRef: React.MutableRefObject<CallClient | null>;
+    callClientRef: React.MutableRefObject<VoiceClient | null>;
     currentUserId: number | null;
     currentUserProfile: CurrentUserProfile | null;
     avatarUrl: string;
@@ -35,6 +35,12 @@ export function useVoice({
     }>>([]);
     const [voiceParticipantsByChannel, setVoiceParticipantsByChannel] = useState<VoiceParticipantsByChannel>({});
     const [qualityByUserId, setQualityByUserId] = useState<Record<number, PeerQuality>>({});
+    // SFU grace-period reconnect (sfu-migration-plan.md §7 phase 3) — who's
+    // mid-reconnect right now. Media keeps flowing the whole time; this is
+    // purely a "their connection is having trouble" UI affordance.
+    const [detachedUserIds, setDetachedUserIds] = useState<Set<number>>(new Set());
+    // Active speaker (decision #9).
+    const [activeSpeakerUserIds, setActiveSpeakerUserIds] = useState<Set<number>>(new Set());
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
         try {
             const stored = localStorage.getItem(VOICE_VOLUME_KEY);
@@ -104,7 +110,7 @@ export function useVoice({
     }, [remoteStreams, isDeafened]);
 
     // Feeds the server's authoritative participant list (refreshed by the
-    // periodic get_server_channels poll in useServers) into CallClient's
+    // periodic get_server_channels poll in useServers) into the voice client's
     // reconciliation loop, so a peer that never got created — or one whose
     // participant left without a voice_user_left event arriving — gets fixed
     // within one reconcile tick instead of staying wrong for the whole call.
@@ -211,6 +217,22 @@ export function useVoice({
                 [event.channel_id]: next,
             };
         });
+        // A user who never resumed within the grace period leaves via a
+        // normal voice_user_left, not voice_user_resumed — clear any
+        // leftover detached/speaking state for them so it can't stick to a
+        // stale tile or a later participant that reuses the same user_id.
+        setDetachedUserIds((prev) => {
+            if (!prev.has(event.user.user_id)) return prev;
+            const next = new Set(prev);
+            next.delete(event.user.user_id);
+            return next;
+        });
+        setActiveSpeakerUserIds((prev) => {
+            if (!prev.has(event.user.user_id)) return prev;
+            const next = new Set(prev);
+            next.delete(event.user.user_id);
+            return next;
+        });
     }, []);
 
     const onVoiceStatusChanged = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
@@ -238,11 +260,45 @@ export function useVoice({
         });
     }, []);
 
+    const onVoiceUserDetached = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
+        if (event.channel_id !== voiceChannelIdRef.current) {
+            return;
+        }
+        setDetachedUserIds((prev) => {
+            if (prev.has(event.user.user_id)) return prev;
+            const next = new Set(prev);
+            next.add(event.user.user_id);
+            return next;
+        });
+    }, []);
+
+    const onVoiceUserResumed = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
+        if (event.channel_id !== voiceChannelIdRef.current) {
+            return;
+        }
+        setDetachedUserIds((prev) => {
+            if (!prev.has(event.user.user_id)) return prev;
+            const next = new Set(prev);
+            next.delete(event.user.user_id);
+            return next;
+        });
+    }, []);
+
+    const onSfuActiveSpeakers = useCallback((event: { channel_id: number; user_ids: number[] }) => {
+        if (event.channel_id !== voiceChannelIdRef.current) {
+            return;
+        }
+        setActiveSpeakerUserIds(new Set(event.user_ids));
+    }, []);
+
     const voiceSocketHandlers = useMemo(() => ({
         onVoiceUserJoined,
         onVoiceUserLeft,
         onVoiceStatusChanged,
-    }), [onVoiceUserJoined, onVoiceUserLeft, onVoiceStatusChanged]);
+        onVoiceUserDetached,
+        onVoiceUserResumed,
+        onSfuActiveSpeakers,
+    }), [onVoiceUserJoined, onVoiceUserLeft, onVoiceStatusChanged, onVoiceUserDetached, onVoiceUserResumed, onSfuActiveSpeakers]);
 
     const handleJoinVoice = useCallback(async (selectedChannelId: number): Promise<void> => {
         if (!callClientRef.current || selectedChannelId <= 0) {
@@ -261,6 +317,8 @@ export function useVoice({
             setIsSwitchingCamera(false);
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
+            setDetachedUserIds(new Set());
+            setActiveSpeakerUserIds(new Set());
             setError("");
 
             playJoinSound();
@@ -315,6 +373,8 @@ export function useVoice({
             setVoiceChannelId(0);
             setRemoteStreams([]);
             setQualityByUserId({});
+            setDetachedUserIds(new Set());
+            setActiveSpeakerUserIds(new Set());
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
@@ -476,6 +536,8 @@ export function useVoice({
         voiceParticipantsByChannel,
         setVoiceParticipantsByChannel,
         qualityByUserId,
+        detachedUserIds,
+        activeSpeakerUserIds,
         connectionQuality,
         voiceVolumeByUserId,
         setVoiceVolumeByUserId,

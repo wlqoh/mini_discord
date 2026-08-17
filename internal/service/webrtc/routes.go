@@ -37,12 +37,26 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 // static VITE_WEBRTC_TURN_* credentials were baked into the frontend build —
 // which fails closed for anyone behind a symmetric NAT/CGNAT.
 func (h *Handler) handleTurnCredentials(c *fiber.Ctx) error {
-	cfg := h.cfg.WebRTC
-	if len(cfg.TurnURLs) == 0 || cfg.TurnStaticAuthSecret == "" {
+	userID, _ := c.Locals("user_id").(int)
+	creds, ok := MintTurnCredentials(h.cfg.WebRTC, userID)
+	if !ok {
 		return utils.WriteError(c, fiber.StatusNotFound, "TURN is not configured")
 	}
+	return c.JSON(creds)
+}
 
-	userID, _ := c.Locals("user_id").(int)
+// MintTurnCredentials mints short-lived TURN credentials for userID using
+// coturn's use-auth-secret scheme. Exported so internal/service/server.Hub
+// can hand the same credentials to SFU clients as part of their join_voice_
+// channel ack (sfu-migration-plan.md §5.1's ice_servers field) — an SFU
+// client still needs a TURN fallback for reaching the SFU's public UDP port
+// from behind a symmetric NAT/CGNAT, same as a mesh client needs one to
+// reach another peer. ok is false when TURN isn't configured.
+func MintTurnCredentials(cfg config.WebRTCConfig, userID int) (creds types.TurnCredentialsResponse, ok bool) {
+	if len(cfg.TurnURLs) == 0 || cfg.TurnStaticAuthSecret == "" {
+		return types.TurnCredentialsResponse{}, false
+	}
+
 	ttl := cfg.TurnCredentialsTTLSeconds
 	if ttl <= 0 {
 		ttl = 600
@@ -57,11 +71,11 @@ func (h *Handler) handleTurnCredentials(c *fiber.Ctx) error {
 	mac.Write([]byte(username))
 	credential := base64.StdEncoding.EncodeToString(mac.Sum(nil))
 
-	return c.JSON(types.TurnCredentialsResponse{
+	return types.TurnCredentialsResponse{
 		URLs:       cfg.TurnURLs,
 		Username:   username,
 		Credential: credential,
 		TTLSeconds: ttl,
 		ExpiresAt:  expiresAt.UTC(),
-	})
+	}, true
 }

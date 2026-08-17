@@ -71,6 +71,19 @@ const (
 	WsActionGetMessagesAfter  = "get_messages_after"
 	WsActionSearchMessages    = "search_messages"
 
+	// sfu_* is a namespace separate from rtc_signal (mesh) on purpose: the
+	// two transports have incompatible addressing semantics (rtc_signal's
+	// to_user_id names a peer; sfu_* always addresses the server), and
+	// keeping them apart means work on the SFU path can't regress mesh
+	// behind the transport_mode flag. See sfu-migration-plan.md §3 decision
+	// #11. Mesh is removed once the SFU migration completes (§9 of that
+	// plan); until then both namespaces coexist.
+	WsActionSfuOffer          = "sfu_offer"
+	WsActionSfuAnswer         = "sfu_answer"
+	WsActionSfuCandidate      = "sfu_candidate"
+	WsActionSfuSubscribeVideo = "sfu_subscribe_video"
+	WsActionSfuResume         = "sfu_resume"
+
 	WsEventAck                = "ack"
 	WsEventError              = "error"
 	WsEventMessage            = "message"
@@ -80,7 +93,14 @@ const (
 	WsEventVoiceUserJoined    = "voice_user_joined"
 	WsEventVoiceUserLeft      = "voice_user_left"
 	WsEventVoiceStatusChanged = "voice_status_changed"
-	WsEventRTCSignal          = "rtc_signal"
+	// WsEventVoiceUserDetached/Resumed (migration phase 3, decision #10):
+	// fired when an SFU participant's WebSocket drops/reconnects during the
+	// grace period. Media keeps flowing the whole time — these are a UI
+	// affordance (show the tile as reconnecting), not a membership change,
+	// so unlike VoiceUserJoined/Left they're not in isCriticalVoiceEvent.
+	WsEventVoiceUserDetached = "voice_user_detached"
+	WsEventVoiceUserResumed  = "voice_user_resumed"
+	WsEventRTCSignal         = "rtc_signal"
 	// WsEventRTCSignalError reports a validation failure from relayRTCSignal
 	// (e.g. sender/recipient not yet registered as in-voice — a common race
 	// right after joining). rtc_signal is sent fire-and-forget on the client
@@ -91,6 +111,18 @@ const (
 	WsEventRTCSignalError = "rtc_signal_error"
 	WsEventTypingStart    = "typing_start"
 	WsEventTypingStop     = "typing_stop"
+
+	WsEventSfuOffer            = "sfu_offer"
+	WsEventSfuAnswer           = "sfu_answer"
+	WsEventSfuCandidate        = "sfu_candidate"
+	WsEventSfuTrackPublished   = "sfu_track_published"
+	WsEventSfuTrackUnpublished = "sfu_track_unpublished"
+	WsEventSfuActiveSpeakers   = "sfu_active_speakers"
+	// WsEventSfuError mirrors WsEventRTCSignalError: sfu_candidate is sent
+	// fire-and-forget (bypasses the request/ack queue), so its errors can't
+	// be dispatched as a plain WsEventError without misattributing them to
+	// an unrelated in-flight command.
+	WsEventSfuError = "sfu_error"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -298,9 +330,36 @@ type WsVoiceParticipant struct {
 	AvatarURL  string `json:"avatar_url,omitempty"`
 }
 
+const (
+	TransportModeMesh = "mesh"
+	TransportModeSFU  = "sfu"
+)
+
 type WsJoinVoiceChannelResponse struct {
 	ChannelID    int64                `json:"channel_id"`
 	Participants []WsVoiceParticipant `json:"participants"`
+
+	// TransportMode tells the client which VoiceClient implementation to
+	// use for this call — decided server-side (see sfu-migration-plan.md §3
+	// decision #11) so the switch doesn't require a frontend rebuild and can
+	// be scoped to individual channels via SFUConfig.ChannelAllowlist.
+	TransportMode string          `json:"transport_mode"`
+	SessionID     string          `json:"session_id,omitempty"`
+	ICEServers    []WsICEServer   `json:"ice_servers,omitempty"`
+	PublishSlots  []WsPublishSlot `json:"publish_slots,omitempty"`
+}
+
+type WsICEServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
+// WsPublishSlot declares one fixed transceiver a client must create (in
+// order) when publishing to the SFU — see sfu-migration-plan.md §4.3.
+type WsPublishSlot struct {
+	Kind   string `json:"kind"`   // "audio" | "video"
+	Source string `json:"source"` // mic | camera | screen | screen_audio
 }
 
 type WsVoiceUserEvent struct {
@@ -331,6 +390,76 @@ type WsRTCSignalEvent struct {
 	Candidate     string  `json:"candidate,omitempty"`
 	SDPMid        *string `json:"sdp_mid,omitempty"`
 	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
+}
+
+// --- sfu_* protocol payloads (sfu-migration-plan.md §5). Implemented
+// starting migration phase 1; declared now so the wire contract is fixed
+// before any handler exists.
+
+type WsSfuSlotDecl struct {
+	MID    string `json:"mid"`
+	Kind   string `json:"kind"`   // "audio" | "video"
+	Source string `json:"source"` // mic | camera | screen | screen_audio
+}
+
+type WsSfuOfferRequest struct {
+	SessionID string          `json:"session_id"`
+	SDP       string          `json:"sdp"`
+	Slots     []WsSfuSlotDecl `json:"slots,omitempty"`
+}
+
+type WsSfuOfferEvent struct {
+	SessionID string `json:"session_id"`
+	SDP       string `json:"sdp"`
+}
+
+type WsSfuAnswerPayload struct {
+	SessionID string `json:"session_id"`
+	SDP       string `json:"sdp"`
+}
+
+type WsSfuCandidatePayload struct {
+	SessionID     string  `json:"session_id"`
+	Candidate     string  `json:"candidate"`
+	SDPMid        *string `json:"sdp_mid,omitempty"`
+	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
+}
+
+type WsSfuSubscribeVideoRequest struct {
+	SessionID    string `json:"session_id"`
+	TargetUserID int    `json:"target_user_id"`
+	Source       string `json:"source"`  // camera | screen
+	Quality      string `json:"quality"` // off | low | high
+}
+
+type WsSfuResumeRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type WsSfuResumeResponse struct {
+	OK           bool                 `json:"ok"`
+	Participants []WsVoiceParticipant `json:"participants"`
+}
+
+type WsSfuTrackEvent struct {
+	ChannelID int64  `json:"channel_id"`
+	UserID    int    `json:"user_id"`
+	Source    string `json:"source"`
+	Kind      string `json:"kind,omitempty"`
+}
+
+type WsSfuActiveSpeakersEvent struct {
+	ChannelID int64 `json:"channel_id"`
+	UserIDs   []int `json:"user_ids"`
+}
+
+// WsSfuErrorEvent mirrors the rtc_signal_error pattern (see
+// WsEventRTCSignalError above): sfu_candidate bypasses the request/ack
+// queue, so its errors need a dedicated event instead of plain "error".
+type WsSfuErrorEvent struct {
+	SessionID string `json:"session_id"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
 }
 
 type WsMessageCursor struct {

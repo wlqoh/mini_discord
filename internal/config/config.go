@@ -16,12 +16,12 @@ type Config struct {
 	S3                            S3Config     `yaml:"s3"`
 	WebRTC                        WebRTCConfig `yaml:"webrtc"`
 	HTTPServer                    `yaml:"http_server"`
-	JWTSecret                     string     `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
-	JWTAccessExpirationInMinutes  int        `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
-	JWTRefreshExpirationInMinutes int        `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
-	Mail                          MailConfig `yaml:"mail"`
-	FrontendBaseURL               string     `yaml:"frontend_base_url" env:"FRONTEND_BASE_URL" env-default:"http://localhost:5173"`
-	Push                          PushConfig `yaml:"push"`
+	JWTSecret                     string            `yaml:"jwt_secret" env-required:"true" env:"JWT_SECRET"`
+	JWTAccessExpirationInMinutes  int               `yaml:"jwt_access_expiration_in_minutes" env-default:"10080"`  // 1 week
+	JWTRefreshExpirationInMinutes int               `yaml:"jwt_refresh_expiration_in_minutes" env-default:"43200"` // 1 month
+	Mail                          MailConfig        `yaml:"mail"`
+	FrontendBaseURL               string            `yaml:"frontend_base_url" env:"FRONTEND_BASE_URL" env-default:"http://localhost:5173"`
+	Push                          PushConfig        `yaml:"push"`
 	LinkPreview                   LinkPreviewConfig `yaml:"link_preview"`
 }
 
@@ -62,6 +62,27 @@ type WebRTCConfig struct {
 	TurnURLs                  []string `yaml:"turn_urls" env:"TURN_URLS" env-separator:","`
 	TurnStaticAuthSecret      string   `yaml:"turn_static_auth_secret" env:"TURN_STATIC_AUTH_SECRET"`
 	TurnCredentialsTTLSeconds int      `yaml:"turn_credentials_ttl_seconds" env:"TURN_CREDENTIALS_TTL_SECONDS" env-default:"600"`
+
+	SFU SFUConfig `yaml:"sfu"`
+}
+
+type SFUConfig struct {
+	Enabled bool `yaml:"enabled" env:"SFU_ENABLED" env-default:"false"`
+
+	// Publicly reachable IP of this server. Required when Enabled is true:
+	// without it Pion advertises host ICE candidates using the container's
+	// internal address (e.g. 172.x.x.x) and ICE never connects for anyone.
+	PublicIP string `yaml:"public_ip" env:"SFU_PUBLIC_IP"`
+
+	UDPPort  int      `yaml:"udp_port" env:"SFU_UDP_PORT" env-default:"7881"`
+	StunURLs []string `yaml:"stun_urls" env:"SFU_STUN_URLS" env-separator:","`
+
+	MaxRoomParticipants int           `yaml:"max_room_participants" env:"SFU_MAX_ROOM_PARTICIPANTS" env-default:"20"`
+	SessionGracePeriod  time.Duration `yaml:"session_grace_period" env:"SFU_SESSION_GRACE_PERIOD" env-default:"30s"`
+
+	// Empty means SFU applies to every voice channel; otherwise only to the
+	// channels listed here. Lets SFU be rolled out to specific channels first.
+	ChannelAllowlist []int64 `yaml:"channel_allowlist" env:"SFU_CHANNEL_ALLOWLIST" env-separator:","`
 }
 
 type S3Config struct {

@@ -12,6 +12,11 @@ type Props = {
   deafened?: boolean;
   /** null для своего тайла: у локального превью нет соединения. */
   quality?: PeerQuality | null;
+  /** SFU grace-period reconnect (sfu-migration-plan.md §7 phase 3) — their
+   * WebSocket dropped but media keeps flowing, so this is cosmetic only. */
+  isDetached?: boolean;
+  /** Active speaker (decision #9). */
+  isSpeaking?: boolean;
 };
 
 type GainState = {
@@ -21,7 +26,17 @@ type GainState = {
   stream: MediaStream;
 };
 
-export default function VideoTile({ stream, label, muted = false, volume = 1, micEnabled, deafened, quality }: Props) {
+export default function VideoTile({
+  stream,
+  label,
+  muted = false,
+  volume = 1,
+  micEnabled,
+  deafened,
+  quality,
+  isDetached = false,
+  isSpeaking = false,
+}: Props) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gainStateRef = useRef<GainState | null>(null);
@@ -180,7 +195,10 @@ export default function VideoTile({ stream, label, muted = false, volume = 1, mi
   }, [label, isDebugEnabled]);
 
   return (
-    <div className="video-tile" ref={containerRef}>
+    <div
+      className={`video-tile${isDetached ? " video-tile--detached" : ""}${isSpeaking ? " video-tile--speaking" : ""}`}
+      ref={containerRef}
+    >
       <video ref={ref} autoPlay playsInline muted={muted} className="video-el" />
       {autoplayBlocked ? (
         <button

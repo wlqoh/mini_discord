@@ -5,11 +5,24 @@
   VoiceParticipant,
   VoiceUserEvent,
 } from "../types/chat";
-import { RnnoiseWorkletNode, loadRnnoise } from "@sapphi-red/web-noise-suppressor";
-import rnnoiseWorkletPath from "@sapphi-red/web-noise-suppressor/rnnoiseWorklet.js?url";
-import rnnoiseWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise.wasm?url";
-import rnnoiseSimdWasmPath from "@sapphi-red/web-noise-suppressor/rnnoise_simd.wasm?url";
 import { ChatSocket } from "./chatSocket";
+import type {
+  VoiceClient,
+  RemoteStreamListener,
+  RemoteLeftListener,
+  LocalStreamListener,
+  ErrorListener,
+  QualityListener,
+} from "./voiceClient";
+import { LocalCapture, type CameraFacingMode } from "./localCapture";
+import {
+  debugLog,
+  buildIceTransportPolicy,
+  applyVideoBitratePreset,
+  CAMERA_BITRATE_PRESET,
+  SCREEN_BITRATE_PRESET,
+  type VideoBitratePreset,
+} from "./webrtcShared";
 import { getTurnCredentials, type TurnCredentialsResponse } from "./turnApi";
 import {
   QUALITY_SAMPLE_INTERVAL_MS,
@@ -25,12 +38,6 @@ import {
   type QualityTracker,
 } from "./connectionQuality";
 
-type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => void;
-type RemoteLeftListener = (userId: number) => void;
-type LocalStreamListener = (stream: MediaStream | null) => void;
-type ErrorListener = (message: string) => void;
-type QualityListener = (quality: Record<number, PeerQuality>) => void;
-type CameraFacingMode = "user" | "environment";
 type PeerHealth = "ok" | "connecting" | "broken";
 
 type PeerState = {
@@ -46,52 +53,11 @@ type PeerState = {
   isSettingRemoteAnswerPending: boolean;
 };
 
-function isWebRTCDebugEnabled(): boolean {
-  try {
-    return window.localStorage.getItem("webrtc_debug") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function debugLog(...args: unknown[]): void {
-  if (!isWebRTCDebugEnabled()) {
-    return;
-  }
-  console.log("[webrtc]", ...args);
-}
-
-function formatMediaError(err: unknown): string {
-  if (!(err instanceof DOMException)) {
-    return "Failed to access microphone/camera";
-  }
-
-  switch (err.name) {
-    case "NotAllowedError":
-      return "Access to microphone/camera is denied in browser settings";
-    case "NotFoundError":
-      return "Microphone or camera device was not found";
-    case "NotReadableError":
-      return "Microphone/camera is already used by another app";
-    case "OverconstrainedError":
-      return "Requested media settings are not supported on this device";
-    case "SecurityError":
-      return "Media access is blocked: open the app via HTTPS or localhost";
-    default:
-      return `Failed to access microphone/camera (${err.name})`;
-  }
-}
-
 function parseUrls(raw: string | undefined): string[] {
   return (raw ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function isTruthy(raw: string | undefined): boolean {
-  const normalized = (raw ?? "").trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function buildIceServers(turnCredentials?: TurnCredentialsResponse): RTCIceServer[] {
@@ -125,10 +91,6 @@ function buildIceServers(turnCredentials?: TurnCredentialsResponse): RTCIceServe
   return servers;
 }
 
-function buildIceTransportPolicy(): RTCIceTransportPolicy {
-  return isTruthy(import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined) ? "relay" : "all";
-}
-
 function hasUsableTurnServer(servers: RTCIceServer[]): boolean {
   return servers.some((server) => {
     const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
@@ -155,7 +117,7 @@ function serviceLevelOf(pc: RTCPeerConnection): QualityLevel | null {
   }
 }
 
-export class CallClient {
+export class MeshCallClient implements VoiceClient {
   private readonly socket: ChatSocket;
 
   private readonly selfUserID: number;
@@ -166,9 +128,20 @@ export class CallClient {
 
   private readonly unsubscribers: Array<() => void> = [];
 
+  // Mirrors capture?.currentStream — kept as its own field because most of
+  // this class reads this.localStream directly rather than going through
+  // capture, and updating every call site would be a much larger diff for
+  // no behavioral benefit. Always kept in sync by whoever changes capture's
+  // stream (attachJoin, switchCameraFacingMode, the RNNoise watchdog path in
+  // reconcilePeers).
   private localStream: MediaStream | null = null;
 
-  private rawLocalStream: MediaStream | null = null;
+  // Owns getUserMedia + RNNoise (see localCapture.ts). Nullable because a
+  // factory-driven join hands in an already-acquired LocalCapture via
+  // attachJoin rather than this class creating its own — see join()/
+  // attachJoin below and callClientFactory.ts's note on why acquisition has
+  // to happen before the transport is known.
+  private capture: LocalCapture | null = null;
 
   private currentChannelID = 0;
 
@@ -178,7 +151,6 @@ export class CallClient {
   // 0 means "static creds (never expire) or not fetched yet". Only set for
   // dynamically-issued (short-TTL) credentials from getTurnCredentials().
   private turnExpiresAt = 0;
-  private preferredFacingMode: CameraFacingMode = "user";
   private switchCameraPromise: Promise<void> | null = null;
   private screenSharePromise: Promise<boolean> | null = null;
 
@@ -217,22 +189,6 @@ export class CallClient {
   // Serializes signal handling per remote peer so an offer and the ICE
   // candidates that immediately follow it can't race each other.
   private readonly signalQueues = new Map<number, Promise<void>>();
-
-  private rnnoiseAudioContext: AudioContext | null = null;
-
-  private rnnoiseSource: MediaStreamAudioSourceNode | null = null;
-
-  private rnnoiseNode: RnnoiseWorkletNode | null = null;
-
-  // Timestamp of when the RNNoise AudioContext first went "suspended"
-  // (browser autoplay policy, background-tab throttling, device change), or
-  // null when it isn't. If it stays suspended too long the outgoing audio
-  // track goes silent while the UI still shows the mic as enabled — checked
-  // by the reconciliation loop (see checkRnnoiseWatchdog).
-  private rnnoiseSuspendedSince: number | null = null;
-  private static readonly RNNOISE_SUSPENDED_FALLBACK_MS = 3000;
-
-  private static rnnoiseBinaryPromise: Promise<ArrayBuffer> | null = null;
 
   constructor(
     socket: ChatSocket,
@@ -275,39 +231,64 @@ export class CallClient {
     });
   }
 
+  /**
+   * Media is acquired BEFORE joining the channel. If we joined first, an
+   * incoming offer could create a peer while localStream is still null,
+   * which gives that peer recvonly transceivers — and nothing ever re-adds
+   * tracks to an already-created peer, so it stays one-way deaf forever.
+   */
   async join(channelID: number): Promise<JoinVoiceResponse> {
     if (this.currentChannelID === channelID) {
       return {
         channel_id: channelID,
         participants: Array.from(this.participants.values()),
+        transport_mode: "mesh",
       };
     }
 
     await this.leave();
-
     await this.ensureTurnCredentials();
     debugLog("join:start", { channelID, iceServers: this.iceServers, policy: buildIceTransportPolicy() });
 
-    // Media is acquired BEFORE joining the channel. If we joined first, an
-    // incoming offer could create a peer while localStream is still null,
-    // which gives that peer recvonly transceivers — and nothing ever re-adds
-    // tracks to an already-created peer, so it stays one-way deaf forever.
+    const capture = new LocalCapture(this.onError);
     try {
-      this.localStream = await this.acquireLocalStream();
-      // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
-      this.localStream.getVideoTracks().forEach((track) => {
-        track.enabled = false;
-      });
-      this.onLocalStream(this.localStream);
+      await capture.acquire();
     } catch (err) {
-      this.localStream = null;
-      this.onLocalStream(null);
       const message = err instanceof Error ? err.message : "Failed to access microphone/camera";
       debugLog("join:local-stream-failed", { message });
       this.onError(`${message}. Joined voice in listen-only mode.`);
     }
 
     const response: JoinVoiceResponse = await this.socket.joinVoiceChannel(channelID);
+    return this.attachJoin(response, capture);
+  }
+
+  /**
+   * Used by the transport factory (see callClientFactory.ts) when it has
+   * already called join_voice_channel itself — after acquiring an already-
+   * resolved LocalCapture — to learn transport_mode before choosing an
+   * implementation. Skips join()'s own media-acquisition/join_voice_channel
+   * steps and just adopts what the caller already has.
+   */
+  async attachJoin(response: JoinVoiceResponse, capture: LocalCapture): Promise<JoinVoiceResponse> {
+    if (this.currentChannelID === response.channel_id) {
+      return {
+        channel_id: response.channel_id,
+        participants: Array.from(this.participants.values()),
+        transport_mode: "mesh",
+      };
+    }
+
+    this.capture = capture;
+    const stream = capture.currentStream;
+    if (stream) {
+      // Start voice channels in audio-first mode to reduce mesh bandwidth pressure.
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = false;
+      });
+    }
+    this.localStream = stream;
+    this.onLocalStream(stream);
 
     this.currentChannelID = response.channel_id;
     debugLog("join:channel-joined", { channelID: response.channel_id, participants: response.participants.map((p) => p.user_id) });
@@ -362,11 +343,15 @@ export class CallClient {
       throw new Error("Screen sharing is not supported in this browser");
     }
 
+    // Resolution/framerate match SCREEN_BITRATE_PRESET (sfu-migration-
+    // plan.md §6.4): the old 2560x1440@60 was only tolerable because mesh
+    // usually has one screen-sharer at a time; it's pure waste against the
+    // same bitrate cap applied below, with no gain in legibility.
     const displayStream = await mediaDevices.getDisplayMedia({
       video: {
-        width: { ideal: 2560 },
-        height: { ideal: 1440 },
-        frameRate: { ideal: 60 },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 30 },
       },
       audio: false,
     });
@@ -384,7 +369,7 @@ export class CallClient {
     previewStream.addTrack(displayTrack);
     this.onLocalStream(previewStream);
 
-    await this.updateVideoTrackForPeers(displayTrack, displayStream);
+    await this.updateVideoTrackForPeers(displayTrack, displayStream, SCREEN_BITRATE_PRESET);
 
     displayTrack.onended = () => {
       void this.stopScreenShare();
@@ -407,7 +392,7 @@ export class CallClient {
 
     const fallbackTrack = this.cameraTrack ?? this.localStream?.getVideoTracks()[0] ?? null;
 
-    await this.updateVideoTrackForPeers(fallbackTrack, this.localStream);
+    await this.updateVideoTrackForPeers(fallbackTrack, this.localStream, CAMERA_BITRATE_PRESET);
 
     this.onLocalStream(this.localStream);
   };
@@ -468,45 +453,6 @@ export class CallClient {
     }
 
     await this.turnCredentialsPromise;
-  }
-
-  private async acquireLocalStream(): Promise<MediaStream> {
-    const mediaDevices = navigator.mediaDevices;
-    if (!mediaDevices?.getUserMedia) {
-      throw new Error("This browser does not support microphone/camera access");
-    }
-
-    try {
-      const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      };
-      // Prefer full voice+video for channels, fallback to audio-only.
-      const stream = await mediaDevices.getUserMedia({
-        audio: audioConstraints,
-        video: {
-          facingMode: { ideal: this.preferredFacingMode },
-        },
-      });
-      await this.enforceAudioProcessing(stream);
-      return await this.applyRnnoiseProcessing(stream);
-    } catch (videoErr) {
-      try {
-        const stream = await mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video: false,
-        });
-        await this.enforceAudioProcessing(stream);
-        return await this.applyRnnoiseProcessing(stream);
-      } catch (audioErr) {
-        throw new Error(formatMediaError(audioErr ?? videoErr));
-      }
-    }
   }
 
   async leave(): Promise<void> {
@@ -594,7 +540,7 @@ export class CallClient {
 
   private async switchCameraFacingMode(): Promise<void> {
     const currentLocalStream = this.localStream;
-    if (!currentLocalStream) {
+    if (!currentLocalStream || !this.capture) {
       throw new Error("Join voice channel before switching camera");
     }
 
@@ -603,70 +549,35 @@ export class CallClient {
       throw new Error("No camera track available in this call");
     }
 
-    const nextFacingMode: CameraFacingMode = this.preferredFacingMode === "user" ? "environment" : "user";
-    const replacementTrack = await this.acquireVideoTrack(nextFacingMode);
+    const nextFacingMode: CameraFacingMode = this.capture.facingMode === "user" ? "environment" : "user";
+    const replacementTrack = await this.capture.acquireVideoTrack(nextFacingMode);
     replacementTrack.enabled = currentVideoTrack.enabled;
 
     const nextLocalStream = new MediaStream([...currentLocalStream.getAudioTracks(), replacementTrack]);
 
     try {
-      await this.updateVideoTrackForPeers(replacementTrack, nextLocalStream);
+      await this.updateVideoTrackForPeers(replacementTrack, nextLocalStream, CAMERA_BITRATE_PRESET);
     } catch {
       replacementTrack.stop();
       throw new Error("Failed to switch camera");
     }
 
     this.localStream = nextLocalStream;
-    this.preferredFacingMode = nextFacingMode;
+    this.capture.setStream(nextLocalStream);
+    this.capture.setPreferredFacingMode(nextFacingMode);
     this.onLocalStream(nextLocalStream);
     currentVideoTrack.stop();
   }
 
-  private async acquireVideoTrack(facingMode: CameraFacingMode): Promise<MediaStreamTrack> {
-    const mediaDevices = navigator.mediaDevices;
-    if (!mediaDevices?.getUserMedia) {
-      throw new Error("This browser does not support camera switching");
-    }
-
-    const attempts: MediaStreamConstraints[] = [
-      { audio: false, video: { facingMode: { exact: facingMode } } },
-      { audio: false, video: { facingMode: { ideal: facingMode } } },
-      { audio: false, video: true },
-    ];
-
-    for (const constraints of attempts) {
-      try {
-        const stream = await mediaDevices.getUserMedia(constraints);
-        const track = stream.getVideoTracks()[0];
-        stream.getAudioTracks().forEach((audioTrack) => audioTrack.stop());
-        if (track) {
-          stream.getVideoTracks().forEach((videoTrack) => {
-            if (videoTrack.id !== track.id) {
-              videoTrack.stop();
-            }
-          });
-          return track;
-        }
-        stream.getTracks().forEach((streamTrack) => streamTrack.stop());
-      } catch {
-        // Try the next constraints profile.
-      }
-    }
-
-    throw new Error("Failed to access another camera on this device");
-  }
-
   private stopLocalTracks(): void {
-    this.localStream?.getTracks().forEach((track) => track.stop());
-    this.rawLocalStream?.getTracks().forEach((track) => track.stop());
+    this.capture?.stopAll();
+    this.capture = null;
     this.screenStream?.getTracks().forEach((track) => track.stop());
     this.cameraTrack?.stop();
-    this.rawLocalStream = null;
     this.screenStream = null;
     this.cameraTrack = null;
     this.switchCameraPromise = null;
     this.screenSharePromise = null;
-    this.disposeRnnoiseProcessing();
     this.localStream = null;
     this.onLocalStream(null);
   }
@@ -846,7 +757,10 @@ export class CallClient {
         .find((t) => (t.sender.track?.kind ?? t.receiver.track?.kind) === track.kind);
 
       if (!transceiver) {
-        pc.addTrack(track, stream);
+        const sender = pc.addTrack(track, stream);
+        if (track.kind === "video") {
+          void applyVideoBitratePreset(sender, CAMERA_BITRATE_PRESET);
+        }
         continue;
       }
       if (transceiver.sender.track?.id === track.id) {
@@ -903,7 +817,11 @@ export class CallClient {
     }
   }
 
-  private async updateVideoTrackForPeers(track: MediaStreamTrack | null, stream: MediaStream | null): Promise<void> {
+  private async updateVideoTrackForPeers(
+    track: MediaStreamTrack | null,
+    stream: MediaStream | null,
+    preset?: VideoBitratePreset,
+  ): Promise<void> {
     for (const [, { pc }] of this.peers) {
       const videoTransceiver = pc
         .getTransceivers()
@@ -916,8 +834,14 @@ export class CallClient {
         if (videoTransceiver) {
           videoTransceiver.direction = track ? "sendrecv" : "recvonly";
         }
+        if (track && preset) {
+          void applyVideoBitratePreset(sender, preset);
+        }
       } else if (track && stream) {
-        pc.addTrack(track, stream);
+        const newSender = pc.addTrack(track, stream);
+        if (preset) {
+          void applyVideoBitratePreset(newSender, preset);
+        }
       }
     }
     // No manual offer here: replaceTrack never needs renegotiation, and a
@@ -926,163 +850,30 @@ export class CallClient {
     // race the perfect-negotiation flow.
   }
 
-  private async enforceAudioProcessing(stream: MediaStream): Promise<void> {
-    const audioTrack = stream.getAudioTracks()[0];
-    if (!audioTrack) {
-      return;
-    }
-    try {
-      await audioTrack.applyConstraints({
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      });
-    } catch {
-      // Best-effort on browsers with partial constraint support.
-    }
-  }
-
-  private async applyRnnoiseProcessing(sourceStream: MediaStream): Promise<MediaStream> {
-    const sourceAudioTrack = sourceStream.getAudioTracks()[0];
-    if (!sourceAudioTrack) {
-      this.rawLocalStream = sourceStream;
-      return sourceStream;
-    }
-
-    if (!window.isSecureContext || typeof AudioWorkletNode === "undefined") {
-      debugLog("rnnoise:unsupported", {
-        isSecureContext: window.isSecureContext,
-        hasAudioWorkletNode: typeof AudioWorkletNode !== "undefined",
-      });
-      this.rawLocalStream = sourceStream;
-      return sourceStream;
-    }
-
-    try {
-      const audioContext = new AudioContext({ sampleRate: 48000 });
-      audioContext.onstatechange = () => {
-        debugLog("rnnoise:state-change", { state: audioContext.state });
-        if (audioContext.state === "suspended") {
-          if (this.rnnoiseSuspendedSince === null) {
-            this.rnnoiseSuspendedSince = Date.now();
-          }
-          void audioContext.resume();
-        } else {
-          this.rnnoiseSuspendedSince = null;
-        }
-      };
-      await audioContext.audioWorklet.addModule(rnnoiseWorkletPath);
-
-      const wasmBinary = await CallClient.loadRnnoiseBinary();
-      const rnnoiseSourceStream = new MediaStream([sourceAudioTrack]);
-      const sourceNode = audioContext.createMediaStreamSource(rnnoiseSourceStream);
-      const rnnoiseNode = new RnnoiseWorkletNode(audioContext, {
-        wasmBinary,
-        maxChannels: 1,
-      });
-      const destinationNode = audioContext.createMediaStreamDestination();
-
-      sourceNode.connect(rnnoiseNode);
-      rnnoiseNode.connect(destinationNode);
-      await audioContext.resume();
-
-      const processedAudioTrack = destinationNode.stream.getAudioTracks()[0];
-      if (!processedAudioTrack) {
-        throw new Error("RNNoise did not produce processed audio track");
-      }
-
-      const processedStream = new MediaStream([processedAudioTrack]);
-      sourceStream.getVideoTracks().forEach((track) => processedStream.addTrack(track));
-
-      this.disposeRnnoiseProcessing();
-      this.rnnoiseAudioContext = audioContext;
-      this.rnnoiseSource = sourceNode;
-      this.rnnoiseNode = rnnoiseNode;
-      this.rawLocalStream = sourceStream;
-
-      debugLog("rnnoise:enabled", {
-        sampleRate: audioContext.sampleRate,
-        processedTrackID: processedAudioTrack.id,
-      });
-
-      return processedStream;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "RNNoise initialization failed";
-      debugLog("rnnoise:failed", { message });
-      this.onError(`RNNoise unavailable (${message}). Using standard microphone processing.`);
-      this.disposeRnnoiseProcessing();
-      this.rawLocalStream = sourceStream;
-      return sourceStream;
-    }
-  }
-
-  private disposeRnnoiseProcessing(): void {
-    try {
-      this.rnnoiseSource?.disconnect();
-    } catch {
-      // ignore disconnect errors during teardown
-    }
-    try {
-      this.rnnoiseNode?.disconnect();
-      this.rnnoiseNode?.destroy();
-    } catch {
-      // ignore destroy errors during teardown
-    }
-    try {
-      this.rnnoiseAudioContext?.close();
-    } catch {
-      // ignore close errors during teardown
-    }
-
-    this.rnnoiseSource = null;
-    this.rnnoiseNode = null;
-    this.rnnoiseAudioContext = null;
-    this.rnnoiseSuspendedSince = null;
-  }
-
   /**
-   * If the RNNoise AudioContext has been stuck "suspended" for too long, the
-   * outgoing audio track is silent even though track.enabled/readyState both
-   * look fine and the UI shows the mic as on — nothing else would ever
-   * detect or recover from this. Falls back to the unfiltered mic track on
-   * every peer so the user stays audible; deliberately does not attempt to
-   * switch back to RNNoise later, to avoid flapping.
+   * If LocalCapture's RNNoise pipeline has been stuck "suspended" for too
+   * long, the outgoing audio track is silent even though track.enabled/
+   * readyState both look fine and the UI shows the mic as on — nothing else
+   * would ever detect or recover from this (see LocalCapture.
+   * checkWatchdogFallback). Falls back to the unfiltered mic track on every
+   * peer so the user stays audible.
    */
-  private checkRnnoiseWatchdog(): void {
-    if (!this.rnnoiseAudioContext || this.rnnoiseSuspendedSince === null) {
-      return;
-    }
-    if (Date.now() - this.rnnoiseSuspendedSince < CallClient.RNNOISE_SUSPENDED_FALLBACK_MS) {
-      return;
-    }
-
-    const rawAudioTrack = this.rawLocalStream?.getAudioTracks()[0];
+  private applyRnnoiseWatchdogFallback(): void {
+    const rawAudioTrack = this.capture?.checkWatchdogFallback();
     if (!rawAudioTrack) {
       return;
     }
-
-    debugLog("rnnoise:suspended-fallback", { suspendedForMs: Date.now() - this.rnnoiseSuspendedSince });
-    this.onError("Noise suppression stalled; switched to unfiltered microphone audio so you stay audible.");
-    this.rnnoiseSuspendedSince = null;
 
     for (const { pc } of this.peers.values()) {
       const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
       void sender?.replaceTrack(rawAudioTrack);
     }
     if (this.localStream) {
-      this.localStream = new MediaStream([rawAudioTrack, ...this.localStream.getVideoTracks()]);
-      this.onLocalStream(this.localStream);
+      const nextStream = new MediaStream([rawAudioTrack, ...this.localStream.getVideoTracks()]);
+      this.localStream = nextStream;
+      this.capture?.setStream(nextStream);
+      this.onLocalStream(nextStream);
     }
-  }
-
-  private static loadRnnoiseBinary(): Promise<ArrayBuffer> {
-    if (!CallClient.rnnoiseBinaryPromise) {
-      CallClient.rnnoiseBinaryPromise = loadRnnoise({
-        url: rnnoiseWasmPath,
-        simdUrl: rnnoiseSimdWasmPath,
-      });
-    }
-    return CallClient.rnnoiseBinaryPromise;
   }
 
   private handleVoiceUserJoined(event: VoiceUserEvent): void {
@@ -1157,7 +948,7 @@ export class CallClient {
       return "broken";
     }
     const since = this.peerSince.get(userID) ?? 0;
-    return Date.now() - since > CallClient.CONNECT_GRACE_MS ? "broken" : "connecting";
+    return Date.now() - since > MeshCallClient.CONNECT_GRACE_MS ? "broken" : "connecting";
   }
 
   private reconcilePeers(): void {
@@ -1175,7 +966,7 @@ export class CallClient {
       });
     }
 
-    this.checkRnnoiseWatchdog();
+    this.applyRnnoiseWatchdogFallback();
 
     for (const [userID, participant] of this.participants) {
       if (userID === this.selfUserID) {
@@ -1202,7 +993,7 @@ export class CallClient {
 
   private recreatePeer(userID: number, participant: VoiceParticipant, reason: string): void {
     const attempt = (this.peerAttempts.get(userID) ?? 0) + 1;
-    if (attempt > CallClient.MAX_PEER_ATTEMPTS) {
+    if (attempt > MeshCallClient.MAX_PEER_ATTEMPTS) {
       return;
     }
 
@@ -1223,7 +1014,7 @@ export class CallClient {
     if (this.reconcileTimer !== null) {
       return;
     }
-    this.reconcileTimer = window.setInterval(() => this.reconcilePeers(), CallClient.RECONCILE_INTERVAL_MS);
+    this.reconcileTimer = window.setInterval(() => this.reconcilePeers(), MeshCallClient.RECONCILE_INTERVAL_MS);
   }
 
   private stopReconciliation(): void {

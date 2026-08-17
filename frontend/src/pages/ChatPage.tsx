@@ -10,7 +10,7 @@ import ConnectionQualityIcon from "../components/ConnectionQualityIcon.tsx";
 import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
 import SearchPanel from "../components/SearchPanel.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
-import {CallClient} from "../services/callClient.ts";
+import type {VoiceClient} from "../services/voiceClient.ts";
 import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
 import type {
@@ -61,7 +61,7 @@ export default function ChatPage() {
     const navigate = useNavigate();
     const { showToast } = useToast();
     const socketRef = useRef<ChatSocket | null>(null);
-    const callClientRef = useRef<CallClient | null>(null);
+    const callClientRef = useRef<VoiceClient | null>(null);
     const chatContentRef = useRef<HTMLDivElement | null>(null);
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
     const prevScrollTrackRef = useRef<{
@@ -895,6 +895,8 @@ export default function ChatPage() {
                                                 micEnabled={participant.mic_enabled}
                                                 deafened={participant.deafened}
                                                 quality={voice.qualityByUserId[participant.user_id] ?? null}
+                                                isDetached={voice.detachedUserIds.has(participant.user_id)}
+                                                isSpeaking={voice.activeSpeakerUserIds.has(participant.user_id)}
                                             />
                                         );
                                     })}

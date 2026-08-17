@@ -7,6 +7,14 @@ import type {
   ReplyPreview,
   RTCSignalEvent,
   RTCSignalPayload, SearchFilters, SearchHit, SearchScope, ServerMember, TypingEvent, UserProfile,
+  SfuActiveSpeakersEvent,
+  SfuAnswerPayload,
+  SfuCandidatePayload,
+  SfuErrorEvent,
+  SfuOfferEvent,
+  SfuResumeResponse,
+  SfuSlotDecl,
+  SfuTrackEvent,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -156,6 +164,12 @@ type ErrorListener = (message: string) => void;
 type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
 type VoiceUserListener = (event: VoiceUserEvent) => void;
 type RTCSignalListener = (event: RTCSignalEvent) => void;
+type SfuOfferListener = (event: SfuOfferEvent) => void;
+type SfuAnswerListener = (event: SfuAnswerPayload) => void;
+type SfuCandidateListener = (event: SfuCandidatePayload) => void;
+type SfuTrackListener = (event: SfuTrackEvent) => void;
+type SfuActiveSpeakersListener = (event: SfuActiveSpeakersEvent) => void;
+type SfuErrorListener = (event: SfuErrorEvent) => void;
 type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
 type ReconnectPhase = "lost" | "restored";
 type ReconnectListener = (phase: ReconnectPhase) => void;
@@ -422,7 +436,21 @@ export class ChatSocket {
 
   private readonly voiceStatusChangedListeners = new Set<VoiceUserListener>();
 
+  // Migration phase 3, decision #10: fired around an SFU session's grace
+  // period. Media never stops flowing either way — these are purely a UI
+  // affordance (dim the tile while reconnecting), not a membership change.
+  private readonly voiceUserDetachedListeners = new Set<VoiceUserListener>();
+  private readonly voiceUserResumedListeners = new Set<VoiceUserListener>();
+
   private readonly rtcSignalListeners = new Set<RTCSignalListener>();
+
+  private readonly sfuOfferListeners = new Set<SfuOfferListener>();
+  private readonly sfuAnswerListeners = new Set<SfuAnswerListener>();
+  private readonly sfuCandidateListeners = new Set<SfuCandidateListener>();
+  private readonly sfuTrackPublishedListeners = new Set<SfuTrackListener>();
+  private readonly sfuTrackUnpublishedListeners = new Set<SfuTrackListener>();
+  private readonly sfuActiveSpeakersListeners = new Set<SfuActiveSpeakersListener>();
+  private readonly sfuErrorListeners = new Set<SfuErrorListener>();
 
   private readonly typingListeners = new Set<TypingListener>();
 
@@ -673,6 +701,22 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "voice_user_detached") {
+          const payload = parsed.data as VoiceUserEvent;
+          if (payload && typeof payload.channel_id === "number" && payload.user && typeof payload.user.user_id === "number") {
+            this.voiceUserDetachedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "voice_user_resumed") {
+          const payload = parsed.data as VoiceUserEvent;
+          if (payload && typeof payload.channel_id === "number" && payload.user && typeof payload.user.user_id === "number") {
+            this.voiceUserResumedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
         if (parsed.event === "rtc_signal") {
           const payload = parsed.data as RTCSignalEvent;
           if (
@@ -701,6 +745,70 @@ export class ChatSocket {
           // pending in the ack queue — only handleSocketError does that.
           const text = parsed.error || "RTC signal error";
           this.errorListeners.forEach((listener) => listener(text));
+          return;
+        }
+
+        // sfu_offer/sfu_answer are pushed by the SERVER here (a
+        // renegotiation offer, or the answer to our own initial offer) —
+        // distinct from the "ack" our own sfu_offer/sfu_answer *commands*
+        // get (handled by the generic ack branch below via sendCommand).
+        // Same event name, different direction; they never collide because
+        // this switches on parsed.event, not on what we last sent.
+        if (parsed.event === "sfu_offer") {
+          const payload = parsed.data as SfuOfferEvent;
+          if (payload && typeof payload.session_id === "string" && typeof payload.sdp === "string") {
+            this.sfuOfferListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_answer") {
+          const payload = parsed.data as SfuAnswerPayload;
+          if (payload && typeof payload.session_id === "string" && typeof payload.sdp === "string") {
+            this.sfuAnswerListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_candidate") {
+          const payload = parsed.data as SfuCandidatePayload;
+          if (payload && typeof payload.session_id === "string" && typeof payload.candidate === "string") {
+            this.sfuCandidateListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_track_published") {
+          const payload = parsed.data as SfuTrackEvent;
+          if (payload && typeof payload.channel_id === "number" && typeof payload.user_id === "number") {
+            this.sfuTrackPublishedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_track_unpublished") {
+          const payload = parsed.data as SfuTrackEvent;
+          if (payload && typeof payload.channel_id === "number" && typeof payload.user_id === "number") {
+            this.sfuTrackUnpublishedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_active_speakers") {
+          const payload = parsed.data as SfuActiveSpeakersEvent;
+          if (payload && typeof payload.channel_id === "number" && Array.isArray(payload.user_ids)) {
+            this.sfuActiveSpeakersListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
+        if (parsed.event === "sfu_error") {
+          // Mirrors rtc_signal_error above: sfu_candidate is fire-and-forget,
+          // so its errors must never touch the ack queue.
+          const payload = parsed.data as SfuErrorEvent | undefined;
+          this.sfuErrorListeners.forEach((listener) =>
+            listener(payload ?? { session_id: "", code: "unknown", message: parsed.error || "SFU error" }),
+          );
           return;
         }
 
@@ -785,9 +893,54 @@ export class ChatSocket {
     return () => this.voiceStatusChangedListeners.delete(listener);
   }
 
+  onVoiceUserDetached(listener: VoiceUserListener): () => void {
+    this.voiceUserDetachedListeners.add(listener);
+    return () => this.voiceUserDetachedListeners.delete(listener);
+  }
+
+  onVoiceUserResumed(listener: VoiceUserListener): () => void {
+    this.voiceUserResumedListeners.add(listener);
+    return () => this.voiceUserResumedListeners.delete(listener);
+  }
+
   onRTCSignal(listener: RTCSignalListener): () => void {
     this.rtcSignalListeners.add(listener);
     return () => this.rtcSignalListeners.delete(listener);
+  }
+
+  onSfuOffer(listener: SfuOfferListener): () => void {
+    this.sfuOfferListeners.add(listener);
+    return () => this.sfuOfferListeners.delete(listener);
+  }
+
+  onSfuAnswer(listener: SfuAnswerListener): () => void {
+    this.sfuAnswerListeners.add(listener);
+    return () => this.sfuAnswerListeners.delete(listener);
+  }
+
+  onSfuCandidate(listener: SfuCandidateListener): () => void {
+    this.sfuCandidateListeners.add(listener);
+    return () => this.sfuCandidateListeners.delete(listener);
+  }
+
+  onSfuTrackPublished(listener: SfuTrackListener): () => void {
+    this.sfuTrackPublishedListeners.add(listener);
+    return () => this.sfuTrackPublishedListeners.delete(listener);
+  }
+
+  onSfuTrackUnpublished(listener: SfuTrackListener): () => void {
+    this.sfuTrackUnpublishedListeners.add(listener);
+    return () => this.sfuTrackUnpublishedListeners.delete(listener);
+  }
+
+  onSfuActiveSpeakers(listener: SfuActiveSpeakersListener): () => void {
+    this.sfuActiveSpeakersListeners.add(listener);
+    return () => this.sfuActiveSpeakersListeners.delete(listener);
+  }
+
+  onSfuError(listener: SfuErrorListener): () => void {
+    this.sfuErrorListeners.add(listener);
+    return () => this.sfuErrorListeners.delete(listener);
   }
 
   onTyping(listener: TypingListener): () => void {
@@ -1109,6 +1262,11 @@ export class ChatSocket {
     if (!payload || typeof payload.channel_id !== "number" || !Array.isArray(payload.participants)) {
       throw new Error("Invalid join voice response");
     }
+    // Older servers (pre sfu-migration-plan.md phase 0) never set this —
+    // default to mesh rather than let an SFU-only code path see "".
+    if (payload.transport_mode !== "sfu") {
+      payload.transport_mode = "mesh";
+    }
     return payload;
   }
 
@@ -1134,6 +1292,60 @@ export class ChatSocket {
     this.socket.send(
       JSON.stringify({
         action: "rtc_signal",
+        payload,
+      }),
+    );
+  }
+
+  // sfu_offer/sfu_answer go through sendCommand (awaiting the ack per the
+  // protocol table in sfu-migration-plan.md §5.2) since — unlike mesh's
+  // rtc_signal — there is exactly one PeerConnection per client, so losing
+  // one silently is worth surfacing as a rejected promise rather than a
+  // fire-and-forget send.
+  async sendSfuOffer(sessionId: string, sdp: string, slots: SfuSlotDecl[]): Promise<void> {
+    await this.sendCommand("sfu_offer", { session_id: sessionId, sdp, slots });
+  }
+
+  async sendSfuAnswer(sessionId: string, sdp: string): Promise<void> {
+    await this.sendCommand("sfu_answer", { session_id: sessionId, sdp });
+  }
+
+  async sendSfuSubscribeVideo(
+    sessionId: string,
+    targetUserId: number,
+    source: string,
+    quality: "off" | "low" | "high",
+  ): Promise<void> {
+    await this.sendCommand("sfu_subscribe_video", {
+      session_id: sessionId,
+      target_user_id: targetUserId,
+      source,
+      quality,
+    });
+  }
+
+  // sfu_resume (migration phase 3, decision #10): asks the server to keep
+  // using the existing SFU session — the PeerConnection never depended on
+  // this WebSocket, so a successful resume needs no renegotiation on the
+  // client's end at all, just a refreshed participant list.
+  async sendSfuResume(sessionId: string): Promise<SfuResumeResponse> {
+    const payload = await this.sendCommand<SfuResumeResponse>("sfu_resume", { session_id: sessionId });
+    if (!payload || typeof payload.ok !== "boolean" || !Array.isArray(payload.participants)) {
+      throw new Error("Invalid sfu_resume response");
+    }
+    return payload;
+  }
+
+  async sendSfuCandidate(payload: SfuCandidatePayload): Promise<void> {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket not connected");
+    }
+
+    // Fire-and-forget, same as sendRTCSignal: candidates can burst and are
+    // latency-sensitive, so they bypass the ack queue used for commands.
+    this.socket.send(
+      JSON.stringify({
+        action: "sfu_candidate",
         payload,
       }),
     );

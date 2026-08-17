@@ -91,9 +91,28 @@ export interface OnlineUser {
     email?: string;
 }
 
+export type VoiceTransportMode = "mesh" | "sfu";
+
+export interface VoiceICEServer {
+    urls: string[];
+    username?: string;
+    credential?: string;
+}
+
+export interface VoicePublishSlot {
+    kind: "audio" | "video";
+    source: "mic" | "camera" | "screen" | "screen_audio";
+}
+
 export interface JoinVoiceResponse {
     channel_id: number;
     participants: VoiceParticipant[];
+    // Decided server-side (see sfu-migration-plan.md §3 decision #11) so
+    // switching transports doesn't require a frontend rebuild.
+    transport_mode: VoiceTransportMode;
+    session_id?: string;
+    ice_servers?: VoiceICEServer[];
+    publish_slots?: VoicePublishSlot[];
 }
 
 export interface VoiceUserEvent {
@@ -119,6 +138,54 @@ export interface RTCSignalEvent {
     candidate?: string;
     sdp_mid?: string;
     sdp_mline_index?: number;
+}
+
+// --- sfu_* protocol (sfu-migration-plan.md §5) ---
+
+export interface SfuSlotDecl {
+    mid: string;
+    kind: "audio" | "video";
+    source: "mic" | "camera" | "screen" | "screen_audio";
+}
+
+export interface SfuOfferEvent {
+    session_id: string;
+    sdp: string;
+}
+
+export interface SfuAnswerPayload {
+    session_id: string;
+    sdp: string;
+}
+
+export interface SfuCandidatePayload {
+    session_id: string;
+    candidate: string;
+    sdp_mid?: string;
+    sdp_mline_index?: number;
+}
+
+export interface SfuTrackEvent {
+    channel_id: number;
+    user_id: number;
+    source: "mic" | "camera" | "screen" | "screen_audio";
+    kind?: "audio" | "video";
+}
+
+export interface SfuActiveSpeakersEvent {
+    channel_id: number;
+    user_ids: number[];
+}
+
+export interface SfuErrorEvent {
+    session_id: string;
+    code: string;
+    message: string;
+}
+
+export interface SfuResumeResponse {
+    ok: boolean;
+    participants: VoiceParticipant[];
 }
 
 export interface TypingEvent {

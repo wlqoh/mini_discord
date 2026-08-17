@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/basicauth"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
@@ -21,6 +22,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/service/webrtc"
 	"github.com/wlqoh/mini_discord.git/internal/storage/objectStorage"
 	"github.com/wlqoh/mini_discord.git/internal/storage/postgresql"
+	"github.com/wlqoh/mini_discord.git/utils"
 )
 
 type APIServer struct {
@@ -63,7 +65,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	skipHosts := embed.HostsFromURLs([]string{cfg.FrontendBaseURL, cfg.S3HOST, cfg.S3.Endpoint})
 	embedService := embed.NewService(s.db, cfg.LinkPreview, log, skipHosts)
 
-	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret), pushSender, embedService)
+	hub := server.NewHub(s.db, s3Client, log, cfg.S3HOST, []byte(cfg.JWTSecret), pushSender, embedService, cfg.WebRTC)
 	// Замыкаем связь в обе стороны: сервису нужен хаб для рассылки готовых
 	// превью, хабу — сервис для постановки задач.
 	embedService.SetBroadcaster(hub)
@@ -82,6 +84,27 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 
 	webrtcHandler := webrtc.NewHandler(s.db, cfg, log)
 	webrtcHandler.RegisterRoutes(v1)
+
+	// GET /admin/sfu/rooms: live snapshot of every SFU room/peer (decision
+	// #12, sfu-migration-plan.md §7 phase 1 / §12) — SFU bugs tend to be
+	// silent (connection looks fine, one subscriber just never gets a
+	// track), so this exists to answer "what does the router think is
+	// happening right now" directly instead of reconstructing it from logs.
+	// Gated on the same operator credentials as the rest of this deployment
+	// (cfg.HTTPServer.User/Password) rather than a per-user role: this
+	// project has no admin-role concept, and inventing one just for this
+	// debug endpoint would be more surface than the endpoint is worth.
+	adminAuth := basicauth.New(basicauth.Config{
+		Users: map[string]string{cfg.HTTPServer.User: cfg.HTTPServer.Password},
+	})
+	v1.Get("/admin/sfu/rooms", adminAuth, func(c *fiber.Ctx) error {
+		router := hub.SFURouter()
+		if router == nil {
+			return utils.WriteError(c, fiber.StatusNotFound, "SFU is not enabled")
+		}
+		return c.JSON(router.Snapshot())
+	})
+
 	go hub.Run()
 	go func() {
 		if err := app.Listen(cfg.Address); err != nil {
