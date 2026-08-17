@@ -21,6 +21,7 @@ type ServerStorage interface {
 	ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error)
 	SaveMessage(ctx context.Context, msg *WsMessage) error
 	DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error)
+	EditMessage(ctx context.Context, messageID int64, userID int, content string, window time.Duration) (int64, time.Time, error)
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetMessagesAfter(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
 	GetMessagesAround(ctx context.Context, channelID, messageID int64, limit int, s3Host string) ([]WsMessage, *WsMessageCursor, *WsMessageCursor, bool, bool, error)
@@ -50,6 +51,7 @@ const (
 	WsActionDeleteChannel     = "delete_channel"
 	WsActionSendMessage       = "send_message"
 	WsActionDeleteMessage     = "delete_message"
+	WsActionEditMessage       = "edit_message"
 	WsActionGetMessages       = "get_messages"
 	WsActionGetServers        = "get_servers"
 	WsActionGetServerChannels = "get_server_channels"
@@ -72,6 +74,7 @@ const (
 	WsEventAck                = "ack"
 	WsEventError              = "error"
 	WsEventMessage            = "message"
+	WsEventMessageEdited      = "message_edited"
 	WsEventMessageEmbeds      = "message_embeds"
 	WsEventConnected          = "connected"
 	WsEventVoiceUserJoined    = "voice_user_joined"
@@ -91,6 +94,15 @@ const (
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
+)
+
+// Ошибки, которые хаб отдаёт клиенту как есть; всё остальное, что вернёт
+// хранилище, заменяется на общий текст и уходит только в лог.
+var (
+	ErrMessageNotFound   = errors.New("message not found")
+	ErrNotMessageOwner   = errors.New("user is not message owner")
+	ErrEditWindowExpired = errors.New("edit window expired")
+	ErrEmptyContent      = errors.New("content is required")
 )
 
 type WsCommand struct {
@@ -156,6 +168,20 @@ type WsDeleteMessageRequest struct {
 	MessageID int64 `json:"message_id"`
 }
 
+type WsEditMessageRequest struct {
+	MessageID int64  `json:"message_id"`
+	Content   string `json:"content"`
+}
+
+// WsMessageEditedEvent — патч, а не полное сообщение: правится только текст,
+// а вложения, reply_to и автор у клиента уже есть.
+type WsMessageEditedEvent struct {
+	MessageID int64     `json:"message_id"`
+	ChannelID int64     `json:"channel_id"`
+	Content   string    `json:"content"`
+	EditedAt  time.Time `json:"edited_at"`
+}
+
 type WsGetMessagesRequest struct {
 	ChannelID int64  `json:"channel_id"`
 	Limit     int    `json:"limit"`
@@ -214,14 +240,14 @@ type MessageSearchParams struct {
 }
 
 type WsMessageSearchHit struct {
-	MessageID       int64     `json:"message_id"`
-	ChannelID       int64     `json:"channel_id"`
-	ChannelName     string    `json:"channel_name"`
-	AuthorID        int       `json:"author_id"`
-	AuthorFirstName string    `json:"author_first_name"`
-	AuthorLastName  string    `json:"author_last_name"`
-	AuthorNickname  string    `json:"author_nickname,omitempty"`
-	AuthorAvatarURL string    `json:"author_avatar_url,omitempty"`
+	MessageID       int64  `json:"message_id"`
+	ChannelID       int64  `json:"channel_id"`
+	ChannelName     string `json:"channel_name"`
+	AuthorID        int    `json:"author_id"`
+	AuthorFirstName string `json:"author_first_name"`
+	AuthorLastName  string `json:"author_last_name"`
+	AuthorNickname  string `json:"author_nickname,omitempty"`
+	AuthorAvatarURL string `json:"author_avatar_url,omitempty"`
 	// Headline is message content with the matched terms wrapped in
 	// [[HL]]...[[/HL]] markers (Postgres ts_headline output, not HTML) — the
 	// client must split on these markers and render <mark> itself rather than

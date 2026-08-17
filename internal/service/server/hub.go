@@ -66,6 +66,8 @@ const maxServerChannelNameLen = 16
 const maxAttachmentsPerMessage = 10
 const maxMentionsPerMessage = 50
 const everyoneMentionToken = "@everyone"
+const maxMessageContentLen = 4000
+const maxEditWindow = 15 * time.Minute
 
 var mentionTokenRegex = regexp.MustCompile(`<@(\d+)>`)
 
@@ -209,6 +211,8 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.sendMessage(req, ctx)
 	case types.WsActionDeleteMessage:
 		h.deleteMessage(req, ctx)
+	case types.WsActionEditMessage:
+		h.editMessage(req, ctx)
 	case types.WsActionGetMessages:
 		h.getMessages(req, ctx)
 	case types.WsActionGetServers:
@@ -861,6 +865,10 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		h.pushError(req.client, "content, attachment_ids, or reply_to_id are required")
 		return
 	}
+	if utf8.RuneCountInString(payload.Content) > maxMessageContentLen {
+		h.pushError(req.client, "content is too long")
+		return
+	}
 
 	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
 	if err != nil {
@@ -1093,6 +1101,71 @@ func (h *Hub) deleteMessage(req wsCommandRequest, ctx context.Context) {
 		h.pushError(req.client, err.Error())
 		return
 	}
+}
+
+func (h *Hub) editMessage(req wsCommandRequest, ctx context.Context) {
+	// Отдельного лимитера нет намеренно: правка стоит столько же, сколько
+	// отправка, и делит с ней бюджет пользователя.
+	if !h.sendMessageLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for edit_message")
+		return
+	}
+
+	var payload types.WsEditMessageRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid edit_message payload")
+		return
+	}
+	if payload.MessageID <= 0 {
+		h.pushError(req.client, "message_id is required")
+		return
+	}
+
+	payload.Content = strings.TrimSpace(payload.Content)
+	if utf8.RuneCountInString(payload.Content) > maxMessageContentLen {
+		h.pushError(req.client, "content is too long")
+		return
+	}
+
+	channelID, editedAt, err := h.storage.EditMessage(
+		ctx, payload.MessageID, req.client.UserID, payload.Content, maxEditWindow,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, types.ErrMessageNotFound),
+			errors.Is(err, types.ErrNotMessageOwner),
+			errors.Is(err, types.ErrEditWindowExpired),
+			errors.Is(err, types.ErrEmptyContent):
+			h.pushError(req.client, err.Error())
+		default:
+			h.log.Error("failed to edit message",
+				"message_id", payload.MessageID, "error", err.Error())
+			h.pushError(req.client, "failed to edit message")
+		}
+		return
+	}
+
+	recipientUserIDs, err := h.storage.ListChannelMemberUserIDs(ctx, channelID)
+	if err != nil {
+		// Текст уже сохранён — откатывать нечего. Подтверждаем автору и
+		// молчим для остальных: они увидят правку при следующей загрузке.
+		h.log.Error("failed to resolve channel members for edit",
+			"channel_id", channelID, "error", err.Error())
+		h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+		return
+	}
+
+	h.pushToUsers(recipientUserIDs, &types.WsEvent{
+		Event: types.WsEventMessageEdited,
+		Data: types.WsMessageEditedEvent{
+			MessageID: payload.MessageID,
+			ChannelID: channelID,
+			Content:   payload.Content,
+			EditedAt:  editedAt,
+		},
+	})
+
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 }
 
 func (h *Hub) getMessages(req wsCommandRequest, ctx context.Context) {

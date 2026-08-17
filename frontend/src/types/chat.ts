@@ -54,6 +54,9 @@ export interface Message {
     mentions_everyone?: boolean;
     embeds?: LinkPreview[];
     created_at: string;
+    // Приходит только у отредактированных сообщений (на бэкенде поле с
+    // omitempty). Наличие значения = показываем метку «изменено».
+    edited_at?: string;
 }
 
 export interface ServerMember {
