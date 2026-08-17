@@ -40,7 +40,8 @@ services:
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/11_message_mentions.sql &&
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/12_notification_settings.sql &&
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/13_push_subscriptions.sql &&
-      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/14_link_previews.sql
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/14_link_previews.sql &&
+      psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/15_messages_search.sql
       "
 
   backend:

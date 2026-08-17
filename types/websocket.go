@@ -22,6 +22,9 @@ type ServerStorage interface {
 	SaveMessage(ctx context.Context, msg *WsMessage) error
 	DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error)
 	GetMessages(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
+	GetMessagesAfter(ctx context.Context, channelID int64, limit int, cursor *WsMessageCursor, s3Host string) ([]WsMessage, *WsMessageCursor, bool, error)
+	GetMessagesAround(ctx context.Context, channelID, messageID int64, limit int, s3Host string) ([]WsMessage, *WsMessageCursor, *WsMessageCursor, bool, bool, error)
+	SearchMessages(ctx context.Context, params MessageSearchParams, s3Host string) ([]WsMessageSearchHit, *WsMessageCursor, bool, error)
 	GetServersByUserID(ctx context.Context, userID int) ([]Server, error)
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
@@ -62,6 +65,9 @@ const (
 	WsActionGetUnread         = "get_unread"
 	WsActionMarkRead          = "mark_read"
 	WsActionGetServerMembers  = "get_server_members"
+	WsActionGetMessagesAround = "get_messages_around"
+	WsActionGetMessagesAfter  = "get_messages_after"
+	WsActionSearchMessages    = "search_messages"
 
 	WsEventAck                = "ack"
 	WsEventError              = "error"
@@ -90,6 +96,13 @@ const (
 type WsCommand struct {
 	Action  string          `json:"action"`
 	Payload json.RawMessage `json:"payload,omitempty"`
+	// RequestID, when set, is echoed back on the resulting ack/error event.
+	// Only commands whose handler runs off the Run() loop (see handleCommand)
+	// need it: those are the only ones whose response can arrive out of the
+	// order the client sent requests in, so the client is the only side that
+	// must actually check it — older commands leave it empty and the client
+	// treats an empty request_id as always matching.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 type WsCreateServerRequest struct {
@@ -147,6 +160,80 @@ type WsGetMessagesRequest struct {
 	ChannelID int64  `json:"channel_id"`
 	Limit     int    `json:"limit"`
 	Cursor    string `json:"cursor,omitempty"`
+}
+
+type WsGetMessagesAfterRequest struct {
+	ChannelID int64  `json:"channel_id"`
+	Limit     int    `json:"limit"`
+	Cursor    string `json:"cursor"`
+}
+
+type WsGetMessagesAroundRequest struct {
+	ChannelID int64 `json:"channel_id"`
+	MessageID int64 `json:"message_id"`
+	Limit     int   `json:"limit,omitempty"`
+}
+
+type WsGetMessagesAroundResponse struct {
+	ChannelID    int64       `json:"channel_id"`
+	Messages     []WsMessage `json:"messages"`
+	OlderCursor  string      `json:"older_cursor,omitempty"`
+	NewerCursor  string      `json:"newer_cursor,omitempty"`
+	HasMoreOlder bool        `json:"has_more_older"`
+	HasMoreNewer bool        `json:"has_more_newer"`
+}
+
+// WsSearchMessagesRequest is the wire payload; dates arrive as RFC3339
+// strings and are parsed into MessageSearchParams before reaching storage.
+type WsSearchMessagesRequest struct {
+	Query     string  `json:"query"`
+	ChannelID int64   `json:"channel_id,omitempty"`
+	ServerID  int64   `json:"server_id,omitempty"` // scope: whole server, takes priority over ChannelID
+	AuthorID  int     `json:"author_id,omitempty"`
+	HasFile   bool    `json:"has_file,omitempty"`
+	HasLink   bool    `json:"has_link,omitempty"`
+	Before    *string `json:"before,omitempty"`
+	After     *string `json:"after,omitempty"`
+	Limit     int     `json:"limit,omitempty"`
+	Cursor    string  `json:"cursor,omitempty"`
+}
+
+// MessageSearchParams is the parsed, storage-layer form of a search request:
+// dates are already time.Time and the cursor already decoded.
+type MessageSearchParams struct {
+	Query     string
+	ChannelID int64
+	ServerID  int64
+	AuthorID  int
+	HasFile   bool
+	HasLink   bool
+	Before    *time.Time
+	After     *time.Time
+	Limit     int
+	Cursor    *WsMessageCursor
+}
+
+type WsMessageSearchHit struct {
+	MessageID       int64     `json:"message_id"`
+	ChannelID       int64     `json:"channel_id"`
+	ChannelName     string    `json:"channel_name"`
+	AuthorID        int       `json:"author_id"`
+	AuthorFirstName string    `json:"author_first_name"`
+	AuthorLastName  string    `json:"author_last_name"`
+	AuthorNickname  string    `json:"author_nickname,omitempty"`
+	AuthorAvatarURL string    `json:"author_avatar_url,omitempty"`
+	// Headline is message content with the matched terms wrapped in
+	// [[HL]]...[[/HL]] markers (Postgres ts_headline output, not HTML) — the
+	// client must split on these markers and render <mark> itself rather than
+	// ever treating this as trusted HTML.
+	Headline  string    `json:"headline"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type WsSearchMessagesResponse struct {
+	Hits       []WsMessageSearchHit `json:"hits"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+	HasMore    bool                 `json:"has_more"`
 }
 
 type WsGetServersResponse struct {

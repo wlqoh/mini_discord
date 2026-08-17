@@ -6,12 +6,110 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
+
+// messageColumns is the fixed column list shared by every query that reads
+// full message rows (GetMessages, GetMessagesAfter, GetMessagesAround) so the
+// scan order in scanMessageRow always matches the SELECT list.
+const messageColumns = `m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id, m.mentions_everyone`
+
+// finalizeMessage applies the normalization every message row needs after
+// scanning: resolving the avatar URL and undoing the " " placeholder SaveMessage
+// uses for empty content (Postgres has no NOT NULL-but-empty-allowed distinct
+// from NULL here, so an empty message is stored as a single space).
+func finalizeMessage(msg *types.WsMessage, avatarKey sql.NullString, replyToID *int64, s3Host string) {
+	if avatarKey.Valid {
+		msg.AuthorAvatarURL = utils.AvatarURLFromKey(avatarKey.String, s3Host)
+	}
+	if msg.Content == " " {
+		msg.Content = ""
+	}
+	msg.ReplyToID = replyToID
+}
+
+func scanMessageRow(rows *sql.Rows, s3Host string) (types.WsMessage, error) {
+	var msg types.WsMessage
+	var avatarKey sql.NullString
+	var replyToID *int64
+	if err := rows.Scan(
+		&msg.ID,
+		&msg.ChannelID,
+		&msg.AuthorID,
+		&msg.AuthorFirstName,
+		&msg.AuthorLastName,
+		&msg.AuthorNickname,
+		&avatarKey,
+		&msg.Content,
+		&msg.CreatedAt,
+		&msg.EditedAt,
+		&replyToID,
+		&msg.MentionsEveryone,
+	); err != nil {
+		return msg, err
+	}
+	finalizeMessage(&msg, avatarKey, replyToID, s3Host)
+	return msg, nil
+}
+
+// enrichMessages attaches attachments, reply previews, mentions and link
+// embeds to an already-fetched page of messages. Shared by every method that
+// returns a page of full messages (as opposed to search hits, which only need
+// a headline).
+func (s *Storage) enrichMessages(ctx context.Context, messages []types.WsMessage, s3Host string) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	msgIDs := make([]int64, len(messages))
+	for i, m := range messages {
+		msgIDs[i] = m.ID
+	}
+
+	atts, err := s.GetAttachmentsByMessageIDs(ctx, msgIDs, s3Host)
+	if err != nil {
+		return err
+	}
+
+	replyTos, err := s.GetMessageReplyTos(ctx, msgIDs, s3Host)
+	if err != nil {
+		return err
+	}
+
+	mentions, err := s.GetMessageMentions(ctx, msgIDs)
+	if err != nil {
+		return err
+	}
+
+	// Превью — необязательная часть сообщения: если таблица недоступна,
+	// историю всё равно нужно отдать, просто без карточек.
+	embeds, err := s.GetMessageEmbeds(ctx, msgIDs)
+	if err != nil {
+		embeds = nil
+	}
+
+	for i := range messages {
+		if a, ok := atts[messages[i].ID]; ok {
+			messages[i].Attachments = a
+		}
+		if rt, ok := replyTos[messages[i].ID]; ok {
+			messages[i].ReplyTo = rt
+		}
+		if m, ok := mentions[messages[i].ID]; ok {
+			messages[i].Mentions = m
+		}
+		if e, ok := embeds[messages[i].ID]; ok {
+			messages[i].Embeds = e
+		}
+	}
+
+	return nil
+}
 
 func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -321,7 +419,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 
 	limitPlusOne := limit + 1
 
-	query := `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id, m.mentions_everyone
+	query := `SELECT ` + messageColumns + `
 		 FROM messages m
 		 LEFT JOIN users u ON u.id = m.author_id
 		 WHERE m.channel_id = $1
@@ -330,7 +428,7 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	args := []any{channelID, limitPlusOne}
 
 	if cursor != nil {
-		query = `SELECT m.id, m.channel_id, COALESCE(m.author_id, 0), COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key, m.content, m.created_at, m.edited_at, m.reply_to_id, m.mentions_everyone
+		query = `SELECT ` + messageColumns + `
 			 FROM messages m
 			 LEFT JOIN users u ON u.id = m.author_id
 			 WHERE m.channel_id = $1
@@ -344,41 +442,21 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	if err != nil {
 		return nil, nil, false, err
 	}
-	defer rows.Close()
 
 	var messages []types.WsMessage
 	for rows.Next() {
-		var msg types.WsMessage
-		var avatarKey sql.NullString
-		var replyToID *int64
-		if err := rows.Scan(
-			&msg.ID,
-			&msg.ChannelID,
-			&msg.AuthorID,
-			&msg.AuthorFirstName,
-			&msg.AuthorLastName,
-			&msg.AuthorNickname,
-			&avatarKey,
-			&msg.Content,
-			&msg.CreatedAt,
-			&msg.EditedAt,
-			&replyToID,
-			&msg.MentionsEveryone,
-		); err != nil {
+		msg, err := scanMessageRow(rows, s3Host)
+		if err != nil {
+			rows.Close()
 			return nil, nil, false, err
 		}
-		if avatarKey.Valid {
-			msg.AuthorAvatarURL = utils.AvatarURLFromKey(avatarKey.String, s3Host)
-		}
-		if msg.Content == " " {
-			msg.Content = ""
-		}
-		msg.ReplyToID = replyToID
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, nil, false, err
 	}
+	rows.Close()
 
 	hasMore := len(messages) > limit
 	if hasMore {
@@ -399,50 +477,212 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 		messages[i], messages[j] = messages[j], messages[i]
 	}
 
-	if len(messages) > 0 {
-		msgIDs := make([]int64, len(messages))
-		for i, m := range messages {
-			msgIDs[i] = m.ID
-		}
-		atts, err := s.GetAttachmentsByMessageIDs(ctx, msgIDs, s3Host)
-		if err != nil {
-			return nil, nil, false, err
-		}
-
-		replyTos, err := s.GetMessageReplyTos(ctx, msgIDs, s3Host)
-		if err != nil {
-			return nil, nil, false, err
-		}
-
-		mentions, err := s.GetMessageMentions(ctx, msgIDs)
-		if err != nil {
-			return nil, nil, false, err
-		}
-
-		// Превью — необязательная часть сообщения: если таблица недоступна,
-		// историю всё равно нужно отдать, просто без карточек.
-		embeds, err := s.GetMessageEmbeds(ctx, msgIDs)
-		if err != nil {
-			embeds = nil
-		}
-
-		for i := range messages {
-			if a, ok := atts[messages[i].ID]; ok {
-				messages[i].Attachments = a
-			}
-			if rt, ok := replyTos[messages[i].ID]; ok {
-				messages[i].ReplyTo = rt
-			}
-			if m, ok := mentions[messages[i].ID]; ok {
-				messages[i].Mentions = m
-			}
-			if e, ok := embeds[messages[i].ID]; ok {
-				messages[i].Embeds = e
-			}
-		}
+	if err := s.enrichMessages(ctx, messages, s3Host); err != nil {
+		return nil, nil, false, err
 	}
 
 	return messages, nextCursor, hasMore, nil
+}
+
+// GetMessagesAfter loads the page of messages immediately following cursor,
+// in ascending order. It is the forward-pagination counterpart to GetMessages
+// (which only ever loads backward) — used to walk back down to the live tail
+// after GetMessagesAround opened a window in the middle of history.
+func (s *Storage) GetMessagesAfter(ctx context.Context, channelID int64, limit int, cursor *types.WsMessageCursor, s3Host string) ([]types.WsMessage, *types.WsMessageCursor, bool, error) {
+	if cursor == nil {
+		return nil, nil, false, errors.New("cursor is required")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	limitPlusOne := limit + 1
+
+	query := `SELECT ` + messageColumns + `
+		 FROM messages m
+		 LEFT JOIN users u ON u.id = m.author_id
+		 WHERE m.channel_id = $1
+		   AND (m.created_at, m.id) > ($2, $3)
+		 ORDER BY m.created_at ASC, m.id ASC
+		 LIMIT $4`
+
+	rows, err := s.db.QueryContext(ctx, query, channelID, cursor.CreatedAt, cursor.ID, limitPlusOne)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	var messages []types.WsMessage
+	for rows.Next() {
+		msg, err := scanMessageRow(rows, s3Host)
+		if err != nil {
+			rows.Close()
+			return nil, nil, false, err
+		}
+		messages = append(messages, msg)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, false, err
+	}
+	rows.Close()
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	var nextCursor *types.WsMessageCursor
+	if hasMore && len(messages) > 0 {
+		last := messages[len(messages)-1]
+		nextCursor = &types.WsMessageCursor{
+			ChannelID: last.ChannelID,
+			CreatedAt: last.CreatedAt,
+			ID:        last.ID,
+		}
+	}
+
+	if err := s.enrichMessages(ctx, messages, s3Host); err != nil {
+		return nil, nil, false, err
+	}
+
+	return messages, nextCursor, hasMore, nil
+}
+
+// GetMessagesAround loads a two-sided window of messages centered on
+// messageID: up to limit messages older than (and including) the anchor, and
+// up to limit messages newer. Used to jump straight to an arbitrary message
+// (a search hit, a reply preview, a push notification) without walking
+// GetMessages backward page by page.
+func (s *Storage) GetMessagesAround(ctx context.Context, channelID, messageID int64, limit int, s3Host string) ([]types.WsMessage, *types.WsMessageCursor, *types.WsMessageCursor, bool, bool, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	limitPlusOne := limit + 1
+
+	var anchorCreatedAt time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT created_at FROM messages WHERE id = $1 AND channel_id = $2`,
+		messageID, channelID,
+	).Scan(&anchorCreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, nil, false, false, errors.New("message not found")
+		}
+		return nil, nil, nil, false, false, err
+	}
+
+	// Each half tags itself with a literal 'half' column: UNION ALL gives no
+	// guarantee the two branches' rows arrive in their own ORDER BY sequence
+	// (or even stay grouped together), so provenance can't be inferred from
+	// row position — every row is re-sorted in Go below instead.
+	query := `
+		(SELECT ` + messageColumns + `, 'older' AS half
+		 FROM messages m
+		 LEFT JOIN users u ON u.id = m.author_id
+		 WHERE m.channel_id = $1
+		   AND (m.created_at, m.id) <= ($2, $3)
+		 ORDER BY m.created_at DESC, m.id DESC
+		 LIMIT $4)
+		UNION ALL
+		(SELECT ` + messageColumns + `, 'newer' AS half
+		 FROM messages m
+		 LEFT JOIN users u ON u.id = m.author_id
+		 WHERE m.channel_id = $1
+		   AND (m.created_at, m.id) > ($2, $3)
+		 ORDER BY m.created_at ASC, m.id ASC
+		 LIMIT $4)`
+
+	rows, err := s.db.QueryContext(ctx, query, channelID, anchorCreatedAt, messageID, limitPlusOne)
+	if err != nil {
+		return nil, nil, nil, false, false, err
+	}
+
+	var older, newer []types.WsMessage
+	for rows.Next() {
+		var msg types.WsMessage
+		var avatarKey sql.NullString
+		var replyToID *int64
+		var half string
+		if err := rows.Scan(
+			&msg.ID,
+			&msg.ChannelID,
+			&msg.AuthorID,
+			&msg.AuthorFirstName,
+			&msg.AuthorLastName,
+			&msg.AuthorNickname,
+			&avatarKey,
+			&msg.Content,
+			&msg.CreatedAt,
+			&msg.EditedAt,
+			&replyToID,
+			&msg.MentionsEveryone,
+			&half,
+		); err != nil {
+			rows.Close()
+			return nil, nil, nil, false, false, err
+		}
+		finalizeMessage(&msg, avatarKey, replyToID, s3Host)
+		if half == "older" {
+			older = append(older, msg)
+		} else {
+			newer = append(newer, msg)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, nil, false, false, err
+	}
+	rows.Close()
+
+	sort.Slice(older, func(i, j int) bool {
+		if !older[i].CreatedAt.Equal(older[j].CreatedAt) {
+			return older[i].CreatedAt.After(older[j].CreatedAt)
+		}
+		return older[i].ID > older[j].ID
+	})
+	hasMoreOlder := len(older) > limit
+	if hasMoreOlder {
+		older = older[:limit]
+	}
+
+	sort.Slice(newer, func(i, j int) bool {
+		if !newer[i].CreatedAt.Equal(newer[j].CreatedAt) {
+			return newer[i].CreatedAt.Before(newer[j].CreatedAt)
+		}
+		return newer[i].ID < newer[j].ID
+	})
+	hasMoreNewer := len(newer) > limit
+	if hasMoreNewer {
+		newer = newer[:limit]
+	}
+
+	messages := make([]types.WsMessage, 0, len(older)+len(newer))
+	for i := len(older) - 1; i >= 0; i-- {
+		messages = append(messages, older[i])
+	}
+	messages = append(messages, newer...)
+
+	var olderCursor, newerCursor *types.WsMessageCursor
+	if hasMoreOlder && len(messages) > 0 {
+		first := messages[0]
+		olderCursor = &types.WsMessageCursor{ChannelID: channelID, CreatedAt: first.CreatedAt, ID: first.ID}
+	}
+	if hasMoreNewer && len(messages) > 0 {
+		last := messages[len(messages)-1]
+		newerCursor = &types.WsMessageCursor{ChannelID: channelID, CreatedAt: last.CreatedAt, ID: last.ID}
+	}
+
+	if err := s.enrichMessages(ctx, messages, s3Host); err != nil {
+		return nil, nil, nil, false, false, err
+	}
+
+	return messages, olderCursor, newerCursor, hasMoreOlder, hasMoreNewer, nil
 }
 
 func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error) {
@@ -957,6 +1197,123 @@ func (s *Storage) MarkChannelRead(ctx context.Context, userID int, channelID, me
 
 	_, err := s.db.ExecContext(ctx, query, userID, channelID, messageID)
 	return err
+}
+
+// SearchMessages runs a full-text search against messages.search_vector
+// (see migration 023) and returns a page of ts_headline'd hits, newest first.
+// tsquery is always built via websearch_to_tsquery — never assembled by hand
+// from user input, which would mean either fighting tsquery's operator syntax
+// (AND/OR/<->) or risking a malformed-query error on arbitrary text.
+func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearchParams, s3Host string) ([]types.WsMessageSearchHit, *types.WsMessageCursor, bool, error) {
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 25
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	limitPlusOne := limit + 1
+
+	args := make([]any, 0, 8)
+	args = append(args, params.Query)
+
+	var sb strings.Builder
+	sb.WriteString(`
+		WITH q AS (
+			SELECT websearch_to_tsquery('russian', $1) || websearch_to_tsquery('english', $1) AS tsq
+		)
+		SELECT m.id, m.channel_id, c.name, COALESCE(m.author_id, 0),
+		       COALESCE(u.first_name, ''), COALESCE(u.last_name, ''), COALESCE(u.nickname, 'deleted user'), u.avatar_key,
+		       ts_headline('russian', m.content, q.tsq,
+		           'StartSel=[[HL]], StopSel=[[/HL]], MaxFragments=2, MaxWords=20, MinWords=8, ShortWord=3'),
+		       m.created_at
+		FROM messages m
+		CROSS JOIN q
+		JOIN channels c ON c.id = m.channel_id
+		LEFT JOIN users u ON u.id = m.author_id
+		WHERE m.search_vector @@ q.tsq`)
+
+	if params.ServerID > 0 {
+		sb.WriteString(fmt.Sprintf(" AND c.server_id = $%d AND c.type = $%d", len(args)+1, len(args)+2))
+		args = append(args, params.ServerID, types.ChannelTypeText)
+	} else {
+		sb.WriteString(fmt.Sprintf(" AND m.channel_id = $%d", len(args)+1))
+		args = append(args, params.ChannelID)
+	}
+
+	if params.AuthorID > 0 {
+		sb.WriteString(fmt.Sprintf(" AND m.author_id = $%d", len(args)+1))
+		args = append(args, params.AuthorID)
+	}
+	if params.HasFile {
+		sb.WriteString(" AND EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id)")
+	}
+	if params.HasLink {
+		sb.WriteString(" AND EXISTS (SELECT 1 FROM message_embeds e WHERE e.message_id = m.id)")
+	}
+	if params.Before != nil {
+		sb.WriteString(fmt.Sprintf(" AND m.created_at < $%d", len(args)+1))
+		args = append(args, *params.Before)
+	}
+	if params.After != nil {
+		sb.WriteString(fmt.Sprintf(" AND m.created_at > $%d", len(args)+1))
+		args = append(args, *params.After)
+	}
+	if params.Cursor != nil {
+		sb.WriteString(fmt.Sprintf(" AND (m.created_at, m.id) < ($%d, $%d)", len(args)+1, len(args)+2))
+		args = append(args, params.Cursor.CreatedAt, params.Cursor.ID)
+	}
+
+	sb.WriteString(fmt.Sprintf(" ORDER BY m.created_at DESC, m.id DESC LIMIT $%d", len(args)+1))
+	args = append(args, limitPlusOne)
+
+	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	var hits []types.WsMessageSearchHit
+	for rows.Next() {
+		var hit types.WsMessageSearchHit
+		var avatarKey sql.NullString
+		if err := rows.Scan(
+			&hit.MessageID,
+			&hit.ChannelID,
+			&hit.ChannelName,
+			&hit.AuthorID,
+			&hit.AuthorFirstName,
+			&hit.AuthorLastName,
+			&hit.AuthorNickname,
+			&avatarKey,
+			&hit.Headline,
+			&hit.CreatedAt,
+		); err != nil {
+			rows.Close()
+			return nil, nil, false, err
+		}
+		if avatarKey.Valid {
+			hit.AuthorAvatarURL = utils.AvatarURLFromKey(avatarKey.String, s3Host)
+		}
+		hits = append(hits, hit)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, false, err
+	}
+	rows.Close()
+
+	hasMore := len(hits) > limit
+	if hasMore {
+		hits = hits[:limit]
+	}
+
+	var nextCursor *types.WsMessageCursor
+	if hasMore && len(hits) > 0 {
+		last := hits[len(hits)-1]
+		nextCursor = &types.WsMessageCursor{ChannelID: last.ChannelID, CreatedAt: last.CreatedAt, ID: last.MessageID}
+	}
+
+	return hits, nextCursor, hasMore, nil
 }
 
 func (s *Storage) SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]types.Server, error) {

@@ -17,9 +17,14 @@ type Params = {
     messages: Message[];
     selectedChannelId: number;
     currentUserId: number | null;
+    // True while the channel shows a windowed view (opened by jumping to a
+    // search hit, reply, or notification) rather than its live tail — the
+    // button should stay visible in that case regardless of scroll distance,
+    // since scroll distance alone can't tell there's an unloaded tail below.
+    hasMoreNewer?: boolean;
 };
 
-export function useJumpToLatest({ containerRef, messages, selectedChannelId, currentUserId }: Params) {
+export function useJumpToLatest({ containerRef, messages, selectedChannelId, currentUserId, hasMoreNewer }: Params) {
     const isAtBottomRef = useRef(true);
     const [isVisible, setIsVisible] = useState(false);
     const [lastSeenId, setLastSeenId] = useState(0);
@@ -122,5 +127,5 @@ export function useJumpToLatest({ containerRef, messages, selectedChannelId, cur
         setLastSeenId(tailIdRef.current);
     }, [containerRef]);
 
-    return { isVisible, newCount, jumpToLatest, isAtBottomRef };
+    return { isVisible: isVisible || Boolean(hasMoreNewer), newCount, jumpToLatest, isAtBottomRef };
 }

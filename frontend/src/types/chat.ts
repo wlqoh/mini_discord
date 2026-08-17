@@ -149,6 +149,40 @@ export interface ChannelPagination {
     hasMore: boolean;
     isLoadingMore: boolean;
     error: boolean;
+    // Present only while the channel is showing a windowed view opened by
+    // jumpToMessage (a search hit, a reply, a push notification) rather than
+    // the live tail. See useMessages' incoming-message guard: while
+    // hasMoreNewer is true, newly arrived messages are not appended, because
+    // there is an unloaded gap between the window and the real tail.
+    newerCursor?: string;
+    hasMoreNewer?: boolean;
+    isLoadingNewer?: boolean;
 }
 
 export type PaginationByChannel = Record<number, ChannelPagination>;
+
+export type SearchScope = "channel" | "server";
+
+export interface SearchFilters {
+    authorId?: number;
+    hasFile?: boolean;
+    hasLink?: boolean;
+    before?: string;
+    after?: string;
+}
+
+export interface SearchHit {
+    message_id: number;
+    channel_id: number;
+    channel_name: string;
+    author_id: number;
+    author_first_name?: string;
+    author_last_name?: string;
+    author_nickname?: string;
+    author_avatar_url?: string;
+    // Message content with matched terms wrapped in [[HL]]...[[/HL]] markers
+    // (Postgres ts_headline output, not HTML) — render via renderHeadline,
+    // never as raw HTML.
+    headline: string;
+    created_at: string;
+}

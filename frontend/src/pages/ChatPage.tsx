@@ -8,6 +8,7 @@ import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
 import ConnectionQualityIcon from "../components/ConnectionQualityIcon.tsx";
 import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
+import SearchPanel from "../components/SearchPanel.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import {CallClient} from "../services/callClient.ts";
 import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
@@ -26,6 +27,7 @@ import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
 import { useUnread } from "../hooks/useUnread.ts";
 import { useJumpToLatest } from "../hooks/useJumpToLatest.ts";
+import { useMessageSearch } from "../hooks/useMessageSearch.ts";
 import { useNotifications } from "../hooks/useNotifications.ts";
 import { useServerMembers } from "../hooks/useServerMembers.ts";
 import { useNotificationSettings } from "../hooks/useNotificationSettings.ts";
@@ -116,13 +118,35 @@ export default function ChatPage() {
         setTheme((prev) => (prev === "light" ? "dark" : "light"));
     }
 
-    function scrollToMessage(messageId: number) {
-        const el = document.getElementById(`message-${messageId}`);
-        if (el) {
-            el.scrollIntoView({ behavior: "smooth", block: "center" });
-            el.classList.add("message-highlight");
-            setTimeout(() => el.classList.remove("message-highlight"), 2000);
+    // Async because the target may be outside the currently loaded history —
+    // jumpToMessage opens a window around it first (see useMessages) when it
+    // isn't already in messagesByChannel. Switching channel and fetching the
+    // window are both state updates, so a requestAnimationFrame after the
+    // await is needed to let React commit before getElementById runs.
+    // Not itself wrapped in useCallback: navigateFromNotification's own
+    // useCallback below already depends on `servers`, a fresh object every
+    // render, so it's recreated every render regardless — memoizing this one
+    // function wouldn't stop that.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    async function scrollToMessage(messageId: number, channelId?: number): Promise<void> {
+        const targetChannelId = channelId ?? servers.selectedChannelId;
+        if (targetChannelId <= 0) return;
+
+        if (targetChannelId !== servers.selectedChannelId) {
+            servers.setSelectedChannelId(targetChannelId);
         }
+
+        const found = await messages.jumpToMessage(targetChannelId, messageId);
+        if (!found) return;
+
+        requestAnimationFrame(() => {
+            const el = document.getElementById(`message-${messageId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("message-highlight");
+                setTimeout(() => el.classList.remove("message-highlight"), 2000);
+            }
+        });
     }
 
     // isPageVisible effect
@@ -273,6 +297,28 @@ export default function ChatPage() {
 
     const serverMembers = useServerMembers(socketRef, isConnected, servers.selectedServerId);
 
+    const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+    const messageSearch = useMessageSearch({
+        socketRef,
+        isConnected,
+        channelId: servers.selectedChannelId,
+        serverId: servers.selectedServerId,
+    });
+
+    // Ctrl/Cmd+F opens message search instead of the browser's own find-in-page —
+    // only while a text channel is actually open, so it doesn't hijack the
+    // shortcut on the login/loading screens or while no channel is selected.
+    useEffect(() => {
+        function handleKeyDown(e: KeyboardEvent) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f" && servers.selectedChannelId > 0) {
+                e.preventDefault();
+                setIsSearchPanelOpen(true);
+            }
+        }
+        window.addEventListener("keydown", handleKeyDown);
+        return () => window.removeEventListener("keydown", handleKeyDown);
+    }, [servers.selectedChannelId]);
+
     // Navigate to a channel/message referenced by a notification click, whether it
     // arrived over postMessage (tab was already open) or as boot query params
     // (tab was opened fresh by the Service Worker — see public/sw.js).
@@ -285,11 +331,11 @@ export default function ChatPage() {
                 }
                 servers.setSelectedChannelId(data.channel_id!);
                 if (data.message_id) {
-                    window.setTimeout(() => scrollToMessage(data.message_id!), 300);
+                    await scrollToMessage(data.message_id, data.channel_id);
                 }
             })();
         },
-        [servers],
+        [servers, scrollToMessage],
     );
 
     useEffect(() => {
@@ -338,6 +384,10 @@ export default function ChatPage() {
     const isLoadingOlder = activePagination?.isLoadingMore ?? false;
     const hasMoreOlder = activePagination?.hasMore ?? false;
     const loadOlderError = activePagination?.error ?? false;
+    // Set only while the channel is showing a windowed view opened by
+    // scrollToMessage rather than its live tail — see useMessages.
+    const hasMoreNewer = activePagination?.hasMoreNewer ?? false;
+    const isLoadingNewer = activePagination?.isLoadingNewer ?? false;
     const typingUserIds = servers.selectedChannelId > 0 ? typingByChannel[servers.selectedChannelId] ?? [] : [];
 
     const userInitial =
@@ -403,7 +453,20 @@ export default function ChatPage() {
         messages: activeMessages,
         selectedChannelId: servers.selectedChannelId,
         currentUserId,
+        hasMoreNewer,
     });
+
+    // Wraps jump.jumpToLatest: while showing a windowed view, scrolling to the
+    // bottom of what's loaded would not reach the real tail (there's an
+    // unloaded gap past it) — reload the live tail first, then scroll.
+    async function handleJumpToLatest(): Promise<void> {
+        if (hasMoreNewer) {
+            await messages.resetToLiveTail(servers.selectedChannelId);
+            requestAnimationFrame(() => jump.jumpToLatest());
+            return;
+        }
+        jump.jumpToLatest();
+    }
 
     // Scroll positioning: jump to bottom on channel switch, stick to bottom on
     // new tail messages, and preserve reading position when older history is prepended.
@@ -444,7 +507,7 @@ export default function ChatPage() {
     }, [activeMessages.length, servers.selectedChannelId]);
 
     return (
-        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
+        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""} ${isSearchPanelOpen ? "search-panel-open" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
             {showPermissionBanner && notificationPermission === "default" ? (
                 <NotificationPermissionBanner
                     onEnable={() => void handlePermissionBannerEnable()}
@@ -709,6 +772,16 @@ export default function ChatPage() {
                             </div>
                             <div className="chat-header-actions">
                                 <button
+                                    className="channel-search-btn"
+                                    type="button"
+                                    onClick={() => setIsSearchPanelOpen((prev) => !prev)}
+                                    aria-label={isSearchPanelOpen ? "Закрыть поиск" : "Поиск по сообщениям"}
+                                    title="Поиск по сообщениям (Ctrl+F)"
+                                    disabled={servers.selectedChannelId <= 0}
+                                >
+                                    <Search size={18} aria-hidden="true" />
+                                </button>
+                                <button
                                     className="profile-open-btn"
                                     type="button"
                                     onClick={profile.openSelfProfile}
@@ -830,12 +903,12 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} hasMoreNewer={hasMoreNewer} isLoadingNewer={isLoadingNewer} onLoadNewer={() => messages.loadNewerMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
                 </div>
                 <JumpToLatestButton
                     isVisible={jump.isVisible}
                     newCount={jump.newCount}
-                    onClick={jump.jumpToLatest}
+                    onClick={() => void handleJumpToLatest()}
                 />
                 </div>
                 {shouldHideMessageInput ? null : (
@@ -864,6 +937,27 @@ export default function ChatPage() {
                     </>
                 )}
             </section>
+
+            <SearchPanel
+                isOpen={isSearchPanelOpen}
+                onClose={() => setIsSearchPanelOpen(false)}
+                query={messageSearch.query}
+                onQueryChange={messageSearch.setQuery}
+                scope={messageSearch.scope}
+                onScopeChange={messageSearch.setScope}
+                filters={messageSearch.filters}
+                onFiltersChange={messageSearch.setFilters}
+                hits={messageSearch.hits}
+                hasMore={messageSearch.hasMore}
+                isLoading={messageSearch.isLoading}
+                isLoadingMore={messageSearch.isLoadingMore}
+                hasSearched={messageSearch.hasSearched}
+                error={messageSearch.error}
+                onSubmit={() => void messageSearch.submit()}
+                onLoadMore={() => void messageSearch.loadMore()}
+                serverMembers={serverMembers.members}
+                onScrollToMessage={(messageId, channelId) => void scrollToMessage(messageId, channelId)}
+            />
 
             {profile.isProfileModalOpen && (
                 <div className={`modal-overlay ${closingModal === "profile" ? "closing" : ""}`} onClick={() => closeModalWithAnim("profile", () => profile.setIsProfileModalOpen(false))}>
