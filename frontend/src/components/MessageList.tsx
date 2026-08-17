@@ -1,20 +1,29 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, CornerUpLeft, Paperclip } from "lucide-react";
+import { CornerDownLeft, CornerUpLeft, Paperclip, Pencil, Trash2 } from "lucide-react";
 import type { Attachment, Message, ReplyPreview, ServerMember } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
 import VideoPlayer from "./VideoPlayer";
 import LinkPreviewCard from "./LinkPreviewCard.tsx";
+import ContextMenu, { type ContextMenuItem } from "./ContextMenu.tsx";
+import { useToast } from "./Toast.tsx";
 import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
 import { memberDisplayName } from "../services/mentions.ts";
 import { trimUrlTail } from "../services/links.ts";
 import { formatMessageTimestamp } from "../services/formatTimestamp.ts";
+import {
+    MAX_MESSAGE_CONTENT_LEN,
+    MESSAGE_LEN_COUNTER_THRESHOLD,
+    isMessageContentTooLong,
+    messageContentLength,
+} from "../services/messageLimits.ts";
 
 type Props = {
     messages: Message[];
     currentUserId: number | null;
     onOpenProfile?: (userId: number) => void;
     onDeleteMessage?: (messageId: number, channelId: number) => void;
+    onEditMessage?: (messageId: number, content: string) => Promise<void>;
     onReply?: (message: Message) => void;
     onScrollToMessage?: (messageId: number) => void;
     isLoading?: boolean;
@@ -34,6 +43,50 @@ type Props = {
 // Один проход по тексту на все виды токенов. `<@id>` начинается с угловой
 // скобки, а URL-часть шаблона её исключает, поэтому ветки не конфликтуют.
 const TOKEN_PATTERN = /<@(\d+)>|@everyone|https?:\/\/[^\s<>"']+/g;
+
+// Дублирует maxEditWindow из internal/service/server/hub.go. Сравнение с
+// Date.now() корректно, потому что created_at приезжает в UTC: колонка —
+// TIMESTAMP WITHOUT TIME ZONE, сервер БД работает в UTC (docker-compose не
+// задаёт TZ), lib/pq отдаёт такое значение с локацией UTC, и JSON получает
+// суффикс Z. Сервер всё равно проверяет окно сам — здесь это лишь UI-фильтр.
+const EDIT_WINDOW_MS = 15 * 60 * 1000;
+
+// Тексты ошибок сервер отдаёт по-английски; UI проекта русский.
+const EDIT_ERROR_TEXT: Record<string, string> = {
+    "message not found": "Сообщение не найдено",
+    "user is not message owner": "Это не ваше сообщение",
+    "edit window expired": "Прошло больше 15 минут — сообщение уже нельзя изменить",
+    "content is required": "Сообщение не может быть пустым",
+    "content is too long": `Слишком длинное сообщение (максимум ${MAX_MESSAGE_CONTENT_LEN} символов)`,
+    "rate limit exceeded for edit_message": "Слишком часто — попробуйте ещё раз через секунду",
+    "failed to edit message": "Не удалось сохранить изменение",
+};
+
+// Ошибки, после которых повторная попытка бессмысленна: показываем тостом и
+// закрываем редактор. Всё остальное (лимит, сеть, таймаут) — инлайн, с
+// сохранением набранного текста.
+const FATAL_EDIT_ERRORS = new Set([
+    "message not found",
+    "user is not message owner",
+    "edit window expired",
+]);
+
+function translateEditError(raw: string): string {
+    return EDIT_ERROR_TEXT[raw] ?? raw;
+}
+
+function canEditMessage(msg: Message, currentUserId: number | null): boolean {
+    if (currentUserId === null || msg.author_id !== currentUserId) return false;
+    const createdAt = new Date(msg.created_at).getTime();
+    if (Number.isNaN(createdAt)) return false;
+    return Date.now() - createdAt < EDIT_WINDOW_MS;
+}
+
+function formatEditedTitle(isoDate: string): string {
+    const date = new Date(isoDate);
+    if (Number.isNaN(date.getTime())) return "Изменено";
+    return `Изменено ${date.toLocaleString("ru-RU")}`;
+}
 
 function renderMessageContent(content: string, membersById: Map<number, ServerMember>) {
     const parts: React.ReactNode[] = [];
@@ -242,11 +295,113 @@ function ReplyPreviewBlock({ reply, onScrollToMessage }: { reply: ReplyPreview; 
     );
 }
 
+function MessageEditor({
+    message,
+    onSubmit,
+    onClose,
+}: {
+    message: Message;
+    onSubmit: (content: string) => Promise<void>;
+    onClose: () => void;
+}) {
+    const { showToast } = useToast();
+    const [value, setValue] = useState(message.content);
+    const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState("");
+    const inputRef = useRef<HTMLInputElement | null>(null);
+
+    // Каретка в конец, а не в начало: правят обычно хвост сообщения.
+    useEffect(() => {
+        const input = inputRef.current;
+        if (!input) return;
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+    }, []);
+
+    const length = messageContentLength(value);
+    const isTooLong = isMessageContentTooLong(value);
+    // Пустой текст сервер принимает только у сообщения с вложениями — там он
+    // хранится как плейсхолдер-пробел. Повторяем это правило в UI, чтобы не
+    // отправлять заведомо отклоняемую правку.
+    const hasAttachments = (message.attachments?.length ?? 0) > 0;
+    const canSave = !isSaving && !isTooLong && (value.trim().length > 0 || hasAttachments);
+
+    async function save() {
+        if (!canSave) return;
+
+        const next = value.trim();
+        // Текст не изменился — не тратим правку: сервер иначе проставит
+        // edited_at и сообщение получит метку «изменено» ни за что.
+        if (next === message.content) {
+            onClose();
+            return;
+        }
+
+        setIsSaving(true);
+        setError("");
+        try {
+            await onSubmit(next);
+            // Содержимое в кэше обновит событие message_edited — редактор
+            // просто закрывается.
+            onClose();
+        } catch (err) {
+            const raw = err instanceof Error ? err.message : "failed to edit message";
+            if (FATAL_EDIT_ERRORS.has(raw)) {
+                showToast("error", translateEditError(raw));
+                onClose();
+                return;
+            }
+            setError(translateEditError(raw));
+            setIsSaving(false);
+        }
+    }
+
+    return (
+        <div className="message-edit">
+            <input
+                ref={inputRef}
+                className="message-edit-input"
+                value={value}
+                disabled={isSaving}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        void save();
+                    } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        onClose();
+                    }
+                }}
+                autoComplete="off"
+                enterKeyHint="done"
+                aria-label="Редактирование сообщения"
+            />
+            {length >= MESSAGE_LEN_COUNTER_THRESHOLD && (
+                <div className={`message-length-counter${isTooLong ? " over" : ""}`}>
+                    {length} / {MAX_MESSAGE_CONTENT_LEN}
+                </div>
+            )}
+            {error && <div className="message-edit-error">{error}</div>}
+            <div className="message-edit-actions">
+                <button type="button" className="message-edit-save" onClick={() => void save()} disabled={!canSave}>
+                    {isSaving ? "Сохранение…" : "Сохранить"}
+                </button>
+                <button type="button" className="message-edit-cancel" onClick={onClose} disabled={isSaving}>
+                    Отмена
+                </button>
+                <span className="message-edit-hint">Enter — сохранить, Esc — отмена</span>
+            </div>
+        </div>
+    );
+}
+
 export default function MessageList({
     messages,
     currentUserId,
     onOpenProfile,
     onDeleteMessage,
+    onEditMessage,
     onReply,
     onScrollToMessage,
     isLoading,
@@ -260,6 +415,8 @@ export default function MessageList({
     serverMembers = [],
 }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+    const [menu, setMenu] = useState<{ x: number; y: number; message: Message } | null>(null);
+    const [editingId, setEditingId] = useState<number | null>(null);
     const membersById = useMemo(() => new Map(serverMembers.map((member) => [member.user_id, member])), [serverMembers]);
     // Messages present at mount (or already seen) never re-animate as "new" —
     // this stays correct even when older history is prepended, since ids only grow.
@@ -303,6 +460,37 @@ export default function MessageList({
         observer.observe(node);
         return () => observer.disconnect();
     }, [hasMoreNewer, isLoadingNewer, onLoadNewer, messages.length]);
+
+    function buildMenuItems(msg: Message): ContextMenuItem[] {
+        const isOwn = currentUserId !== null && msg.author_id === currentUserId;
+        const items: ContextMenuItem[] = [
+            { label: "Ответить", icon: <CornerDownLeft size={14} />, onClick: () => onReply?.(msg) },
+        ];
+
+        // Пункт скрыт, а не задизейблен: 15 минут прошло — действия просто нет.
+        if (canEditMessage(msg, currentUserId) && onEditMessage) {
+            items.push({
+                label: "Редактировать",
+                icon: <Pencil size={14} />,
+                onClick: () => {
+                    setConfirmDeleteId(null);
+                    setEditingId(msg.id);
+                },
+            });
+        }
+
+        if (isOwn) {
+            items.push({ type: "separator" });
+            items.push({
+                label: "Удалить",
+                icon: <Trash2 size={14} />,
+                danger: true,
+                onClick: () => setConfirmDeleteId(msg.id),
+            });
+        }
+
+        return items;
+    }
 
     if (isLoading) {
         return (
@@ -355,6 +543,14 @@ export default function MessageList({
                         id={`message-${msg.id}`}
                         className={`message-row ${isOwn ? "own" : "other"} ${isMentioned ? "mentioned" : ""}`}
                         data-new={isNew ? "true" : undefined}
+                        onContextMenu={(e) => {
+                            // Правый клик по ссылке, картинке или плееру
+                            // оставляем системному меню: «Открыть в новой
+                            // вкладке» и «Сохранить» там нужнее нашего.
+                            if ((e.target as HTMLElement).closest("a, img, video, audio, input, textarea")) return;
+                            e.preventDefault();
+                            setMenu({ x: e.clientX, y: e.clientY, message: msg });
+                        }}
                     >
                         <button
                             className="message-avatar-wrap"
@@ -446,7 +642,17 @@ export default function MessageList({
                             {msg.reply_to && (
                                 <ReplyPreviewBlock reply={msg.reply_to} onScrollToMessage={onScrollToMessage} />
                             )}
-                            {msg.content && <div className="message-content">{renderMessageContent(msg.content, membersById)}</div>}
+                            {editingId === msg.id ? (
+                                <MessageEditor
+                                    message={msg}
+                                    onSubmit={(content) => onEditMessage!(msg.id, content)}
+                                    onClose={() => setEditingId(null)}
+                                />
+                            ) : (
+                                msg.content && (
+                                    <div className="message-content">{renderMessageContent(msg.content, membersById)}</div>
+                                )
+                            )}
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className="message-attachments">
                                     {msg.attachments.map(renderAttachment)}
@@ -461,7 +667,14 @@ export default function MessageList({
                                     ))}
                                 </div>
                             )}
-                            <div className="message-timestamp">{formatMessageTimestamp(msg.created_at)}</div>
+                            <div className="message-timestamp">
+                                {formatMessageTimestamp(msg.created_at)}
+                                {msg.edited_at ? (
+                                    <span className="message-edited-mark" title={formatEditedTitle(msg.edited_at)}>
+                                        {" · изменено"}
+                                    </span>
+                                ) : null}
+                            </div>
                         </div>
                     </div>
                 );
@@ -474,6 +687,15 @@ export default function MessageList({
             )}
 
             {hasMoreNewer && <div ref={bottomSentinelRef} className="scroll-sentinel" aria-hidden="true" />}
+
+            {menu && (
+                <ContextMenu
+                    x={menu.x}
+                    y={menu.y}
+                    items={buildMenuItems(menu.message)}
+                    onClose={() => setMenu(null)}
+                />
+            )}
         </div>
     );
 }

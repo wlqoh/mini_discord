@@ -5,6 +5,12 @@ import type { Message, OnlineUser, ServerMember } from "../types/chat.ts";
 import { useToast } from "./Toast.tsx";
 import MentionAutocomplete from "./MentionAutocomplete.tsx";
 import { computeMentionResults, detectMentionQuery, type MentionMatch } from "../services/mentions.ts";
+import {
+    MAX_MESSAGE_CONTENT_LEN,
+    MESSAGE_LEN_COUNTER_THRESHOLD,
+    isMessageContentTooLong,
+    messageContentLength,
+} from "../services/messageLimits.ts";
 
 type PendingFile = {
     id: string;
@@ -373,6 +379,7 @@ export default function MessageInput({
             return;
         }
         if (disabled) return;
+        if (isTooLong) return;
 
         let attachmentIds: number[] | undefined;
 
@@ -459,7 +466,9 @@ export default function MessageInput({
         if (files.length > 0) addFiles(files);
     }
 
-    const canSend = !disabled && !isUploading && !isRecording && (text.trim().length > 0 || pendingFiles.length > 0);
+    const contentLength = messageContentLength(text);
+    const isTooLong = isMessageContentTooLong(text);
+    const canSend = !disabled && !isUploading && !isRecording && !isTooLong && (text.trim().length > 0 || pendingFiles.length > 0);
 
     return (
         <form
@@ -493,6 +502,11 @@ export default function MessageInput({
                         <div className="upload-progress-fill" style={{ width: `${uploadProgress}%` }} />
                     </div>
                     <span className="upload-progress-label">{uploadProgress}%</span>
+                </div>
+            )}
+            {contentLength >= MESSAGE_LEN_COUNTER_THRESHOLD && (
+                <div className={`message-length-counter${isTooLong ? " over" : ""}`}>
+                    {contentLength} / {MAX_MESSAGE_CONTENT_LEN}
                 </div>
             )}
             {pendingFiles.length > 0 && (

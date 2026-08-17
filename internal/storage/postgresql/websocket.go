@@ -729,6 +729,74 @@ func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int
 	return fileKeys, err
 }
 
+// EditMessage переписывает текст сообщения автора, если с момента создания
+// прошло не больше window. Окно считает Postgres: messages.created_at —
+// TIMESTAMP без таймзоны, заполняемый через now(), поэтому сравнивать его
+// с time.Now() на стороне Go означало бы зависеть от совпадения TZ процесса
+// и базы.
+func (s *Storage) EditMessage(
+	ctx context.Context,
+	messageID int64,
+	userID int,
+	content string,
+	window time.Duration,
+) (int64, time.Time, error) {
+	const checkQuery = `
+		SELECT m.channel_id,
+		       COALESCE(m.author_id, 0),
+		       m.created_at < now() - make_interval(secs => $2) AS window_expired,
+		       EXISTS (SELECT 1 FROM message_attachments a WHERE a.message_id = m.id) AS has_attachments
+		FROM messages m
+		WHERE m.id = $1`
+
+	var (
+		channelID      int64
+		authorID       int
+		windowExpired  bool
+		hasAttachments bool
+	)
+
+	err := s.db.QueryRowContext(ctx, checkQuery, messageID, window.Seconds()).
+		Scan(&channelID, &authorID, &windowExpired, &hasAttachments)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, time.Time{}, types.ErrMessageNotFound
+		}
+		return 0, time.Time{}, err
+	}
+
+	if authorID != userID {
+		return 0, time.Time{}, types.ErrNotMessageOwner
+	}
+	if windowExpired {
+		return 0, time.Time{}, types.ErrEditWindowExpired
+	}
+	if content == "" && !hasAttachments {
+		return 0, time.Time{}, types.ErrEmptyContent
+	}
+
+	// Та же конвенция, что в SaveMessage: колонка NOT NULL, поэтому пустой
+	// текст сообщения-с-вложением хранится как один пробел.
+	if content == "" {
+		content = " "
+	}
+
+	var editedAt time.Time
+	if err := s.db.QueryRowContext(
+		ctx,
+		`UPDATE messages SET content = $2, edited_at = now() WHERE id = $1 RETURNING edited_at`,
+		messageID,
+		content,
+	).Scan(&editedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, time.Time{}, types.ErrMessageNotFound
+		}
+		return 0, time.Time{}, err
+	}
+
+	return channelID, editedAt, nil
+}
+
 func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, attachments []types.Attachment) error {
 	if len(attachments) == 0 {
 		return nil

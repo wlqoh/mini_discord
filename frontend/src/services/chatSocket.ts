@@ -168,6 +168,15 @@ export type MessageEmbedsEvent = {
 
 type MessageEmbedsListener = (event: MessageEmbedsEvent) => void;
 
+export type MessageEditedEvent = {
+  channel_id: number;
+  message_id: number;
+  content: string;
+  edited_at: string;
+};
+
+type MessageEditedListener = (event: MessageEditedEvent) => void;
+
 // ── Raw shapes for WS message parsing ───────────────────────────────────────
 
 type AuthorRaw = {
@@ -214,6 +223,7 @@ type RawMessage = {
   mentions?: unknown;
   mentions_everyone?: unknown;
   embeds?: unknown;
+  edited_at?: unknown;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -362,6 +372,7 @@ function toMessage(raw: unknown): Message | null {
     mentions_everyone: typeof candidate.mentions_everyone === "boolean" ? candidate.mentions_everyone : undefined,
     embeds: parseEmbeds(candidate.embeds),
     created_at: typeof candidate.created_at === "string" ? candidate.created_at : new Date().toISOString(),
+    edited_at: typeof candidate.edited_at === "string" ? candidate.edited_at : undefined,
   };
 }
 
@@ -398,6 +409,8 @@ export class ChatSocket {
   private readonly messageListeners = new Set<MessageListener>();
 
   private readonly messageEmbedsListeners = new Set<MessageEmbedsListener>();
+
+  private readonly messageEditedListeners = new Set<MessageEditedListener>();
 
   private readonly errorListeners = new Set<ErrorListener>();
 
@@ -595,6 +608,32 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "message_edited") {
+          const payload = parsed.data as {
+            channel_id?: unknown;
+            message_id?: unknown;
+            content?: unknown;
+            edited_at?: unknown;
+          };
+          if (
+            payload &&
+            typeof payload.channel_id === "number" &&
+            typeof payload.message_id === "number" &&
+            typeof payload.content === "string"
+          ) {
+            const event: MessageEditedEvent = {
+              channel_id: payload.channel_id,
+              message_id: payload.message_id,
+              content: payload.content,
+              // edited_at сервер ставит всегда; запасной вариант нужен лишь
+              // чтобы метка «изменено» не пропала при неожиданном формате.
+              edited_at: typeof payload.edited_at === "string" ? payload.edited_at : new Date().toISOString(),
+            };
+            this.messageEditedListeners.forEach((listener) => listener(event));
+          }
+          return;
+        }
+
         if (parsed.event === "voice_participants") {
           const payload = parsed.data as { participants?: VoiceParticipant[] };
           if (Array.isArray(payload?.participants)) {
@@ -714,6 +753,11 @@ export class ChatSocket {
   onMessageEmbeds(listener: MessageEmbedsListener): () => void {
     this.messageEmbedsListeners.add(listener);
     return () => this.messageEmbedsListeners.delete(listener);
+  }
+
+  onMessageEdited(listener: MessageEditedListener): () => void {
+    this.messageEditedListeners.add(listener);
+    return () => this.messageEditedListeners.delete(listener);
   }
 
   onError(listener: ErrorListener): () => void {
@@ -965,6 +1009,10 @@ export class ChatSocket {
 
   async deleteMessage(messageId: number): Promise<void> {
     await this.sendCommand("delete_message", { message_id: messageId });
+  }
+
+  async editMessage(messageId: number, content: string): Promise<void> {
+    await this.sendCommand("edit_message", { message_id: messageId, content });
   }
 
   async getServerChannels(serverId: number): Promise<Array<{ id: number; server_id: number; name: string; type: "text" | "voice" }>> {

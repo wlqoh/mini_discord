@@ -903,7 +903,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} hasMoreNewer={hasMoreNewer} isLoadingNewer={isLoadingNewer} onLoadNewer={() => messages.loadNewerMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onEditMessage={messages.handleEditMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} hasMoreNewer={hasMoreNewer} isLoadingNewer={isLoadingNewer} onLoadNewer={() => messages.loadNewerMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
                 </div>
                 <JumpToLatestButton
                     isVisible={jump.isVisible}

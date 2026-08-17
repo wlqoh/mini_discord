@@ -100,9 +100,41 @@ export function useMessages({
             });
         });
 
+        // Правка приходит патчем, а не целым сообщением: меняются только текст
+        // и edited_at. Guard по hasMoreNewer, который стоит на onMessage, здесь
+        // намеренно отсутствует — мы ничего не добавляем в список, а правим уже
+        // загруженные элементы, и это безопасно в любом режиме пагинации.
+        const unsubscribeEdited = socket.onMessageEdited((event) => {
+            setMessagesByChannel((prev) => {
+                const channelMessages = prev[event.channel_id];
+                // Канал не открывали — правка приедет вместе с историей.
+                if (!channelMessages) return prev;
+
+                let changed = false;
+                const next = channelMessages.map((message) => {
+                    if (message.id === event.message_id) {
+                        changed = true;
+                        return { ...message, content: event.content, edited_at: event.edited_at };
+                    }
+                    // Плашка ответа — снимок текста, вшитый в отвечающее
+                    // сообщение при загрузке. Сервер её не пересчитывает и в
+                    // событии не присылает, поэтому чиним локально: иначе на
+                    // экране одновременно видны старая цитата и новый оригинал.
+                    if (message.reply_to?.message_id === event.message_id) {
+                        changed = true;
+                        return { ...message, reply_to: { ...message.reply_to, content: event.content } };
+                    }
+                    return message;
+                });
+
+                return changed ? { ...prev, [event.channel_id]: next } : prev;
+            });
+        });
+
         return () => {
             unsubscribeMessage();
             unsubscribeEmbeds();
+            unsubscribeEdited();
         };
     }, [isConnected, socketRef, selectedServerIdRef, setChannelsByServer, setMessagesByChannel]);
 
@@ -355,6 +387,20 @@ export function useMessages({
         }
     }
 
+    /**
+     * Отправляет правку и ждёт ack. Локальный кэш здесь намеренно не трогается:
+     * единственная точка обновления — обработчик message_edited выше, который
+     * одинаково применяет и свою правку, и чужую. Ошибку пробрасываем наверх —
+     * её показывает сам редактор рядом с полем ввода, не глобальный баннер.
+     */
+    async function handleEditMessage(messageId: number, content: string): Promise<void> {
+        const socket = socketRef.current;
+        if (!socket || !isConnected) {
+            throw new Error("Нет соединения");
+        }
+        await socket.editMessage(messageId, content);
+    }
+
     return {
         messagesByChannel,
         loadedChannels,
@@ -367,5 +413,6 @@ export function useMessages({
         setReplyToMessage,
         handleSend,
         handleDeleteMessage,
+        handleEditMessage,
     };
 }

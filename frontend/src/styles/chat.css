@@ -1688,6 +1688,97 @@ body {
     text-align: left;
 }
 
+/* Метка правки: приглушена сильнее самого времени — это уточнение, не факт. */
+.message-edited-mark {
+    opacity: 0.75;
+    cursor: help;
+}
+
+/* Инлайн-редактор сообщения */
+.message-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.message-edit-input {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--glass-border-hi);
+    border-radius: var(--radius-md);
+    background: var(--glass-1);
+    color: var(--text-1);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.55;
+    outline: none;
+}
+
+.message-edit-input:focus {
+    border-color: var(--accent);
+}
+
+.message-edit-input:disabled {
+    opacity: 0.6;
+}
+
+.message-edit-error {
+    font-size: 12px;
+    color: #ff7070;
+}
+
+.message-edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.message-edit-save,
+.message-edit-cancel {
+    padding: 4px 10px;
+    border: 1px solid var(--glass-border-hi);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-1);
+    font-family: var(--font);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.message-edit-save {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.message-edit-save:disabled,
+.message-edit-cancel:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.message-edit-hint {
+    font-size: 11px;
+    color: var(--text-3);
+}
+
+/* Счётчик длины: общий для редактора и композера. В композере — отдельная
+   строка грида .message-form, поэтому нужен grid-column (как у .reply-draft). */
+.message-length-counter {
+    font-size: 11px;
+    color: var(--text-3);
+    text-align: right;
+}
+
+.message-form > .message-length-counter {
+    grid-column: 1 / -1;
+}
+
+.message-length-counter.over {
+    color: #ff7070;
+}
+
 /* ================================================================
    MESSAGE INPUT BAR
    ================================================================ */
@@ -2551,6 +2642,10 @@ body {
     /* ---- Typography on mobile -------------------------------- */
     .message-timestamp {
         font-size: 12px;
+    }
+
+    .message-edit-hint {
+        display: none;
     }
 
     .link-preview {
