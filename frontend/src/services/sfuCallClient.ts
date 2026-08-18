@@ -16,6 +16,7 @@ import type {
   RemoteStreamListener,
   RemoteLeftListener,
   LocalStreamListener,
+  LocalScreenStreamListener,
   ErrorListener,
   QualityListener,
 } from "./voiceClient";
@@ -77,6 +78,7 @@ export class SfuCallClient implements VoiceClient {
   private readonly onRemoteStream: RemoteStreamListener;
   private readonly onRemoteLeft: RemoteLeftListener;
   private readonly onLocalStream: LocalStreamListener;
+  private readonly onLocalScreenStream: LocalScreenStreamListener;
   private readonly onError: ErrorListener;
   // There's exactly one PeerConnection (the star topology to the server),
   // so unlike mesh there's only ever one quality reading to make — see
@@ -96,9 +98,9 @@ export class SfuCallClient implements VoiceClient {
   // once, at ontrack — see handleTrack) so reconcileRemoteVideo can decide
   // which one is actually in the combined stream, preferring screen.
   private readonly remoteVideoTracks = new Map<number, { camera?: MediaStreamTrack; screen?: MediaStreamTrack }>();
-  // Sources explicitly reported paused via sfu_track_unpublished (currently
-  // only ever "screen" — see handleTrackUnpublished/sendSfuPublishState).
-  // The underlying track object above is never removed on pause (the same
+  // Sources explicitly reported paused via sfu_track_unpublished ("screen"
+  // or "camera" — see handleTrackUnpublished/announcePublishState). The
+  // underlying track object above is never removed on pause (the same
   // transceiver/SSRC resumes on the next share — decision #3, no
   // renegotiation for a toggle), only whether reconcileRemoteVideo is
   // allowed to prefer it right now.
@@ -145,6 +147,7 @@ export class SfuCallClient implements VoiceClient {
     onRemoteStream: RemoteStreamListener,
     onRemoteLeft: RemoteLeftListener,
     onLocalStream: LocalStreamListener,
+    onLocalScreenStream: LocalScreenStreamListener,
     onError: ErrorListener,
     onQualityChange: QualityListener,
   ) {
@@ -153,6 +156,7 @@ export class SfuCallClient implements VoiceClient {
     this.onRemoteStream = onRemoteStream;
     this.onRemoteLeft = onRemoteLeft;
     this.onLocalStream = onLocalStream;
+    this.onLocalScreenStream = onLocalScreenStream;
     this.onError = onError;
     this.onQualityChange = onQualityChange;
 
@@ -222,6 +226,11 @@ export class SfuCallClient implements VoiceClient {
 
     this.applySession(response);
     await this.openPeerConnection();
+
+    // The camera starts disabled above (audio-first join) — announce that
+    // now so it's already reflected in the snapshot anyone joining after us
+    // receives (see sendTrackSnapshot on the server).
+    this.announcePublishState("camera", false);
 
     return response;
   }
@@ -552,14 +561,15 @@ export class SfuCallClient implements VoiceClient {
       return;
     }
 
-    if (event.source === "screen") {
-      // A screen share restarting after sfu_publish_state announced it
-      // stopped: the underlying subscription (m-line) never went away
-      // (decision #3 — no renegotiation for a toggle), so there's nothing
-      // to re-subscribe to, just show it again. Safe to call even on the
-      // very first ever publish, before subscribedVideo/ontrack exist yet —
-      // reappearRemoteVideo/refreshRemoteVideo both no-op until they do.
-      this.reappearRemoteVideo(event.user_id, "screen");
+    if (event.source === "screen" || event.source === "camera") {
+      // A screen share or camera restarting after sfu_publish_state
+      // announced it stopped: the underlying subscription (m-line) never
+      // went away (decision #3 — no renegotiation for a toggle), so
+      // there's nothing to re-subscribe to, just show it again. Safe to
+      // call even on the very first ever publish, before
+      // subscribedVideo/ontrack exist yet — reappearRemoteVideo/
+      // refreshRemoteVideo both no-op until they do.
+      this.reappearRemoteVideo(event.user_id, event.source);
     }
 
     if (event.kind !== "video") {
@@ -574,17 +584,18 @@ export class SfuCallClient implements VoiceClient {
     this.scheduleSubscribeFlush();
   }
 
-  /** sfu_track_unpublished for "screen" (the only source the server ever
-   * sends this for mid-call — see WsActionSfuPublishState): the sharer
-   * called stopScreenShare(). The subscription itself stays intact
-   * (decision #3), this only swaps the tile's visible video back to camera
-   * immediately instead of leaving it frozen on the share's last frame. */
+  /** sfu_track_unpublished for "screen" or "camera" (the only sources the
+   * server ever sends this for mid-call — see WsActionSfuPublishState): the
+   * sharer called stopScreenShare(), or setCameraEnabled(false). The
+   * subscription itself stays intact (decision #3), this only swaps the
+   * tile's visible video immediately instead of leaving it frozen on the
+   * source's last frame. */
   private handleTrackUnpublished(event: SfuTrackEvent): void {
     if (event.channel_id !== this.currentChannelID || event.user_id === this.selfUserID) {
       return;
     }
-    if (event.source === "screen") {
-      this.hideRemoteVideo(event.user_id, "screen");
+    if (event.source === "screen" || event.source === "camera") {
+      this.hideRemoteVideo(event.user_id, event.source);
     }
   }
 
@@ -825,6 +836,7 @@ export class SfuCallClient implements VoiceClient {
 
     this.screenStream?.getTracks().forEach((track) => track.stop());
     this.screenStream = null;
+    this.onLocalScreenStream(null);
     this.screenSharePromise = null;
     this.switchCameraPromise = null;
 
@@ -876,6 +888,11 @@ export class SfuCallClient implements VoiceClient {
     this.localStream?.getVideoTracks().forEach((track) => {
       track.enabled = enabled;
     });
+    // The camera track is never physically stopped (decision #3), so the
+    // SFU can't tell a disabled camera from a black frame on its own —
+    // announce it explicitly, or a peer joining later would subscribe to a
+    // black stream instead of skipping it.
+    this.announcePublishState("camera", enabled);
   }
 
   isScreenShareActive(): boolean {
@@ -935,6 +952,7 @@ export class SfuCallClient implements VoiceClient {
     }
 
     this.screenStream = displayStream;
+    this.onLocalScreenStream(displayStream);
     await sender.replaceTrack(displayTrack);
     void applyVideoBitratePreset(sender, SCREEN_BITRATE_PRESET);
     this.announcePublishState("screen", true);
@@ -945,23 +963,22 @@ export class SfuCallClient implements VoiceClient {
   }
 
   async stopScreenShare(): Promise<void> {
-    if (!this.isScreenShareActive()) {
-      return;
-    }
-
     const activeScreenStream = this.screenStream;
     if (!activeScreenStream) {
       return;
     }
-
-    const screenTrack = activeScreenStream.getVideoTracks()[0];
-    screenTrack.stop();
     this.screenStream = null;
+
+    // The track may already be "ended" — that's exactly the path through the
+    // browser's own "Stop sharing" pill: displayTrack.onended calls us
+    // ourselves. stop() on an already-stopped track is safe and idempotent.
+    activeScreenStream.getVideoTracks().forEach((track) => track.stop());
 
     const sender = this.senderBySource.get("screen");
     if (sender) {
       await sender.replaceTrack(null);
     }
+    this.onLocalScreenStream(null);
     this.announcePublishState("screen", false);
   }
 

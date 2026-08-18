@@ -80,16 +80,19 @@ const (
 	WsActionSfuSubscribeVideo = "sfu_subscribe_video"
 	WsActionSfuResume         = "sfu_resume"
 	// WsActionSfuPublishState lets a publisher explicitly tell the room when
-	// a togglable source (currently only "screen") starts/stops actually
+	// a togglable source ("screen" or "camera") starts/stops actually
 	// producing media. Fixed publish slots never renegotiate on toggle
 	// (decision #3) and the SFU has no reliable server-side way to infer
-	// "the publisher called replaceTrack(null)" from RTP alone — sender.
-	// replaceTrack(null) stops the stream without ever closing the
-	// transceiver, so there's no error/EOF for the SFU to observe and no
-	// spec-guaranteed mute/unmute timing on the subscriber's end either.
-	// This is purely informational (relayed straight through as
-	// sfu_track_published/unpublished, same as the one-time announcement on
-	// first publish) — it never touches the router or the media path.
+	// "the publisher called replaceTrack(null)" (screen) or "the publisher
+	// disabled its track" (camera) from RTP alone — neither produces an
+	// error/EOF the SFU can observe, and there's no spec-guaranteed
+	// mute/unmute timing on the subscriber's end either. This is relayed
+	// through as the same sfu_track_published/unpublished events a first
+	// publish uses, but it's no longer purely informational: the router
+	// records the state (Peer.setPublishState) so a resumed source gets a
+	// fresh keyframe request for its existing subscribers, and so a late
+	// joiner's snapshot (Peer.sendTrackSnapshot) doesn't offer a source the
+	// publisher has explicitly turned off.
 	WsActionSfuPublishState = "sfu_publish_state"
 
 	WsEventAck                = "ack"
@@ -416,7 +419,7 @@ type WsSfuSubscribeVideoRequest struct {
 // state from RTP.
 type WsSfuPublishStateRequest struct {
 	SessionID string `json:"session_id"`
-	Source    string `json:"source"` // only "screen" is accepted for now
+	Source    string `json:"source"` // "screen" or "camera"
 	Active    bool   `json:"active"`
 }
 

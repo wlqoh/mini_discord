@@ -52,9 +52,16 @@ type trackSubscriber struct {
 	mu               sync.Mutex
 	requestedQuality Quality
 	degraded         bool
-	activeRID        string
-	pendingRID       string // "" while no switch is pending
-	rewrite          rtpRewriter
+	// hasActive distinguishes "no layer chosen yet" from "chosen layer has
+	// the empty RID" — a non-simulcast source (screen, mic, screen_audio;
+	// RID "") would otherwise collide with activeRID's zero value and
+	// forwardToSubscribers would treat a brand-new subscriber as already on
+	// that layer, skipping rewrite.start() and letting packets through from
+	// wherever the GOP happens to be instead of waiting for a keyframe.
+	hasActive  bool
+	activeRID  string
+	pendingRID string // "" while no switch is pending
+	rewrite    rtpRewriter
 }
 
 // publishedTrack is one media source a peer is sending to the SFU (their
@@ -206,7 +213,7 @@ func (t *publishedTrack) setSubscriberQuality(userID int, quality Quality) strin
 	// An explicit request from the client overrides any standing
 	// loss-triggered degradation — give the new tier a clean chance.
 	sub.degraded = false
-	if sub.activeRID != targetRID {
+	if !sub.hasActive || sub.activeRID != targetRID {
 		sub.pendingRID = targetRID
 	}
 	sub.mu.Unlock()
@@ -242,7 +249,7 @@ func (t *publishedTrack) setDegraded(userID int, degraded bool) (targetRID strin
 	targetRID = t.resolveRID(effective)
 
 	sub.mu.Lock()
-	changed = sub.activeRID != targetRID && sub.pendingRID != targetRID
+	changed = sub.pendingRID != targetRID && (!sub.hasActive || sub.activeRID != targetRID)
 	if changed {
 		sub.pendingRID = targetRID
 	}
@@ -282,6 +289,9 @@ func (t *publishedTrack) subscriberLayerState(userID int) (active, pending strin
 	}
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
+	if !sub.hasActive {
+		return "", sub.pendingRID
+	}
 	return sub.activeRID, sub.pendingRID
 }
 
@@ -356,10 +366,11 @@ func (t *publishedTrack) forwardToSubscribers(layer *trackLayer, packet *rtp.Pac
 	for _, sub := range subs {
 		sub.mu.Lock()
 		switch {
-		case sub.activeRID == layer.rid:
+		case sub.hasActive && sub.activeRID == layer.rid:
 			// Already receiving this layer — nothing to do but forward.
 		case sub.pendingRID == layer.rid && isKeyframe:
 			sub.rewrite.start(packet.SequenceNumber, packet.Timestamp)
+			sub.hasActive = true
 			sub.activeRID = layer.rid
 			sub.pendingRID = ""
 		default:

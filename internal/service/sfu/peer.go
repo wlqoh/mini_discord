@@ -43,6 +43,13 @@ type Peer struct {
 
 	publishedMu sync.RWMutex
 	published   map[Source]*publishedTrack
+	// publishState is the publisher's explicitly announced state
+	// (sfu_publish_state) for each source. No entry means "active": a camera
+	// physically keeps publishing even when "off" (decision #3 — that's
+	// track.enabled=false client-side, not a stopped track), so defaulting
+	// to active preserves today's behavior for a client that never
+	// announces its camera's state.
+	publishState map[Source]bool
 
 	negotiating        atomic.Bool
 	renegotiatePending atomic.Bool
@@ -82,6 +89,7 @@ func newPeer(sessionID string, userID int, channelID int64, pc *webrtc.PeerConne
 		slotBySource: make(map[Source]string),
 		subs:         make(map[subKey]*subscription),
 		published:    make(map[Source]*publishedTrack),
+		publishState: make(map[Source]bool),
 		commands:     make(chan func(), 32),
 	}
 	go p.run()
@@ -177,6 +185,23 @@ func (p *Peer) handleOffer(sdp string, slots []SlotDecl) {
 	p.router.sig.SendAnswer(p.userID, p.sessionID, answer.SDP)
 
 	p.autoSubscribeToExisting()
+	p.sendTrackSnapshot()
+}
+
+// sendTrackSnapshot tells a just-connected peer about every video track
+// published in the room BEFORE it arrived. Without this, a peer only learns
+// about someone else's video from the broadcast at that source's very first
+// publish and permanently misses anything that started earlier. Sent from
+// here, not from Router.Join: the client only sets currentChannelID once it
+// applies the join ack (applySession), and handleTrackPublished discards
+// events for a different channel_id — a snapshot sent any earlier would be
+// silently dropped by the time it arrived.
+func (p *Peer) sendTrackSnapshot() {
+	for _, other := range p.room.others(p.userID) {
+		for _, info := range other.publishedVideoTrackInfos() {
+			p.router.sig.SendTrackPublishedTo(p.userID, p.channelID, info)
+		}
+	}
 }
 
 // autoSubscribeToExisting wires this newly joined peer up to receive every
@@ -207,6 +232,58 @@ func (p *Peer) publishedAudioTracks() []*publishedTrack {
 		}
 	}
 	return result
+}
+
+// setPublishState records source's explicitly announced active state
+// (sfu_publish_state). Called from a command routed through Router —
+// see the type doc's note that publishedMu, not enqueue, guards this field
+// because it's read cross-goroutine (publishedVideoTrackInfos/
+// sendTrackSnapshot above).
+func (p *Peer) setPublishState(source Source, active bool) {
+	p.publishedMu.Lock()
+	p.publishState[source] = active
+	pub := p.published[source]
+	p.publishedMu.Unlock()
+
+	// The source just came back to life: subscribers who were already
+	// subscribed get no new subscription out of this, and therefore no PLI
+	// from doSubscribe — without asking here, they'd be stuck waiting for
+	// the publisher's browser to schedule its own next key frame.
+	if active && pub != nil {
+		for _, rid := range pub.layerRIDs() {
+			pub.requestKeyframeForRIDWithRetry(rid)
+		}
+	}
+}
+
+// isSourceActive reports whether source is currently active per the last
+// sfu_publish_state announcement (or true, if the publisher never sent one
+// — see the publishState field doc).
+func (p *Peer) isSourceActive(source Source) bool {
+	p.publishedMu.RLock()
+	defer p.publishedMu.RUnlock()
+	active, ok := p.publishState[source]
+	return !ok || active
+}
+
+// publishedVideoTrackInfos lists this peer's currently active video
+// sources, for the snapshot handed to a newly joined peer (sendTrackSnapshot
+// above). Audio is deliberately excluded: it auto-subscribes server-side
+// (decision #8), so the client never needs to hear about it.
+func (p *Peer) publishedVideoTrackInfos() []TrackInfo {
+	p.publishedMu.RLock()
+	defer p.publishedMu.RUnlock()
+	var out []TrackInfo
+	for source, pub := range p.published {
+		if pub.kind != webrtc.RTPCodecTypeVideo {
+			continue
+		}
+		if active, ok := p.publishState[source]; ok && !active {
+			continue
+		}
+		out = append(out, TrackInfo{UserID: p.userID, Source: source, Kind: kindString(pub.kind)})
+	}
+	return out
 }
 
 func (p *Peer) handleAnswer(sdp string) {

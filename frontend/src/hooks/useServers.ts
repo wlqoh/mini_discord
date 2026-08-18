@@ -34,6 +34,7 @@ type Params = {
         onParticipantStream: (participant: VoiceParticipant, stream: MediaStream) => void;
         onParticipantLeft: (userId: number) => void;
         onLocalStream: (stream: MediaStream | null) => void;
+        onLocalScreenStream: (stream: MediaStream | null) => void;
         onError: (message: string) => void;
         onQualityChange: (quality: Record<number, PeerQuality>) => void;
     };
@@ -188,6 +189,7 @@ export function useServers({
                 callClientCallbacks.onParticipantStream,
                 callClientCallbacks.onParticipantLeft,
                 callClientCallbacks.onLocalStream,
+                callClientCallbacks.onLocalScreenStream,
                 callClientCallbacks.onError,
                 callClientCallbacks.onQualityChange,
             );

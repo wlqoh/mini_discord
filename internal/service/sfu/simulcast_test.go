@@ -168,6 +168,7 @@ func TestForwardToSubscribersSwitchesOnlyOnKeyframe(t *testing.T) {
 	// asked to step down to "l" (e.g. an active speaker losing the floor).
 	sub := &trackSubscriber{
 		local:      local,
+		hasActive:  true,
 		activeRID:  RIDHigh,
 		pendingRID: RIDLow,
 		rewrite:    rtpRewriter{initialized: true, lastOutSeq: 200, lastOutTs: 90000},
@@ -223,7 +224,7 @@ func TestForwardToSubscribersIgnoresUnrelatedLayer(t *testing.T) {
 		t.Fatalf("NewTrackLocalStaticRTP: %v", err)
 	}
 
-	sub := &trackSubscriber{local: local, activeRID: RIDLow}
+	sub := &trackSubscriber{local: local, hasActive: true, activeRID: RIDLow}
 	pub := &publishedTrack{
 		kind: webrtc.RTPCodecTypeVideo,
 		subs: map[int]*trackSubscriber{42: sub},
@@ -236,5 +237,46 @@ func TestForwardToSubscribersIgnoresUnrelatedLayer(t *testing.T) {
 	defer sub.mu.Unlock()
 	if sub.activeRID != RIDLow || sub.pendingRID != "" {
 		t.Fatalf("a layer that's neither active nor pending must not affect subscriber state: active=%s pending=%s", sub.activeRID, sub.pendingRID)
+	}
+}
+
+// TestSingleLayerSubscriberWaitsForKeyframe guards the hasActive fix: a
+// non-simulcast source (screen, mic, screen_audio) always has the empty RID,
+// which used to collide with a brand-new subscriber's zero-value activeRID
+// and let packets through from the middle of a GOP instead of waiting for a
+// keyframe (screenshare-and-late-joiner-fix-plan.md defect 3).
+func TestSingleLayerSubscriberWaitsForKeyframe(t *testing.T) {
+	local, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8},
+		"u1-screen-video", "u1-screen",
+	)
+	if err != nil {
+		t.Fatalf("NewTrackLocalStaticRTP: %v", err)
+	}
+
+	// Mirrors newSubscriber's state for a non-simulcast source: pendingRID
+	// resolves to the empty RID, hasActive/activeRID at their zero values.
+	sub := &trackSubscriber{local: local}
+	pub := &publishedTrack{
+		kind: webrtc.RTPCodecTypeVideo,
+		subs: map[int]*trackSubscriber{42: sub},
+	}
+	layer := &trackLayer{rid: ""}
+
+	pub.forwardToSubscribers(layer, &rtp.Packet{Header: rtp.Header{SequenceNumber: 10, Timestamp: 1000}}, false)
+	sub.mu.Lock()
+	if sub.hasActive {
+		t.Fatal("must not start forwarding on a non-keyframe packet before hasActive is set")
+	}
+	sub.mu.Unlock()
+
+	pub.forwardToSubscribers(layer, &rtp.Packet{Header: rtp.Header{SequenceNumber: 11, Timestamp: 2000}}, true)
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if !sub.hasActive || sub.activeRID != "" {
+		t.Fatalf("expected subscriber active on the empty RID after a keyframe, hasActive=%v activeRID=%q", sub.hasActive, sub.activeRID)
+	}
+	if !sub.rewrite.initialized {
+		t.Fatal("rewrite.start should have been called on the keyframe cutover")
 	}
 }

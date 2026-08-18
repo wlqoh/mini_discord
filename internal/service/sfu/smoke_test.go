@@ -9,13 +9,14 @@ import (
 
 type stubSignaler struct{}
 
-func (stubSignaler) SendOffer(int, string, string)            {}
-func (stubSignaler) SendAnswer(int, string, string)           {}
-func (stubSignaler) SendCandidate(int, string, CandidateInit) {}
-func (stubSignaler) SendTrackPublished(int64, TrackInfo)      {}
-func (stubSignaler) SendTrackUnpublished(int64, TrackInfo)    {}
-func (stubSignaler) SendActiveSpeakers(int64, []int)          {}
-func (stubSignaler) SendError(int, string, string, string)    {}
+func (stubSignaler) SendOffer(int, string, string)              {}
+func (stubSignaler) SendAnswer(int, string, string)             {}
+func (stubSignaler) SendCandidate(int, string, CandidateInit)   {}
+func (stubSignaler) SendTrackPublished(int64, TrackInfo)        {}
+func (stubSignaler) SendTrackPublishedTo(int, int64, TrackInfo) {}
+func (stubSignaler) SendTrackUnpublished(int64, TrackInfo)      {}
+func (stubSignaler) SendActiveSpeakers(int64, []int)            {}
+func (stubSignaler) SendError(int, string, string, string)      {}
 
 type stubAuthorizer struct{}
 

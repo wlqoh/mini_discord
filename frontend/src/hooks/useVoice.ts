@@ -28,6 +28,7 @@ export function useVoice({
 }: Params) {
     const [voiceChannelId, setVoiceChannelId] = useState(0);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+    const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
     const [remoteStreams, setRemoteStreams] = useState<Array<{
         userId: number;
         label: string;
@@ -162,8 +163,14 @@ export function useVoice({
             setRemoteStreams([]);
             setIsSwitchingCamera(false);
             setIsTogglingScreenShare(false);
+            setLocalScreenStream(null);
         }
     }, [callClientRef]);
+
+    const onLocalScreenStream = useCallback((stream: MediaStream | null) => {
+        setLocalScreenStream(stream);
+        setIsScreenSharing(Boolean(stream));
+    }, []);
 
     const onError = useCallback((message: string) => {
         setError(message);
@@ -177,9 +184,10 @@ export function useVoice({
         onParticipantStream,
         onParticipantLeft,
         onLocalStream,
+        onLocalScreenStream,
         onError,
         onQualityChange,
-    }), [onParticipantStream, onParticipantLeft, onLocalStream, onError, onQualityChange]);
+    }), [onParticipantStream, onParticipantLeft, onLocalStream, onLocalScreenStream, onError, onQualityChange]);
 
     const onVoiceUserJoined = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
         setVoiceParticipantsByChannel((prev) => {
@@ -532,6 +540,7 @@ export function useVoice({
     return {
         voiceChannelId,
         localStream,
+        localScreenStream,
         remoteStreams,
         voiceParticipantsByChannel,
         setVoiceParticipantsByChannel,

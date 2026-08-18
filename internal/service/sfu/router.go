@@ -193,6 +193,27 @@ func (r *Router) SubscribeVideo(sessionID string, targetUserID int, source Sourc
 	return nil
 }
 
+// SetPublishState records sessionID's explicitly announced state
+// (sfu_publish_state) for source, and — if the source just came back —
+// requests a fresh keyframe for its existing subscribers. State lives on
+// Peer rather than publishedTrack because a publish_state can arrive before
+// that source's first OnTrack (e.g. camera announces itself right after
+// join(), before the transceiver has produced any packets yet).
+//
+// Unlike most Router methods this doesn't go through peer.enqueue: it only
+// touches publishState under publishedMu, the same narrow lock every other
+// cross-peer read of published already uses (see the Peer type doc), so
+// routing it through the command queue would just add latency for no
+// safety benefit.
+func (r *Router) SetPublishState(sessionID string, source Source, active bool) error {
+	peer, ok := r.peerBySession(sessionID)
+	if !ok {
+		return fmt.Errorf("sfu: unknown session %s", sessionID)
+	}
+	peer.setPublishState(source, active)
+	return nil
+}
+
 // Leave tears a session down immediately — used for an explicit
 // leave_voice_channel. A dropped WebSocket goes through Detach instead
 // (migration phase 3, sfu-migration-plan.md §7) so a brief signaling blip

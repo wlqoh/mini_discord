@@ -868,10 +868,10 @@ export default function ChatPage() {
                             </div>
                             {isInVoiceCall && (
                             <div className="video-grid">
-                                {voice.localStream && (
+                                {(voice.localScreenStream || voice.localStream) && (
                                     <VideoTile
-                                        stream={voice.localStream}
-                                        label="You"
+                                        stream={voice.localScreenStream ?? voice.localStream}
+                                        label={voice.localScreenStream ? "You (screen)" : "You"}
                                         muted
                                         micEnabled={voice.isMicEnabled}
                                         deafened={voice.isDeafened}

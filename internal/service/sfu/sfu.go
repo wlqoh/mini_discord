@@ -23,6 +23,11 @@ type Signaler interface {
 	SendAnswer(userID int, sessionID string, sdp string)
 	SendCandidate(userID int, sessionID string, c CandidateInit)
 	SendTrackPublished(channelID int64, t TrackInfo)
+	// SendTrackPublishedTo delivers a track_published event to a single
+	// user — the snapshot of already-published tracks handed to a peer that
+	// just joined (see Peer.sendTrackSnapshot). channelID is needed because
+	// the client filters events by it (see handleTrackPublished).
+	SendTrackPublishedTo(userID int, channelID int64, t TrackInfo)
 	SendTrackUnpublished(channelID int64, t TrackInfo)
 	SendActiveSpeakers(channelID int64, userIDs []int)
 	SendError(userID int, sessionID, code, message string)

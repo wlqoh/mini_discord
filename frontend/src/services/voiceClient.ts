@@ -4,6 +4,7 @@ import type { PeerQuality } from "./connectionQuality";
 export type RemoteStreamListener = (user: VoiceParticipant, stream: MediaStream) => void;
 export type RemoteLeftListener = (userId: number) => void;
 export type LocalStreamListener = (stream: MediaStream | null) => void;
+export type LocalScreenStreamListener = (stream: MediaStream | null) => void;
 export type ErrorListener = (message: string) => void;
 export type QualityListener = (quality: Record<number, PeerQuality>) => void;
 
