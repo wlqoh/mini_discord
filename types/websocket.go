@@ -79,6 +79,18 @@ const (
 	WsActionSfuCandidate      = "sfu_candidate"
 	WsActionSfuSubscribeVideo = "sfu_subscribe_video"
 	WsActionSfuResume         = "sfu_resume"
+	// WsActionSfuPublishState lets a publisher explicitly tell the room when
+	// a togglable source (currently only "screen") starts/stops actually
+	// producing media. Fixed publish slots never renegotiate on toggle
+	// (decision #3) and the SFU has no reliable server-side way to infer
+	// "the publisher called replaceTrack(null)" from RTP alone — sender.
+	// replaceTrack(null) stops the stream without ever closing the
+	// transceiver, so there's no error/EOF for the SFU to observe and no
+	// spec-guaranteed mute/unmute timing on the subscriber's end either.
+	// This is purely informational (relayed straight through as
+	// sfu_track_published/unpublished, same as the one-time announcement on
+	// first publish) — it never touches the router or the media path.
+	WsActionSfuPublishState = "sfu_publish_state"
 
 	WsEventAck                = "ack"
 	WsEventError              = "error"
@@ -397,6 +409,15 @@ type WsSfuSubscribeVideoRequest struct {
 	TargetUserID int    `json:"target_user_id"`
 	Source       string `json:"source"`  // camera | screen
 	Quality      string `json:"quality"` // off | low | high
+}
+
+// WsSfuPublishStateRequest is the payload for WsActionSfuPublishState — see
+// its doc comment above for why this exists instead of inferring publish
+// state from RTP.
+type WsSfuPublishStateRequest struct {
+	SessionID string `json:"session_id"`
+	Source    string `json:"source"` // only "screen" is accepted for now
+	Active    bool   `json:"active"`
 }
 
 type WsSfuResumeRequest struct {

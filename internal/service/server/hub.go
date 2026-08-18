@@ -444,6 +444,11 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		go h.handleSfuSubscribeVideo(req)
 	case types.WsActionSfuResume:
 		go h.handleSfuResume(req, ctx)
+	case types.WsActionSfuPublishState:
+		// Purely an in-memory map read + broadcast (no Pion/DB work), same
+		// as changeVoiceStatus below — runs on Run() like the other fast
+		// handlers instead of being dispatched via go.
+		h.handleSfuPublishState(req)
 	case types.WsActionSearchServers:
 		h.searchServers(req, ctx)
 	case types.WsActionGetUserInfo:
@@ -1843,6 +1848,45 @@ func (h *Hub) handleSfuSubscribeVideo(req wsCommandRequest) {
 	if err := h.sfuRouter.SubscribeVideo(payload.SessionID, payload.TargetUserID, sfu.Source(payload.Source), quality); err != nil {
 		h.pushSfuError(req.client, payload.SessionID, "subscribe_failed", err.Error())
 		return
+	}
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
+}
+
+// handleSfuPublishState implements sfu_publish_state (see
+// types.WsActionSfuPublishState's doc comment for why this exists): relays
+// a publisher's explicit "this source started/stopped producing media"
+// straight through as the same sfu_track_published/unpublished events a
+// first publish uses. Purely informational — never touches the router or
+// the media path, which is also why (unlike every other sfu_* handler) it
+// runs synchronously on Run() instead of via go: it's just a map read plus
+// a broadcast, the same shape as changeVoiceStatus below.
+func (h *Hub) handleSfuPublishState(req wsCommandRequest) {
+	var payload types.WsSfuPublishStateRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_publish_state payload")
+		return
+	}
+	if !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
+		return
+	}
+	// Only screen needs this: camera fakes "off" with black frames instead
+	// of ever actually stopping (decision #3), and mic is already covered
+	// by change_voice_status.
+	if payload.Source != string(sfu.SourceScreen) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_source", "publish state is only supported for screen")
+		return
+	}
+
+	h.mu.RLock()
+	channelID := h.userVoiceChannel[req.client.UserID]
+	h.mu.RUnlock()
+
+	info := sfu.TrackInfo{UserID: req.client.UserID, Source: sfu.SourceScreen, Kind: "video"}
+	if payload.Active {
+		h.SendTrackPublished(channelID, info)
+	} else {
+		h.SendTrackUnpublished(channelID, info)
 	}
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
 }

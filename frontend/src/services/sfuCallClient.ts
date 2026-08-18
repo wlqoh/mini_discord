@@ -92,10 +92,17 @@ export class SfuCallClient implements VoiceClient {
   // simultaneously (decision #3/§4.3), but the UI renders one tile per
   // participant — a MediaStream with two video tracks leaves the browser to
   // arbitrarily pick which one a <video> element actually shows, and it
-  // reliably picks camera. This tracks both candidates per participant so
-  // reconcileRemoteVideo can decide which one is actually in the combined
-  // stream, preferring an active screen share (see handleTrack).
+  // reliably picks camera. This tracks both candidates per participant (set
+  // once, at ontrack — see handleTrack) so reconcileRemoteVideo can decide
+  // which one is actually in the combined stream, preferring screen.
   private readonly remoteVideoTracks = new Map<number, { camera?: MediaStreamTrack; screen?: MediaStreamTrack }>();
+  // Sources explicitly reported paused via sfu_track_unpublished (currently
+  // only ever "screen" — see handleTrackUnpublished/sendSfuPublishState).
+  // The underlying track object above is never removed on pause (the same
+  // transceiver/SSRC resumes on the next share — decision #3, no
+  // renegotiation for a toggle), only whether reconcileRemoteVideo is
+  // allowed to prefer it right now.
+  private readonly hiddenRemoteVideo = new Set<string>(); // `${userID}:${source}`
 
   private qualitySampleTimer: number | null = null;
   private qualityTracker: QualityTracker = createQualityTracker();
@@ -158,6 +165,7 @@ export class SfuCallClient implements VoiceClient {
     );
     this.unsubscribers.push(this.socket.onSfuError((event) => this.handleSfuError(event)));
     this.unsubscribers.push(this.socket.onSfuTrackPublished((event) => this.handleTrackPublished(event)));
+    this.unsubscribers.push(this.socket.onSfuTrackUnpublished((event) => this.handleTrackUnpublished(event)));
     this.unsubscribers.push(this.socket.onSfuActiveSpeakers((event) => this.handleActiveSpeakers(event)));
   }
 
@@ -390,27 +398,19 @@ export class SfuCallClient implements VoiceClient {
       slots[source] = event.track;
       this.remoteVideoTracks.set(userID, slots);
 
-      // Camera never truly stops (toggling it off just disables it, still
-      // sending black frames — decision #3), so `ended` alone would cover
-      // that slot. Screen sharing stops via replaceTrack(null) instead
-      // (sfu-migration-plan.md §6.4 / decision #3), which produces no more
-      // RTP at all without ever closing the transceiver — `ended` never
-      // fires for that. `mute`/`unmute` is what the browser actually uses
-      // to signal "no RTP arriving for this receiver right now", which is
-      // exactly this case, so it's the one that makes stopping a share
-      // reliably swap the tile back to camera.
-      const onSlotChanged = () => {
-        this.reconcileRemoteVideo(userID, combinedStream);
-        this.onRemoteStream(participant, combinedStream);
-      };
-      event.track.onmute = onSlotChanged;
-      event.track.onunmute = onSlotChanged;
+      // Whether this slot is *currently* shown (vs. paused) is driven
+      // explicitly by sfu_track_published/unpublished — see
+      // handleTrackPublished/handleTrackUnpublished and hiddenRemoteVideo's
+      // doc comment for why RTP-level signals (mute/ended) aren't used for
+      // that. `ended` here only covers the track object going away for
+      // real, e.g. this whole subscription being torn down.
       event.track.onended = () => {
         const current = this.remoteVideoTracks.get(userID);
         if (current?.[source] === event.track) {
           delete current[source];
         }
-        onSlotChanged();
+        this.reconcileRemoteVideo(userID, combinedStream);
+        this.onRemoteStream(participant, combinedStream);
       };
 
       this.reconcileRemoteVideo(userID, combinedStream);
@@ -436,13 +436,19 @@ export class SfuCallClient implements VoiceClient {
   }
 
   /** Picks which of a participant's camera/screen tracks should actually be
-   * in their combined tile's MediaStream, live screen share taking priority
-   * over camera (see the field doc on remoteVideoTracks for why this is
-   * needed at all). */
+   * in their combined tile's MediaStream: a screen share that's live and
+   * not explicitly paused (hiddenRemoteVideo) takes priority over camera —
+   * see the field doc on remoteVideoTracks for why this is needed at all. */
   private reconcileRemoteVideo(userID: number, stream: MediaStream): void {
     const slots = this.remoteVideoTracks.get(userID);
-    const isLive = (track?: MediaStreamTrack) => Boolean(track && track.readyState === "live" && !track.muted);
-    const desired = isLive(slots?.screen) ? slots!.screen! : isLive(slots?.camera) ? slots!.camera! : null;
+    const available = (source: "camera" | "screen", track?: MediaStreamTrack) =>
+      Boolean(track && track.readyState === "live" && !this.hiddenRemoteVideo.has(`${userID}:${source}`));
+
+    const desired = available("screen", slots?.screen)
+      ? slots!.screen!
+      : available("camera", slots?.camera)
+        ? slots!.camera!
+        : null;
 
     for (const track of stream.getVideoTracks()) {
       if (track !== desired) {
@@ -452,6 +458,31 @@ export class SfuCallClient implements VoiceClient {
     if (desired && !stream.getTracks().includes(desired)) {
       stream.addTrack(desired);
     }
+  }
+
+  /** Marks source as currently paused for userID (sfu_track_unpublished) and
+   * re-reconciles their tile — e.g. a screen share stopping should fall back
+   * to camera immediately, not stay frozen on the last frame. */
+  private hideRemoteVideo(userID: number, source: "camera" | "screen"): void {
+    this.hiddenRemoteVideo.add(`${userID}:${source}`);
+    this.refreshRemoteVideo(userID);
+  }
+
+  /** Marks source as live again for userID (sfu_track_published) and
+   * re-reconciles their tile. */
+  private reappearRemoteVideo(userID: number, source: "camera" | "screen"): void {
+    this.hiddenRemoteVideo.delete(`${userID}:${source}`);
+    this.refreshRemoteVideo(userID);
+  }
+
+  private refreshRemoteVideo(userID: number): void {
+    const stream = this.remoteStreams.get(userID);
+    if (!stream) {
+      return; // ontrack hasn't fired yet for this participant at all
+    }
+    this.reconcileRemoteVideo(userID, stream);
+    const participant = this.participants.get(userID) ?? { user_id: userID };
+    this.onRemoteStream(participant, stream);
   }
 
   private async handleServerOffer(event: SfuOfferEvent): Promise<void> {
@@ -520,6 +551,17 @@ export class SfuCallClient implements VoiceClient {
     if (event.channel_id !== this.currentChannelID || event.user_id === this.selfUserID) {
       return;
     }
+
+    if (event.source === "screen") {
+      // A screen share restarting after sfu_publish_state announced it
+      // stopped: the underlying subscription (m-line) never went away
+      // (decision #3 — no renegotiation for a toggle), so there's nothing
+      // to re-subscribe to, just show it again. Safe to call even on the
+      // very first ever publish, before subscribedVideo/ontrack exist yet —
+      // reappearRemoteVideo/refreshRemoteVideo both no-op until they do.
+      this.reappearRemoteVideo(event.user_id, "screen");
+    }
+
     if (event.kind !== "video") {
       return; // audio auto-subscribes server-side (decision #8)
     }
@@ -530,6 +572,20 @@ export class SfuCallClient implements VoiceClient {
     }
     this.pendingVideoSubscriptions.set(key, { userID: event.user_id, source: event.source });
     this.scheduleSubscribeFlush();
+  }
+
+  /** sfu_track_unpublished for "screen" (the only source the server ever
+   * sends this for mid-call — see WsActionSfuPublishState): the sharer
+   * called stopScreenShare(). The subscription itself stays intact
+   * (decision #3), this only swaps the tile's visible video back to camera
+   * immediately instead of leaving it frozen on the share's last frame. */
+  private handleTrackUnpublished(event: SfuTrackEvent): void {
+    if (event.channel_id !== this.currentChannelID || event.user_id === this.selfUserID) {
+      return;
+    }
+    if (event.source === "screen") {
+      this.hideRemoteVideo(event.user_id, "screen");
+    }
   }
 
   /** Coalesces a burst of published-track events (e.g. everyone's camera
@@ -722,7 +778,9 @@ export class SfuCallClient implements VoiceClient {
     // would be skipped by handleTrackPublished forever: subscribedVideo is
     // keyed by their persistent user_id, not their (new) SFU session, so a
     // stale entry from before they left would look identical to an
-    // already-live subscription.
+    // already-live subscription. Same reasoning for hiddenRemoteVideo: a
+    // stale "screen paused" entry from a previous session would otherwise
+    // keep their camera showing even after they republish screen next time.
     const prefix = `${event.user.user_id}:`;
     for (const key of this.subscribedVideo) {
       if (key.startsWith(prefix)) {
@@ -732,6 +790,11 @@ export class SfuCallClient implements VoiceClient {
     for (const key of this.pendingVideoSubscriptions.keys()) {
       if (key.startsWith(prefix)) {
         this.pendingVideoSubscriptions.delete(key);
+      }
+    }
+    for (const key of this.hiddenRemoteVideo) {
+      if (key.startsWith(prefix)) {
+        this.hiddenRemoteVideo.delete(key);
       }
     }
   }
@@ -791,6 +854,7 @@ export class SfuCallClient implements VoiceClient {
     }
     this.remoteStreams.clear();
     this.remoteVideoTracks.clear();
+    this.hiddenRemoteVideo.clear();
     this.currentChannelID = 0;
 
     this.stopQualityMonitor();
@@ -873,6 +937,7 @@ export class SfuCallClient implements VoiceClient {
     this.screenStream = displayStream;
     await sender.replaceTrack(displayTrack);
     void applyVideoBitratePreset(sender, SCREEN_BITRATE_PRESET);
+    this.announcePublishState("screen", true);
 
     displayTrack.onended = () => {
       void this.stopScreenShare();
@@ -897,6 +962,21 @@ export class SfuCallClient implements VoiceClient {
     if (sender) {
       await sender.replaceTrack(null);
     }
+    this.announcePublishState("screen", false);
+  }
+
+  /** Tells the room this source just started/stopped producing media (see
+   * sfu_publish_state's doc comment in chatSocket.ts for why this exists).
+   * Best-effort by design, same as sfu_candidate: worth logging on failure,
+   * not worth surfacing as an error to the user over a tile staying on its
+   * last frame a little longer. */
+  private announcePublishState(source: string, active: boolean): void {
+    if (!this.sessionID) {
+      return;
+    }
+    void this.socket.sendSfuPublishState(this.sessionID, source, active).catch((err) => {
+      debugLog("sfu:publish-state-failed", { source, active, err });
+    });
   }
 
   async toggleCameraFacingMode(): Promise<void> {

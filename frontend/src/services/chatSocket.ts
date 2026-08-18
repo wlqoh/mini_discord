@@ -1275,6 +1275,15 @@ export class ChatSocket {
     });
   }
 
+  // sfu_publish_state: explicitly tells the room a togglable source (only
+  // "screen" is accepted server-side) started/stopped producing media —
+  // see WsActionSfuPublishState's Go-side doc comment for why the SFU can't
+  // reliably infer this from RTP alone. Fire-and-forget like sfu_candidate:
+  // this is a display hint, not something worth failing the toggle over.
+  async sendSfuPublishState(sessionId: string, source: string, active: boolean): Promise<void> {
+    await this.sendCommand("sfu_publish_state", { session_id: sessionId, source, active });
+  }
+
   // sfu_resume (migration phase 3, decision #10): asks the server to keep
   // using the existing SFU session — the PeerConnection never depended on
   // this WebSocket, so a successful resume needs no renegotiation on the

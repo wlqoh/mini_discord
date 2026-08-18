@@ -396,10 +396,14 @@ func (t *publishedTrack) requestKeyframeForRID(rid string) {
 	_ = t.owner.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(layer.remote.SSRC())}})
 }
 
-// requestKeyframeForRIDWithRetry sends PLI immediately and, if that layer
-// still hasn't produced a keyframe 1.5s later, sends it once more — PLI
-// travels over UDP with no delivery guarantee, and a lost PLI otherwise
-// leaves a subscriber stuck with no further recovery attempt.
+// requestKeyframeForRIDWithRetry sends PLI immediately and keeps retrying on
+// an interval until that layer actually produces a keyframe, up to
+// keyframeRetryMaxAttempts. PLI travels over UDP with no delivery guarantee,
+// and on a lossy real-world network a single retry (the original design)
+// wasn't enough — a subscriber whose one retry also got lost was stuck with
+// a permanently blank tile and no further recovery attempt, which is what
+// made camera/screen visibility inconsistent between viewers on the same
+// call (some got lucky with their one retry, some didn't).
 func (t *publishedTrack) requestKeyframeForRIDWithRetry(rid string) {
 	if t.kind != webrtc.RTPCodecTypeVideo {
 		return
@@ -412,10 +416,24 @@ func (t *publishedTrack) requestKeyframeForRIDWithRetry(rid string) {
 	}
 	requestedAt := time.Now()
 	t.requestKeyframeForRID(rid)
-	time.AfterFunc(1500*time.Millisecond, func() {
-		if !layer.hasKeyframeSince(requestedAt) {
-			t.requestKeyframeForRID(rid)
+	t.scheduleKeyframeRetry(layer, rid, requestedAt, 1)
+}
+
+// scheduleKeyframeRetry re-sends PLI on keyframeRetryInterval until layer
+// reports a keyframe newer than since, or keyframeRetryMaxAttempts is
+// reached (~15s total) — bounded so a layer that's genuinely never going to
+// produce a keyframe (e.g. the publisher went away mid-negotiation) doesn't
+// PLI-storm forever.
+func (t *publishedTrack) scheduleKeyframeRetry(layer *trackLayer, rid string, since time.Time, attempt int) {
+	if attempt > keyframeRetryMaxAttempts {
+		return
+	}
+	time.AfterFunc(keyframeRetryInterval, func() {
+		if layer.hasKeyframeSince(since) {
+			return
 		}
+		t.requestKeyframeForRID(rid)
+		t.scheduleKeyframeRetry(layer, rid, since, attempt+1)
 	})
 }
 

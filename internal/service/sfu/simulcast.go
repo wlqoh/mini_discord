@@ -2,6 +2,7 @@ package sfu
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
@@ -93,6 +94,15 @@ const (
 	lossDegradeThreshold = 0.10
 	lossRecoverThreshold = 0.02
 	lossSampleWindow     = 3
+)
+
+// Keyframe retry pacing for requestKeyframeForRIDWithRetry (track.go) —
+// keyframeRetryMaxAttempts attempts spaced keyframeRetryInterval apart is
+// about 15s of persistence before giving up on a layer that's never going
+// to send one.
+const (
+	keyframeRetryInterval    = 1500 * time.Millisecond
+	keyframeRetryMaxAttempts = 10
 )
 
 // monitorSubscriptionLoss watches RTCP receiver reports the subscriber sends
