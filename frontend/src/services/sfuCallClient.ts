@@ -1,5 +1,6 @@
 import type {
   JoinVoiceResponse,
+  SfuActiveSpeakersEvent,
   SfuAnswerPayload,
   SfuCandidatePayload,
   SfuErrorEvent,
@@ -23,24 +24,19 @@ import {
   debugLog,
   buildIceTransportPolicy,
   applyVideoBitratePreset,
-  CAMERA_BITRATE_PRESET,
+  CAMERA_SIMULCAST_ENCODINGS,
   SCREEN_BITRATE_PRESET,
 } from "./webrtcShared";
 
 /**
- * SFU transport (sfu-migration-plan.md §7 phase 1): a single PeerConnection
- * to the server instead of one per remote participant. The four publish
- * slots (mic/camera/screen/screen_audio) are fixed and created once, up
- * front, in join_ — decision #3 — so toggling a source is just
- * sender.replaceTrack(), never a renegotiation, and the only party that ever
- * sends a fresh offer after the first exchange is the server (auto-
- * subscribing this peer to others' audio, or vice versa).
- *
- * Phase 1 scope: audio only. Video tracks are still published (so the
- * server has something to forward once migration phase 2 adds
- * sfu_subscribe_video), but nothing subscribes to anyone's video yet — that
- * and screen-share/camera-switch parity with the mesh implementation is
- * exercised here structurally but won't have a remote effect until phase 2.
+ * SFU transport (sfu-migration-plan.md): the only VoiceClient implementation
+ * now that mesh has been removed (§9) — a single PeerConnection to the
+ * server instead of one per remote participant. The four publish slots
+ * (mic/camera/screen/screen_audio) are fixed and created once, up front, in
+ * join() (decision #3), so toggling a source is just sender.replaceTrack(),
+ * never a renegotiation; the only party that ever sends a fresh offer after
+ * the initial exchange is the server (auto-subscribing this peer to others'
+ * audio, subscribing it to requested video, etc.).
  */
 export class SfuCallClient implements VoiceClient {
   private readonly socket: ChatSocket;
@@ -73,18 +69,19 @@ export class SfuCallClient implements VoiceClient {
 
   // Video subscriptions (decision #8): audio auto-subscribes server-side,
   // video needs an explicit sfu_subscribe_video per source. Phase 2 policy
-  // is "subscribe to everything" (the grid already shows every participant)
-  // — but through this mechanism rather than around it, so phase 6 only has
-  // to change which sources get requested, not add the plumbing.
+  // was "subscribe to everything at high" — phase 6 (simulcast) makes
+  // "quality" meaningful, so the policy is now: active speaker's camera ->
+  // high, everyone else's -> low, screen (never simulcast, decision #4) ->
+  // always high. Same mechanism either way, only the requested tier changes.
   private readonly subscribedVideo = new Set<string>(); // `${userID}:${source}`
   private readonly pendingVideoSubscriptions = new Map<string, { userID: number; source: string }>();
   private subscribeDebounceTimer: number | null = null;
   private static readonly SUBSCRIBE_DEBOUNCE_MS = 300;
+  private readonly activeSpeakers = new Set<number>();
 
-  // Only one peer (the server), so a single queue suffices — mirrors
-  // meshCallClient.ts's per-peer enqueueSignal and exists for the same
-  // reason: an offer and the candidates right behind it must not race
-  // setRemoteDescription against itself.
+  // Only one peer (the server), so a single queue suffices: an offer and
+  // the candidates right behind it must not race setRemoteDescription
+  // against itself.
   private signalQueue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -113,7 +110,7 @@ export class SfuCallClient implements VoiceClient {
     );
     this.unsubscribers.push(this.socket.onSfuError((event) => this.handleSfuError(event)));
     this.unsubscribers.push(this.socket.onSfuTrackPublished((event) => this.handleTrackPublished(event)));
-    // active_speakers lands in migration phase 3.
+    this.unsubscribers.push(this.socket.onSfuActiveSpeakers((event) => this.handleActiveSpeakers(event)));
   }
 
   private enqueueSignal(task: () => Promise<void>): void {
@@ -121,10 +118,10 @@ export class SfuCallClient implements VoiceClient {
   }
 
   /**
-   * Media is acquired BEFORE joining the channel, same reasoning as the mesh
-   * implementation's join(): the server can broadcast our presence (and, in
-   * a later phase, other peers can react to it) as soon as we're in the
-   * channel, so localStream needs to already exist by then.
+   * Media is acquired BEFORE joining the channel: the server can broadcast
+   * our presence (and other peers can react to it — e.g. auto-subscribing
+   * to our mic) as soon as we're in the channel, so localStream needs to
+   * already exist by then.
    */
   async join(channelID: number): Promise<JoinVoiceResponse> {
     if (this.currentChannelID === channelID) {
@@ -147,15 +144,6 @@ export class SfuCallClient implements VoiceClient {
     }
 
     const response = await this.socket.joinVoiceChannel(channelID);
-    return this.attachJoin(response, capture);
-  }
-
-  /**
-   * Used by the transport factory (see callClientFactory.ts) when it has
-   * already acquired media and called join_voice_channel itself, before
-   * knowing which implementation to hand the result to.
-   */
-  async attachJoin(response: JoinVoiceResponse, capture: LocalCapture): Promise<JoinVoiceResponse> {
     if (this.currentChannelID === response.channel_id) {
       return {
         channel_id: response.channel_id,
@@ -167,8 +155,8 @@ export class SfuCallClient implements VoiceClient {
     this.capture = capture;
     const stream = capture.currentStream;
     if (stream) {
-      // Start voice channels in audio-first mode, matching the mesh
-      // implementation's bandwidth-conscious default.
+      // Start voice channels in audio-first mode to reduce bandwidth until
+      // the user explicitly turns their camera on.
       stream.getVideoTracks().forEach((track) => {
         track.enabled = false;
       });
@@ -184,11 +172,10 @@ export class SfuCallClient implements VoiceClient {
 
   /**
    * Re-establishes the SFU connection after the underlying WebSocket
-   * reconnects. Phase 1 has no session grace period yet (that's migration
-   * phase 3's Detach/resume) — the server already tore the old SFU session
-   * down the moment the socket closed, so this is a full fresh session,
-   * just reusing the already-acquired capture instead of re-prompting for
-   * mic/camera access.
+   * reconnects. Tries sfu_resume first (see below) since our own
+   * PeerConnection never depended on the WebSocket and is usually still
+   * exactly as it was — only falls back to a full fresh session if resume
+   * is rejected (e.g. the grace period already lapsed server-side).
    */
   async rejoin(channelID: number): Promise<void> {
     if (channelID <= 0) {
@@ -279,13 +266,17 @@ export class SfuCallClient implements VoiceClient {
     // back in the initial offer is unambiguous. From here on, turning a
     // source on/off is sender.replaceTrack — never a renegotiation.
     for (const slot of this.publishSlots) {
-      const transceiver = pc.addTransceiver(slot.kind, { direction: "sendonly" });
+      // Camera declares its three simulcast layers up front (sfu-migration-
+      // plan.md §7 phase 6) so the server sees all of them from the first
+      // offer; every other slot is a single stream, same as before.
+      const transceiverInit: RTCRtpTransceiverInit =
+        slot.source === "camera"
+          ? { direction: "sendonly", sendEncodings: CAMERA_SIMULCAST_ENCODINGS }
+          : { direction: "sendonly" };
+      const transceiver = pc.addTransceiver(slot.kind, transceiverInit);
       const track = this.localTrackForSource(slot.source);
       if (track) {
         void transceiver.sender.replaceTrack(track);
-        if (slot.source === "camera") {
-          void applyVideoBitratePreset(transceiver.sender, CAMERA_BITRATE_PRESET);
-        }
       }
       this.senderBySource.set(slot.source, transceiver.sender);
     }
@@ -459,11 +450,55 @@ export class SfuCallClient implements VoiceClient {
     for (const { userID, source } of pending) {
       const key = `${userID}:${source}`;
       this.subscribedVideo.add(key);
-      // Phase 2 policy: subscribe at "high" (the only meaningful value
-      // before simulcast — migration phase 6 — makes "low" mean anything).
-      void this.socket.sendSfuSubscribeVideo(this.sessionID, userID, source, "high").catch((err) => {
+      void this.socket.sendSfuSubscribeVideo(this.sessionID, userID, source, this.qualityFor(userID, source)).catch((err) => {
         this.subscribedVideo.delete(key);
         debugLog("sfu:subscribe-video-failed", { userID, source, err });
+      });
+    }
+  }
+
+  /** sfu-migration-plan.md §7 phase 6 step 5: active speaker's camera gets
+   * "high" (the only source that's actually simulcast — decision #4), every
+   * other camera gets "low"; screen has no simulcast layers to choose
+   * between, so it's always requested at "high". */
+  private qualityFor(userID: number, source: string): "low" | "high" {
+    if (source !== "camera") {
+      return "high";
+    }
+    return this.activeSpeakers.has(userID) ? "high" : "low";
+  }
+
+  private handleActiveSpeakers(event: SfuActiveSpeakersEvent): void {
+    if (event.channel_id !== this.currentChannelID) {
+      return;
+    }
+
+    const next = new Set(event.user_ids);
+    const affected = new Set<number>();
+    for (const id of next) {
+      if (!this.activeSpeakers.has(id)) affected.add(id);
+    }
+    for (const id of this.activeSpeakers) {
+      if (!next.has(id)) affected.add(id);
+    }
+    if (affected.size === 0) {
+      return;
+    }
+
+    this.activeSpeakers.clear();
+    next.forEach((id) => this.activeSpeakers.add(id));
+
+    if (!this.sessionID) {
+      return;
+    }
+    for (const userID of affected) {
+      const key = `${userID}:camera`;
+      if (!this.subscribedVideo.has(key)) {
+        continue; // not (yet) subscribed to their camera — nothing to retarget
+      }
+      const quality = this.qualityFor(userID, "camera");
+      void this.socket.sendSfuSubscribeVideo(this.sessionID, userID, "camera", quality).catch((err) => {
+        debugLog("sfu:requality-video-failed", { userID, quality, err });
       });
     }
   }
@@ -555,6 +590,7 @@ export class SfuCallClient implements VoiceClient {
     }
     this.subscribedVideo.clear();
     this.pendingVideoSubscriptions.clear();
+    this.activeSpeakers.clear();
 
     for (const userID of this.remoteStreams.keys()) {
       this.onRemoteLeft(userID);
@@ -622,11 +658,8 @@ export class SfuCallClient implements VoiceClient {
       throw new Error("Screen sharing is not supported in this browser");
     }
 
-    // Unlike the mesh implementation's still-unthrottled 2560x1440@60, the
-    // SFU path uses the resolution/framerate migration phase 2 calls for
-    // (sfu-migration-plan.md §6.4) from the start: this is new code, not an
-    // edit to the mesh implementation, so there's no reason to deliberately
-    // match its old, unthrottled request.
+    // Resolution/framerate match SCREEN_BITRATE_PRESET (sfu-migration-
+    // plan.md §6.4).
     const displayStream = await mediaDevices.getDisplayMedia({
       video: {
         width: { ideal: 1920 },
@@ -704,8 +737,10 @@ export class SfuCallClient implements VoiceClient {
     replacementTrack.enabled = currentVideoTrack.enabled;
 
     try {
+      // replaceTrack alone preserves the sender's existing encoding
+      // parameters (the simulcast layers set up in openPeerConnection), so
+      // there's nothing further to reapply here.
       await sender.replaceTrack(replacementTrack);
-      void applyVideoBitratePreset(sender, CAMERA_BITRATE_PRESET);
     } catch {
       replacementTrack.stop();
       throw new Error("Failed to switch camera");

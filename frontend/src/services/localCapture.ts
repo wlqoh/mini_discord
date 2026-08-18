@@ -29,15 +29,10 @@ function formatMediaError(err: unknown): string {
 }
 
 /**
- * Owns getUserMedia + RNNoise processing, independent of which VoiceClient
- * implementation ends up using the result. Split out from the mesh
- * implementation (sfu-migration-plan.md §7 phase 1) so callClientFactory.ts
- * can acquire media once, before it knows whether the server will hand back
- * "mesh" or "sfu" — acquiring it twice would double-prompt the user for
- * camera/mic permission, and acquiring it AFTER learning the transport would
- * reopen the race the mesh implementation's join() was written to avoid (see
- * meshCallClient.ts's prepareForJoin: another participant can react to our
- * join before our media is ready if we join before capturing).
+ * Owns getUserMedia + RNNoise processing. Media is always acquired BEFORE
+ * join_voice_channel is sent (see SfuCallClient.join): the server can
+ * broadcast our presence — and other peers can react to it — as soon as
+ * we're in the channel, so localStream needs to already exist by then.
  */
 export class LocalCapture {
   private readonly onError: ErrorListener;
@@ -96,9 +91,9 @@ export class LocalCapture {
         autoGainControl: true,
       };
       // Prefer full voice+video for channels, fallback to audio-only.
-      // Resolution/framerate match the camera bitrate preset (see
-      // webrtcShared.ts CAMERA_BITRATE_PRESET / sfu-migration-plan.md §6.4)
-      // — capping the capture itself, not just the encoder's bitrate cap.
+      // Resolution/framerate match the camera's simulcast "h" layer (see
+      // webrtcShared.ts CAMERA_SIMULCAST_ENCODINGS / sfu-migration-plan.md
+      // §7 phase 6) — capping the capture itself, not just the encoder.
       stream = await mediaDevices.getUserMedia({
         audio: audioConstraints,
         video: {

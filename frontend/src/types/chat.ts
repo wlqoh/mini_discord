@@ -91,7 +91,11 @@ export interface OnlineUser {
     email?: string;
 }
 
-export type VoiceTransportMode = "mesh" | "sfu";
+// Only "sfu" is ever produced now — mesh was removed once the migration
+// cleared its criteria (sfu-migration-plan.md §9). Kept as its own type
+// (rather than inlining the literal) as a cheap extension point, per the
+// plan's Phase 5 note on why the field itself stays on the wire.
+export type VoiceTransportMode = "sfu";
 
 export interface VoiceICEServer {
     urls: string[];
@@ -118,26 +122,6 @@ export interface JoinVoiceResponse {
 export interface VoiceUserEvent {
     channel_id: number;
     user: VoiceParticipant;
-}
-
-export interface RTCSignalPayload {
-    channel_id: number;
-    to_user_id: number;
-    signal_type: "offer" | "answer" | "candidate";
-    sdp?: string;
-    candidate?: string;
-    sdp_mid?: string;
-    sdp_mline_index?: number;
-}
-
-export interface RTCSignalEvent {
-    channel_id: number;
-    from_user_id: number;
-    signal_type: "offer" | "answer" | "candidate";
-    sdp?: string;
-    candidate?: string;
-    sdp_mid?: string;
-    sdp_mline_index?: number;
 }
 
 // --- sfu_* protocol (sfu-migration-plan.md §5) ---

@@ -131,16 +131,27 @@ docker compose up -d --build
 - API requests are expected under `/api/*`.
 - For backward compatibility, `/api/v1/auth/*` is rewritten to `/api/v1/*` in `frontend/nginx.conf`.
 
-## Voice/Video channels (WebRTC)
+## Voice/Video channels (WebRTC via SFU)
 
 - Calls use the same websocket endpoint: `/api/v1/server/ws`.
 - Channel types:
   - `text` for chat
   - `voice` for voice/video rooms
+- Voice runs through a server-side SFU (`internal/service/sfu/`, Pion-based): each client
+  holds a single `RTCPeerConnection` to the server, which forwards published tracks to
+  subscribers — there is no peer-to-peer mesh.
 - Signaling actions over websocket:
-  - `join_voice_channel`
+  - `join_voice_channel` — returns `transport_mode: "sfu"`, a `session_id`, ICE servers, and
+    the fixed publish-slot declarations (mic/camera/screen/screen_audio)
   - `leave_voice_channel`
-  - `rtc_signal` (`offer`, `answer`, `candidate`)
+  - `sfu_offer` / `sfu_answer` / `sfu_candidate` — SDP/ICE exchange with the SFU (server is
+    always the offerer after the client's initial offer)
+  - `sfu_subscribe_video` — explicit opt-in to receive a given participant's video (audio is
+    auto-subscribed on publish)
+  - `sfu_resume` — reattaches an existing SFU session after a brief websocket reconnect,
+    without tearing down media
+- A short-lived debug snapshot of active rooms is available at
+  `GET /api/v1/admin/sfu/rooms` (same HTTP Basic Auth as `http_server.user`/`password`).
 
 ### Frontend env for WebRTC
 

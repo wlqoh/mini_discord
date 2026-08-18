@@ -188,7 +188,7 @@ func (r *Router) SubscribeVideo(sessionID string, targetUserID int, source Sourc
 			peer.fail("subscribe_failed", fmt.Errorf("%s is not a video source", source))
 			return
 		}
-		peer.doSubscribe(targetUserID, pub)
+		peer.doSubscribe(targetUserID, pub, quality)
 	})
 	return nil
 }

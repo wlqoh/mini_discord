@@ -1,6 +1,6 @@
-/** Small utilities shared by both VoiceClient implementations (mesh and
- * SFU) — kept here instead of duplicated so VITE_WEBRTC_FORCE_RELAY parsing
- * and the debug-log gate can't drift between them. */
+/** Small WebRTC utilities kept in their own module (not private to
+ * SfuCallClient) so VITE_WEBRTC_FORCE_RELAY parsing and the debug-log gate
+ * have one place to live. */
 
 export function isWebRTCDebugEnabled(): boolean {
   try {
@@ -26,20 +26,14 @@ export function buildIceTransportPolicy(): RTCIceTransportPolicy {
   return isTruthy(import.meta.env.VITE_WEBRTC_FORCE_RELAY as string | undefined) ? "relay" : "all";
 }
 
-/** sfu-migration-plan.md §6.4. Shared by both VoiceClient implementations —
- * mesh had no bandwidth control at all before this, and the SFU path needs
- * the same caps for the same reason (an uncapped camera/screen encoder is
- * the single biggest bandwidth cost either transport carries per stream). */
+/** sfu-migration-plan.md §6.4 — caps screen-share encoding bitrate, since an
+ * uncapped encoder is the single biggest bandwidth cost per stream. Camera
+ * uses CAMERA_SIMULCAST_ENCODINGS instead (§7 phase 6) — its per-layer
+ * maxBitrate is set once at transceiver creation, not via this preset. */
 export type VideoBitratePreset = {
   maxBitrateBps: number;
   maxFramerate?: number;
   degradationPreference?: RTCDegradationPreference;
-};
-
-export const CAMERA_BITRATE_PRESET: VideoBitratePreset = {
-  maxBitrateBps: 800_000,
-  maxFramerate: 30,
-  degradationPreference: "balanced",
 };
 
 // Screen share favors legibility of static text over smoothness, unlike
@@ -49,6 +43,27 @@ export const SCREEN_BITRATE_PRESET: VideoBitratePreset = {
   maxFramerate: 30,
   degradationPreference: "maintain-resolution",
 };
+
+/** sfu-migration-plan.md §7 phase 6 — camera's three simulcast layers,
+ * declared once at transceiver creation (RTCRtpTransceiverInit.sendEncodings)
+ * so the server sees all three RIDs from the start (decision #4: simulcast
+ * only for camera, never screen — legibility of shared text matters more
+ * than adaptive bitrate there). `rid` isn't in this TS toolchain's DOM lib
+ * yet even though every target browser supports it at runtime, hence the
+ * intersection type instead of RTCRtpEncodingParameters directly — see the
+ * usage note at CAMERA_SIMULCAST_ENCODINGS below. */
+export type SimulcastEncoding = RTCRtpEncodingParameters & { rid: string };
+
+// Referencing this typed constant (rather than an inline object literal) at
+// the sendEncodings call site is what avoids TypeScript's excess-property
+// check rejecting `rid` as unknown to RTCRtpEncodingParameters — assigning
+// through a variable is a structural-subtype assignment, not an object
+// literal one, so extra known properties are allowed.
+export const CAMERA_SIMULCAST_ENCODINGS: SimulcastEncoding[] = [
+  { rid: "l", scaleResolutionDownBy: 4, maxBitrate: 150_000 },
+  { rid: "m", scaleResolutionDownBy: 2, maxBitrate: 400_000 },
+  { rid: "h", scaleResolutionDownBy: 1, maxBitrate: 1_200_000 },
+];
 
 export async function applyVideoBitratePreset(sender: RTCRtpSender, preset: VideoBitratePreset): Promise<void> {
   if (!sender.track || sender.track.kind !== "video") {

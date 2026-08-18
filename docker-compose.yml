@@ -58,17 +58,13 @@ services:
       # behind a symmetric NAT/CGNAT.
       TURN_URLS: ${TURN_URLS:-turn:45.155.205.212:3478?transport=udp,turn:45.155.205.212:3478?transport=tcp,turn:45.155.205.212:5349?transport=udp,turn:45.155.205.212:5349?transport=tcp}
       TURN_STATIC_AUTH_SECRET: ${TURN_STATIC_AUTH_SECRET:-}
-      # SFU (sfu-migration-plan.md). Off by default — flip SFU_ENABLED to
-      # "true" only once SFU_PUBLIC_IP is set correctly below. Without a
-      # correct public IP, Pion advertises this container's internal Docker
-      # address as an ICE candidate and nobody can connect (§8 pitfall #1).
+      # SFU (sfu-migration-plan.md) — the only voice transport now that mesh
+      # is removed (§9). SFU_PUBLIC_IP must be correct or Pion advertises
+      # this container's internal Docker address as an ICE candidate and
+      # nobody can connect (§8 pitfall #1).
       SFU_ENABLED: ${SFU_ENABLED:-true}
       SFU_PUBLIC_IP: ${SFU_PUBLIC_IP:-45.155.205.212}
       SFU_UDP_PORT: ${SFU_UDP_PORT:-7881}
-      # Empty = SFU for every voice channel once enabled. Set to a comma-
-      # separated list of channel IDs to roll it out to specific channels
-      # first (decision #6 — gradual rollout via the existing mesh fallback).
-      SFU_CHANNEL_ALLOWLIST: ${SFU_CHANNEL_ALLOWLIST:-}
     depends_on:
       db:
         condition: service_healthy

@@ -8,11 +8,11 @@ export type ErrorListener = (message: string) => void;
 export type QualityListener = (quality: Record<number, PeerQuality>) => void;
 
 /**
- * Transport-agnostic surface both the mesh and SFU implementations expose
- * (see sfu-migration-plan.md §3 decision #6). useVoice/useServers/ChatPage
- * depend only on this interface, never on a concrete implementation, so the
- * transport in use can be swapped per the server's transport_mode without
- * touching call-site code.
+ * Transport-agnostic surface a voice transport implementation exposes (see
+ * sfu-migration-plan.md §3 decision #6 — this originally decoupled call
+ * sites from a choice between mesh and SFU; mesh was removed in §9, but
+ * useVoice/useServers/ChatPage still depend only on this interface, never
+ * on SfuCallClient directly).
  */
 export interface VoiceClient {
   join(channelID: number): Promise<JoinVoiceResponse>;

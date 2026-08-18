@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
-import { VoiceClientFactory } from "../services/callClientFactory.ts";
+import { SfuCallClient } from "../services/sfuCallClient.ts";
 import type { VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
@@ -182,7 +182,7 @@ export function useServers({
         socketRef.current = socket;
 
         if (currentUserId && currentUserId > 0) {
-            callClientRef.current = new VoiceClientFactory(
+            callClientRef.current = new SfuCallClient(
                 socket,
                 currentUserId,
                 callClientCallbacks.onParticipantStream,

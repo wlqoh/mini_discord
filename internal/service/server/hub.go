@@ -114,10 +114,12 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 			SessionGracePeriod:  webrtcConfig.SFU.SessionGracePeriod,
 		}, h, h, log)
 		if err != nil {
-			// Never let an optional, still-migrating subsystem take chat
-			// down with it (sfu-migration-plan.md decision #6) — every
-			// channel just falls back to mesh, same as SFU_ENABLED=false.
-			log.Error("sfu: failed to start router, all voice channels will use mesh", "err", err)
+			// Never let a router construction failure (e.g. the UDP port is
+			// already in use) take the whole process down with it — chat and
+			// every other feature keep working; only join_voice_channel fails
+			// (h.sfuRouter stays nil, see its nil check there) until this is
+			// fixed and the backend restarted.
+			log.Error("sfu: failed to start router, voice will be unavailable", "err", err)
 		} else {
 			h.sfuRouter = router
 		}
@@ -131,23 +133,6 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 // #12). Returns nil when SFU is disabled or failed to start.
 func (h *Hub) SFURouter() *sfu.Router {
 	return h.sfuRouter
-}
-
-// voiceTransportMode decides which VoiceClient implementation the frontend
-// should use for a given channel — see sfu-migration-plan.md §3 decision #11.
-func (h *Hub) voiceTransportMode(channelID int64) string {
-	if h.sfuRouter == nil {
-		return types.TransportModeMesh
-	}
-	if len(h.webrtcConfig.SFU.ChannelAllowlist) == 0 {
-		return types.TransportModeSFU
-	}
-	for _, allowed := range h.webrtcConfig.SFU.ChannelAllowlist {
-		if allowed == channelID {
-			return types.TransportModeSFU
-		}
-	}
-	return types.TransportModeMesh
 }
 
 // --- sfu.Authorizer ---
@@ -443,8 +428,6 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.joinVoiceChannel(req, ctx)
 	case types.WsActionLeaveVoiceChannel:
 		h.leaveVoiceChannel(req)
-	case types.WsActionRTCSignal:
-		h.relayRTCSignal(req, ctx)
 	case types.WsActionSfuOffer:
 		// SDP/ICE handling can block on Pion (crypto, SDP parsing) for long
 		// enough to matter, and the sfu package internally serializes
@@ -487,7 +470,7 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 	case types.WsActionSearchMessages:
 		// The only command whose latency is inherently unpredictable (full-text
 		// scan across an arbitrary date range): running it synchronously would
-		// stall send_message/typing/rtc_signal for every other connected client
+		// stall send_message/typing/sfu_offer for every other connected client
 		// until the query returns. Safe to hand off because pushEvent takes
 		// h.mu.RLock before touching clientsByUser, and unregisterClient closes
 		// Outbound under the paired write lock — so a client that disconnects
@@ -659,18 +642,15 @@ func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 }
 
 // isCriticalVoiceEvent identifies events whose silent loss leaves a client in
-// a state it cannot recover from on its own: a missed rtc_signal breaks one
-// P2P link forever, and a missed voice_user_joined/left/status_changed
+// a state it cannot recover from on its own: there is exactly one
+// PeerConnection per SFU client, so losing any offer/answer/candidate
+// breaks the entire call, and a missed voice_user_joined/left/status_changed
 // desyncs the client's view of who's in the call from the server's.
 func isCriticalVoiceEvent(event string) bool {
 	switch event {
-	case types.WsEventRTCSignal,
-		types.WsEventVoiceUserJoined,
+	case types.WsEventVoiceUserJoined,
 		types.WsEventVoiceUserLeft,
 		types.WsEventVoiceStatusChanged,
-		// Unlike mesh's rtc_signal, where a dropped signal breaks one P2P
-		// link, there is exactly one PeerConnection per SFU client — losing
-		// any of these breaks the entire call.
 		types.WsEventSfuOffer,
 		types.WsEventSfuAnswer,
 		types.WsEventSfuCandidate:
@@ -1667,7 +1647,23 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
+	// Mesh was removed once the SFU migration cleared its criteria
+	// (sfu-migration-plan.md §9) — the SFU router is the only voice
+	// transport now, so an unavailable router means voice is unavailable,
+	// not a fallback to a different implementation.
+	if h.sfuRouter == nil {
+		h.pushError(req.client, "voice is not available right now")
+		return
+	}
+
 	h.leaveVoiceChannelInternal(req.client.UserID)
+
+	sessionID, err := h.sfuRouter.Join(req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.log.Error("sfu: join failed", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
+		h.pushError(req.client, "failed to start voice session")
+		return
+	}
 
 	h.mu.Lock()
 	participants := h.voiceParticipants[payload.ChannelID]
@@ -1678,6 +1674,7 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 	participants[req.client.UserID] = struct{}{}
 	h.userVoiceChannel[req.client.UserID] = payload.ChannelID
 	h.voiceStatusByUser[req.client.UserID] = voiceStatus{micEnabled: true, deafened: false}
+	h.sfuSessionByUser[req.client.UserID] = sessionID
 
 	otherUserIDs := make([]int, 0, len(participants))
 	for userID := range participants {
@@ -1693,31 +1690,10 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 		peers = append(peers, h.resolveVoiceParticipant(ctx, userID))
 	}
 
-	transportMode := h.voiceTransportMode(payload.ChannelID)
-
-	var sfuSessionID string
-	var iceServers []types.WsICEServer
-	var publishSlots []types.WsPublishSlot
-	if transportMode == types.TransportModeSFU {
-		sid, err := h.sfuRouter.Join(req.client.UserID, payload.ChannelID)
-		if err != nil {
-			// Never let one failed SFU join block the call — fall back to
-			// mesh for this client rather than error the whole join
-			// (sfu-migration-plan.md decision #6).
-			h.log.Error("sfu: join failed, falling back to mesh", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
-			transportMode = types.TransportModeMesh
-		} else {
-			sfuSessionID = sid
-			h.mu.Lock()
-			h.sfuSessionByUser[req.client.UserID] = sfuSessionID
-			h.mu.Unlock()
-
-			iceServers = h.buildSFUIceServers(req.client.UserID)
-			publishSlots = make([]types.WsPublishSlot, 0, len(sfu.PublishSlots))
-			for _, slot := range sfu.PublishSlots {
-				publishSlots = append(publishSlots, types.WsPublishSlot{Kind: slot.Kind, Source: string(slot.Source)})
-			}
-		}
+	iceServers := h.buildSFUIceServers(req.client.UserID)
+	publishSlots := make([]types.WsPublishSlot, 0, len(sfu.PublishSlots))
+	for _, slot := range sfu.PublishSlots {
+		publishSlots = append(publishSlots, types.WsPublishSlot{Kind: slot.Kind, Source: string(slot.Source)})
 	}
 
 	selfParticipant := h.resolveVoiceParticipant(ctx, req.client.UserID)
@@ -1726,8 +1702,8 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 		Data: types.WsJoinVoiceChannelResponse{
 			ChannelID:     payload.ChannelID,
 			Participants:  peers,
-			TransportMode: transportMode,
-			SessionID:     sfuSessionID,
+			TransportMode: types.TransportModeSFU,
+			SessionID:     sessionID,
 			ICEServers:    iceServers,
 			PublishSlots:  publishSlots,
 		},
@@ -1760,73 +1736,8 @@ func (h *Hub) leaveVoiceChannel(req wsCommandRequest) {
 	})
 }
 
-// pushRTCSignalError reports a rtc_signal validation failure. It deliberately
-// uses a dedicated event type instead of pushError/WsEventError: rtc_signal
-// is sent fire-and-forget (it bypasses the client's request/ack queue), so a
-// plain "error" event here would be misattributed to whatever unrelated
-// command the client happens to be awaiting (e.g. rejecting a perfectly
-// successful join_voice_channel because of a stale rtc_signal race).
-func (h *Hub) pushRTCSignalError(cl *Client, message string) {
-	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventRTCSignalError, Error: message})
-}
-
-func (h *Hub) relayRTCSignal(req wsCommandRequest, ctx context.Context) {
-	var payload types.WsRTCSignalRequest
-	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-		h.pushRTCSignalError(req.client, "invalid rtc_signal payload")
-		return
-	}
-
-	payload.SignalType = strings.TrimSpace(strings.ToLower(payload.SignalType))
-	if payload.ChannelID <= 0 || payload.ToUserID <= 0 || payload.SignalType == "" {
-		h.pushRTCSignalError(req.client, "channel_id, to_user_id and signal_type are required")
-		return
-	}
-	if payload.SignalType != "offer" && payload.SignalType != "answer" && payload.SignalType != "candidate" {
-		h.pushRTCSignalError(req.client, "unsupported signal_type")
-		return
-	}
-
-	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-	if err != nil {
-		h.pushRTCSignalError(req.client, "failed to check channel access")
-		return
-	}
-	if !canAccess {
-		h.pushRTCSignalError(req.client, "access denied")
-		return
-	}
-
-	h.mu.RLock()
-	senderChannelID, senderInVoice := h.userVoiceChannel[req.client.UserID]
-	targetChannelID, targetInVoice := h.userVoiceChannel[payload.ToUserID]
-	targetClient, targetConnected := h.clientsByUser[payload.ToUserID]
-	h.mu.RUnlock()
-
-	if !senderInVoice || senderChannelID != payload.ChannelID {
-		h.pushRTCSignalError(req.client, "join voice channel before signaling")
-		return
-	}
-	if !targetInVoice || targetChannelID != payload.ChannelID || !targetConnected {
-		h.pushRTCSignalError(req.client, "recipient not in channel")
-		return
-	}
-
-	h.pushEvent(targetClient, &types.WsEvent{
-		Event: types.WsEventRTCSignal,
-		Data: types.WsRTCSignalEvent{
-			ChannelID:     payload.ChannelID,
-			FromUserID:    req.client.UserID,
-			SignalType:    payload.SignalType,
-			SDP:           payload.SDP,
-			Candidate:     payload.Candidate,
-			SDPMid:        payload.SDPMid,
-			SDPMLineIndex: payload.SDPMLineIndex,
-		},
-	})
-}
-
-// pushSfuError mirrors pushRTCSignalError above for the sfu_* namespace:
+// pushSfuError mirrors the mesh-era pushRTCSignalError (removed with mesh
+// itself — sfu-migration-plan.md §9) for the sfu_* namespace:
 // sfu_offer/sfu_answer/sfu_candidate all run off the Run() loop (see the
 // dispatch comment in handleCommand), and sfu_candidate specifically
 // bypasses the client's request/ack queue (see chatSocket.ts), so a plain

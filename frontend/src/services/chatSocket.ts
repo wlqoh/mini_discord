@@ -5,8 +5,7 @@ import type {
   Message,
   OnlineUser,
   ReplyPreview,
-  RTCSignalEvent,
-  RTCSignalPayload, SearchFilters, SearchHit, SearchScope, ServerMember, TypingEvent, UserProfile,
+  SearchFilters, SearchHit, SearchScope, ServerMember, TypingEvent, UserProfile,
   SfuActiveSpeakersEvent,
   SfuAnswerPayload,
   SfuCandidatePayload,
@@ -163,7 +162,6 @@ type MessageListener = (message: Message) => void;
 type ErrorListener = (message: string) => void;
 type VoiceParticipantsListener = (participants: VoiceParticipant[]) => void;
 type VoiceUserListener = (event: VoiceUserEvent) => void;
-type RTCSignalListener = (event: RTCSignalEvent) => void;
 type SfuOfferListener = (event: SfuOfferEvent) => void;
 type SfuAnswerListener = (event: SfuAnswerPayload) => void;
 type SfuCandidateListener = (event: SfuCandidatePayload) => void;
@@ -442,8 +440,6 @@ export class ChatSocket {
   private readonly voiceUserDetachedListeners = new Set<VoiceUserListener>();
   private readonly voiceUserResumedListeners = new Set<VoiceUserListener>();
 
-  private readonly rtcSignalListeners = new Set<RTCSignalListener>();
-
   private readonly sfuOfferListeners = new Set<SfuOfferListener>();
   private readonly sfuAnswerListeners = new Set<SfuAnswerListener>();
   private readonly sfuCandidateListeners = new Set<SfuCandidateListener>();
@@ -717,34 +713,12 @@ export class ChatSocket {
           return;
         }
 
-        if (parsed.event === "rtc_signal") {
-          const payload = parsed.data as RTCSignalEvent;
-          if (
-            payload &&
-            typeof payload.channel_id === "number" &&
-            typeof payload.from_user_id === "number" &&
-            (payload.signal_type === "offer" || payload.signal_type === "answer" || payload.signal_type === "candidate")
-          ) {
-            this.rtcSignalListeners.forEach((listener) => listener(payload));
-          }
-          return;
-        }
-
         if (parsed.event === "typing_start" || parsed.event === "typing_stop") {
           const payload = parsed.data as TypingEvent;
           if (payload && typeof payload.channel_id === "number" && typeof payload.user_id === "number") {
             const isTyping = parsed.event === "typing_start";
             this.typingListeners.forEach((listener) => listener(payload, isTyping));
           }
-          return;
-        }
-
-        if (parsed.event === "rtc_signal_error") {
-          // rtc_signal is sent fire-and-forget (see sendRTCSignal below), so
-          // this must never resolve/reject whatever command is currently
-          // pending in the ack queue — only handleSocketError does that.
-          const text = parsed.error || "RTC signal error";
-          this.errorListeners.forEach((listener) => listener(text));
           return;
         }
 
@@ -803,8 +777,8 @@ export class ChatSocket {
         }
 
         if (parsed.event === "sfu_error") {
-          // Mirrors rtc_signal_error above: sfu_candidate is fire-and-forget,
-          // so its errors must never touch the ack queue.
+          // sfu_candidate is sent fire-and-forget, so its errors must never
+          // touch the ack queue.
           const payload = parsed.data as SfuErrorEvent | undefined;
           this.sfuErrorListeners.forEach((listener) =>
             listener(payload ?? { session_id: "", code: "unknown", message: parsed.error || "SFU error" }),
@@ -901,11 +875,6 @@ export class ChatSocket {
   onVoiceUserResumed(listener: VoiceUserListener): () => void {
     this.voiceUserResumedListeners.add(listener);
     return () => this.voiceUserResumedListeners.delete(listener);
-  }
-
-  onRTCSignal(listener: RTCSignalListener): () => void {
-    this.rtcSignalListeners.add(listener);
-    return () => this.rtcSignalListeners.delete(listener);
   }
 
   onSfuOffer(listener: SfuOfferListener): () => void {
@@ -1262,10 +1231,8 @@ export class ChatSocket {
     if (!payload || typeof payload.channel_id !== "number" || !Array.isArray(payload.participants)) {
       throw new Error("Invalid join voice response");
     }
-    // Older servers (pre sfu-migration-plan.md phase 0) never set this —
-    // default to mesh rather than let an SFU-only code path see "".
     if (payload.transport_mode !== "sfu") {
-      payload.transport_mode = "mesh";
+      throw new Error(`Invalid join voice response: unexpected transport_mode ${JSON.stringify(payload.transport_mode)}`);
     }
     return payload;
   }
@@ -1282,26 +1249,10 @@ export class ChatSocket {
     });
   }
 
-  async sendRTCSignal(payload: RTCSignalPayload): Promise<void> {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
-    }
-
-    // RTC signaling is latency-sensitive and can burst with ICE candidates,
-    // so it bypasses the ack queue used for regular chat commands.
-    this.socket.send(
-      JSON.stringify({
-        action: "rtc_signal",
-        payload,
-      }),
-    );
-  }
-
   // sfu_offer/sfu_answer go through sendCommand (awaiting the ack per the
-  // protocol table in sfu-migration-plan.md §5.2) since — unlike mesh's
-  // rtc_signal — there is exactly one PeerConnection per client, so losing
-  // one silently is worth surfacing as a rejected promise rather than a
-  // fire-and-forget send.
+  // protocol table in sfu-migration-plan.md §5.2): there is exactly one
+  // PeerConnection per client, so losing one silently is worth surfacing as
+  // a rejected promise rather than a fire-and-forget send.
   async sendSfuOffer(sessionId: string, sdp: string, slots: SfuSlotDecl[]): Promise<void> {
     await this.sendCommand("sfu_offer", { session_id: sessionId, sdp, slots });
   }
@@ -1341,8 +1292,8 @@ export class ChatSocket {
       throw new Error("WebSocket not connected");
     }
 
-    // Fire-and-forget, same as sendRTCSignal: candidates can burst and are
-    // latency-sensitive, so they bypass the ack queue used for commands.
+    // Fire-and-forget: candidates can burst and are latency-sensitive, so
+    // they bypass the ack queue used for commands.
     this.socket.send(
       JSON.stringify({
         action: "sfu_candidate",

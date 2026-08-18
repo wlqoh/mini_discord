@@ -189,7 +189,7 @@ func (p *Peer) handleOffer(sdp string, slots []SlotDecl) {
 func (p *Peer) autoSubscribeToExisting() {
 	for _, other := range p.room.others(p.userID) {
 		for _, pub := range other.publishedAudioTracks() {
-			p.doSubscribe(other.userID, pub)
+			p.doSubscribe(other.userID, pub, QualityHigh)
 		}
 	}
 }
@@ -228,10 +228,9 @@ func (p *Peer) handleCandidate(c CandidateInit) {
 		SDPMid:        c.SDPMid,
 		SDPMLineIndex: c.SDPMLineIndex,
 	}); err != nil {
-		// Non-fatal: candidates that lose the ICE-restart-generation race are
-		// expected to fail occasionally. Log only, mirroring the frontend's
-		// treatment of the equivalent case (see meshCallClient.ts's
-		// ignoreOffer handling for the mesh path).
+		// Non-fatal: candidates that lose a renegotiation race (e.g. arriving
+		// for a description the client already superseded) are expected to
+		// fail occasionally. Log only.
 		p.log.Debug("sfu: add ice candidate failed", "err", err)
 	}
 }
@@ -302,6 +301,11 @@ func (p *Peer) sendOffer() {
 	p.router.sig.SendOffer(p.userID, p.sessionID, offer.SDP)
 }
 
+// handleOnTrack fires once per RTP stream on a slot: once for a
+// non-simulcast source (mic, screen, screen_audio, or a camera whose client
+// didn't negotiate simulcast), and once per RID for a simulcast camera
+// (migration phase 6, sfu-migration-plan.md §7 phase 6 step 2) — Pion calls
+// OnTrack separately for each layer of a single m-line's simulcast group.
 func (p *Peer) handleOnTrack(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 	mid := receiver.RTPTransceiver().Mid()
 	source, ok := p.sourceForMID(mid)
@@ -310,23 +314,34 @@ func (p *Peer) handleOnTrack(remote *webrtc.TrackRemote, receiver *webrtc.RTPRec
 		return
 	}
 
-	var audioLevelExtID uint8
-	if remote.Kind() == webrtc.RTPCodecTypeAudio {
-		audioLevelExtID = audioLevelExtensionID(receiver)
-	}
-
-	pub := newPublishedTrack(p.userID, source, remote, p, audioLevelExtID)
 	p.publishedMu.Lock()
-	p.published[source] = pub
+	pub, exists := p.published[source]
+	if !exists {
+		var audioLevelExtID uint8
+		if remote.Kind() == webrtc.RTPCodecTypeAudio {
+			audioLevelExtID = audioLevelExtensionID(receiver)
+		}
+		pub = newPublishedTrack(p.userID, source, remote.Kind(), p, audioLevelExtID)
+		p.published[source] = pub
+	}
 	p.publishedMu.Unlock()
 
-	go pub.forward(p.log)
+	pub.addLayer(remote, p.log)
+
+	if exists {
+		// A later simulcast layer ("m"/"h") for a source already announced
+		// by its first layer — subscribers already know this source exists;
+		// a subscriber whose resolveRID had to fall back to a lower layer
+		// picks this one up automatically once it has a keyframe (see
+		// forwardToSubscribers), no further signaling needed.
+		return
+	}
 
 	// Every published track is announced so clients know it's there to
 	// subscribe to. Audio auto-subscribes everyone in the room right away
 	// (decision #8); video waits for an explicit sfu_subscribe_video
-	// (migration phase 2) — draining the track via forward() above keeps
-	// Pion's internal buffers healthy in the meantime regardless.
+	// (migration phase 2) — draining the track via forwardLayer() above
+	// keeps Pion's internal buffers healthy in the meantime regardless.
 	p.router.sig.SendTrackPublished(p.channelID, TrackInfo{UserID: p.userID, Source: source, Kind: kindString(pub.kind)})
 
 	if pub.kind != webrtc.RTPCodecTypeAudio {
@@ -334,7 +349,7 @@ func (p *Peer) handleOnTrack(remote *webrtc.TrackRemote, receiver *webrtc.RTPRec
 	}
 
 	for _, other := range p.room.others(p.userID) {
-		other.subscribeToTrack(p.userID, pub)
+		other.subscribeToTrack(p.userID, pub, QualityHigh)
 	}
 }
 
@@ -352,21 +367,26 @@ func (p *Peer) sourceForMID(mid string) (Source, bool) {
 // this peer's own command goroutine: the caller is running on the
 // publisher's goroutine, and doSubscribe mutates state only this peer's
 // run() is allowed to touch (see the type doc's concurrency invariant).
-func (p *Peer) subscribeToTrack(publisherUserID int, pub *publishedTrack) {
-	p.enqueue(func() { p.doSubscribe(publisherUserID, pub) })
+func (p *Peer) subscribeToTrack(publisherUserID int, pub *publishedTrack, quality Quality) {
+	p.enqueue(func() { p.doSubscribe(publisherUserID, pub, quality) })
 }
 
-func (p *Peer) doSubscribe(publisherUserID int, pub *publishedTrack) {
+// doSubscribe subscribes this peer to pub at quality, or — if it's already
+// subscribed (a quality change on an existing subscription, e.g. an active
+// speaker being bumped from "low" to "high", migration phase 6 step 4/5) —
+// just retargets which simulcast layer feeds the existing m-line. Only a
+// brand-new subscription needs pc.AddTrack + renegotiation; a quality change
+// is purely internal to the publishedTrack (see setSubscriberQuality).
+func (p *Peer) doSubscribe(publisherUserID int, pub *publishedTrack, quality Quality) {
 	key := subKey{publisherUserID: publisherUserID, source: pub.source}
+
 	if _, exists := p.subs[key]; exists {
+		targetRID := pub.setSubscriberQuality(p.userID, quality)
+		pub.requestKeyframeForRIDWithRetry(targetRID)
 		return
 	}
 
-	local, err := webrtc.NewTrackLocalStaticRTP(
-		pub.remote.Codec().RTPCodecCapability,
-		fmt.Sprintf("u%d-%s-%s", publisherUserID, pub.source, kindString(pub.kind)),
-		fmt.Sprintf("u%d-%s", publisherUserID, pub.source),
-	)
+	local, targetRID, err := pub.newSubscriber(p.userID, quality)
 	if err != nil {
 		p.log.Error("sfu: create local track failed", "err", err)
 		return
@@ -375,17 +395,19 @@ func (p *Peer) doSubscribe(publisherUserID int, pub *publishedTrack) {
 	sender, err := p.pc.AddTrack(local)
 	if err != nil {
 		p.log.Error("sfu: add track failed", "err", err)
+		pub.removeSubscriber(p.userID)
 		return
 	}
 
-	pub.addSubscriber(p.userID, local)
 	p.subs[key] = &subscription{pub: pub, local: local, sender: sender}
 	p.scheduleNegotiate()
+	go monitorSubscriptionLoss(pub, p.userID, sender, p.log)
 
-	// A new video subscriber decodes nothing until the next key frame — ask
-	// the publisher for one right away instead of waiting out its normal
-	// interval (sfu-migration-plan.md §8 pitfall #3). No-op for audio.
-	pub.requestKeyframeWithRetry()
+	// A new video subscriber decodes nothing until the next key frame on
+	// their target layer — ask the publisher for one right away instead of
+	// waiting out its normal interval (sfu-migration-plan.md §8 pitfall #3).
+	// No-op for audio.
+	pub.requestKeyframeForRIDWithRetry(targetRID)
 }
 
 // doUnsubscribe removes this peer's subscription to one publisher's track

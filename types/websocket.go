@@ -58,7 +58,6 @@ const (
 	WsActionGetUsersOnline    = "get_users_online"
 	WsActionJoinVoiceChannel  = "join_voice_channel"
 	WsActionLeaveVoiceChannel = "leave_voice_channel"
-	WsActionRTCSignal         = "rtc_signal"
 	WsActionSearchServers     = "search_servers"
 	WsActionGetUserInfo       = "get_user_info"
 	WsActionChangeVoiceStatus = "change_voice_status"
@@ -71,13 +70,10 @@ const (
 	WsActionGetMessagesAfter  = "get_messages_after"
 	WsActionSearchMessages    = "search_messages"
 
-	// sfu_* is a namespace separate from rtc_signal (mesh) on purpose: the
-	// two transports have incompatible addressing semantics (rtc_signal's
-	// to_user_id names a peer; sfu_* always addresses the server), and
-	// keeping them apart means work on the SFU path can't regress mesh
-	// behind the transport_mode flag. See sfu-migration-plan.md §3 decision
-	// #11. Mesh is removed once the SFU migration completes (§9 of that
-	// plan); until then both namespaces coexist.
+	// sfu_* actions address the server directly (unlike mesh's removed
+	// rtc_signal, whose to_user_id addressed a peer) — see
+	// sfu-migration-plan.md §3 decision #11. Mesh itself was removed once
+	// the SFU migration cleared its criteria (§9 of that plan).
 	WsActionSfuOffer          = "sfu_offer"
 	WsActionSfuAnswer         = "sfu_answer"
 	WsActionSfuCandidate      = "sfu_candidate"
@@ -100,17 +96,8 @@ const (
 	// so unlike VoiceUserJoined/Left they're not in isCriticalVoiceEvent.
 	WsEventVoiceUserDetached = "voice_user_detached"
 	WsEventVoiceUserResumed  = "voice_user_resumed"
-	WsEventRTCSignal         = "rtc_signal"
-	// WsEventRTCSignalError reports a validation failure from relayRTCSignal
-	// (e.g. sender/recipient not yet registered as in-voice — a common race
-	// right after joining). rtc_signal is sent fire-and-forget on the client
-	// (it bypasses the request/ack queue — see chatSocket.ts sendRTCSignal),
-	// so its errors must NOT be dispatched as a plain WsEventError: that would
-	// reject whatever unrelated command the client happens to be awaiting at
-	// that moment (e.g. join_voice_channel failing with an rtc_signal error).
-	WsEventRTCSignalError = "rtc_signal_error"
-	WsEventTypingStart    = "typing_start"
-	WsEventTypingStop     = "typing_stop"
+	WsEventTypingStart       = "typing_start"
+	WsEventTypingStop        = "typing_stop"
 
 	WsEventSfuOffer            = "sfu_offer"
 	WsEventSfuAnswer           = "sfu_answer"
@@ -118,10 +105,10 @@ const (
 	WsEventSfuTrackPublished   = "sfu_track_published"
 	WsEventSfuTrackUnpublished = "sfu_track_unpublished"
 	WsEventSfuActiveSpeakers   = "sfu_active_speakers"
-	// WsEventSfuError mirrors WsEventRTCSignalError: sfu_candidate is sent
-	// fire-and-forget (bypasses the request/ack queue), so its errors can't
-	// be dispatched as a plain WsEventError without misattributing them to
-	// an unrelated in-flight command.
+	// WsEventSfuError exists because sfu_candidate is sent fire-and-forget
+	// (bypasses the request/ack queue), so its errors can't be dispatched as
+	// a plain WsEventError without misattributing them to an unrelated
+	// in-flight command.
 	WsEventSfuError = "sfu_error"
 
 	ChannelTypeText  = "text"
@@ -330,10 +317,12 @@ type WsVoiceParticipant struct {
 	AvatarURL  string `json:"avatar_url,omitempty"`
 }
 
-const (
-	TransportModeMesh = "mesh"
-	TransportModeSFU  = "sfu"
-)
+// TransportModeSFU is the only value WsJoinVoiceChannelResponse.TransportMode
+// ever carries now — mesh was removed once the SFU migration cleared its
+// criteria (sfu-migration-plan.md §9). Kept as a named constant rather than
+// inlining the literal, per the plan's Phase 5 note on why the field itself
+// stays on the wire.
+const TransportModeSFU = "sfu"
 
 type WsJoinVoiceChannelResponse struct {
 	ChannelID    int64                `json:"channel_id"`
@@ -372,29 +361,7 @@ type WsVoiceChannelParticipants struct {
 	Participants []WsVoiceParticipant `json:"participants"`
 }
 
-type WsRTCSignalRequest struct {
-	ChannelID     int64   `json:"channel_id"`
-	ToUserID      int     `json:"to_user_id"`
-	SignalType    string  `json:"signal_type"`
-	SDP           string  `json:"sdp,omitempty"`
-	Candidate     string  `json:"candidate,omitempty"`
-	SDPMid        *string `json:"sdp_mid,omitempty"`
-	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
-}
-
-type WsRTCSignalEvent struct {
-	ChannelID     int64   `json:"channel_id"`
-	FromUserID    int     `json:"from_user_id"`
-	SignalType    string  `json:"signal_type"`
-	SDP           string  `json:"sdp,omitempty"`
-	Candidate     string  `json:"candidate,omitempty"`
-	SDPMid        *string `json:"sdp_mid,omitempty"`
-	SDPMLineIndex *uint16 `json:"sdp_mline_index,omitempty"`
-}
-
-// --- sfu_* protocol payloads (sfu-migration-plan.md §5). Implemented
-// starting migration phase 1; declared now so the wire contract is fixed
-// before any handler exists.
+// --- sfu_* protocol payloads (sfu-migration-plan.md §5) ---
 
 type WsSfuSlotDecl struct {
 	MID    string `json:"mid"`

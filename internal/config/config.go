@@ -79,10 +79,6 @@ type SFUConfig struct {
 
 	MaxRoomParticipants int           `yaml:"max_room_participants" env:"SFU_MAX_ROOM_PARTICIPANTS" env-default:"20"`
 	SessionGracePeriod  time.Duration `yaml:"session_grace_period" env:"SFU_SESSION_GRACE_PERIOD" env-default:"30s"`
-
-	// Empty means SFU applies to every voice channel; otherwise only to the
-	// channels listed here. Lets SFU be rolled out to specific channels first.
-	ChannelAllowlist []int64 `yaml:"channel_allowlist" env:"SFU_CHANNEL_ALLOWLIST" env-separator:","`
 }
 
 type S3Config struct {

@@ -29,11 +29,19 @@ type PeerSnapshot struct {
 type TrackSnapshot struct {
 	Source Source `json:"source"`
 	Kind   string `json:"kind"`
+	// Layers lists the simulcast RIDs currently publishing (migration phase
+	// 6) — a single empty-string entry for a non-simulcast source.
+	Layers []string `json:"layers,omitempty"`
 }
 
 type SubscriptionSnapshot struct {
 	PublisherUserID int    `json:"publisher_user_id"`
 	Source          Source `json:"source"`
+	// ActiveLayer/PendingLayer are the simulcast RID this subscription is
+	// currently receiving vs. waiting to switch to on the next keyframe
+	// (migration phase 6) — always "" for a non-simulcast source.
+	ActiveLayer  string `json:"active_layer,omitempty"`
+	PendingLayer string `json:"pending_layer,omitempty"`
 }
 
 func (r *Router) Snapshot() SnapshotDTO {
@@ -66,7 +74,13 @@ func (p *Peer) snapshot() PeerSnapshot {
 	p.enqueue(func() {
 		subs := make([]SubscriptionSnapshot, 0, len(p.subs))
 		for _, sub := range p.subs {
-			subs = append(subs, SubscriptionSnapshot{PublisherUserID: sub.pub.userID, Source: sub.pub.source})
+			active, pending := sub.pub.subscriberLayerState(p.userID)
+			subs = append(subs, SubscriptionSnapshot{
+				PublisherUserID: sub.pub.userID,
+				Source:          sub.pub.source,
+				ActiveLayer:     active,
+				PendingLayer:    pending,
+			})
 		}
 		subsCh <- subs
 	})
@@ -80,7 +94,7 @@ func (p *Peer) snapshot() PeerSnapshot {
 	p.publishedMu.RLock()
 	published := make([]TrackSnapshot, 0, len(p.published))
 	for source, pub := range p.published {
-		published = append(published, TrackSnapshot{Source: source, Kind: kindString(pub.kind)})
+		published = append(published, TrackSnapshot{Source: source, Kind: kindString(pub.kind), Layers: pub.layerRIDs()})
 	}
 	p.publishedMu.RUnlock()
 

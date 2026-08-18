@@ -1,31 +1,79 @@
 package sfu
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
 
+// trackLayer is one simulcast RTP stream backing a publishedTrack. A
+// non-simulcast source (mic, screen, screen_audio, or a camera from a
+// client that didn't negotiate simulcast) has exactly one layer, keyed by
+// the empty RID. A simulcast camera (migration phase 6) has up to three,
+// keyed "l"/"m"/"h" (see RIDLow/RIDMid/RIDHigh).
+type trackLayer struct {
+	rid    string
+	remote *webrtc.TrackRemote
+
+	keyframeMu     sync.RWMutex
+	lastKeyframeAt time.Time
+}
+
+func (l *trackLayer) markKeyframe() {
+	l.keyframeMu.Lock()
+	l.lastKeyframeAt = time.Now()
+	l.keyframeMu.Unlock()
+}
+
+func (l *trackLayer) hasKeyframeSince(since time.Time) bool {
+	l.keyframeMu.RLock()
+	defer l.keyframeMu.RUnlock()
+	return l.lastKeyframeAt.After(since)
+}
+
+// trackSubscriber is one subscriber's view into a publishedTrack: which
+// layer they're actually receiving, which layer they're waiting to cut over
+// to (switches only happen on that layer's next key frame — sfu-migration-
+// plan.md §7 phase 6 step 3 / §8), the local track their RTP is written
+// into, and the rewrite state that keeps that track's sequence
+// numbers/timestamps continuous across a switch. requestedQuality is what
+// the client last asked for via sfu_subscribe_video; degraded is a
+// server-side override applied on top of it when RTCP receiver reports show
+// sustained loss (phase 6 step 4) — cleared the moment the client asks for
+// anything explicitly again.
+type trackSubscriber struct {
+	local *webrtc.TrackLocalStaticRTP
+
+	mu               sync.Mutex
+	requestedQuality Quality
+	degraded         bool
+	activeRID        string
+	pendingRID       string // "" while no switch is pending
+	rewrite          rtpRewriter
+}
+
 // publishedTrack is one media source a peer is sending to the SFU (their
 // mic, camera, screen video, or screen audio — see Source). It owns the
-// fan-out to every subscriber's local copy of the track. subscribers has its
-// own mutex independent of the owning Peer's command queue (see peer.go's
+// fan-out to every subscriber's local copy of the track, across however many
+// simulcast layers the source actually has. subs has its own mutex
+// independent of the owning Peer's command queue (see peer.go's
 // package-level invariant comment): a subscriber Peer's own command
-// goroutine adds/removes itself here, and the RTP forward loop below reads
-// it from a completely different goroutine, so it cannot be folded into
-// either peer's serialized state.
+// goroutine adds/removes/reconfigures itself here, and each layer's RTP
+// forward loop below reads it from a completely different goroutine, so it
+// cannot be folded into either peer's serialized state.
 type publishedTrack struct {
 	userID int
 	source Source
 	kind   webrtc.RTPCodecType
 
-	remote *webrtc.TrackRemote
 	// owner lets a subscriber (see doSubscribe in peer.go) send PLI back to
 	// the publisher's own PeerConnection without a room/router lookup, and
-	// forward() reach the room's active-speaker tracker. Set once at
+	// forwardLayer() reach the room's active-speaker tracker. Set once at
 	// construction, never reassigned — safe to read from any goroutine (see
 	// peer.go's pc field for the same reasoning).
 	owner *Peer
@@ -34,35 +82,179 @@ type publishedTrack struct {
 	// client didn't negotiate it. Only meaningful for kind == audio.
 	audioLevelExtID uint8
 
-	mu          sync.RWMutex
-	subscribers map[int]*webrtc.TrackLocalStaticRTP // subscriber userID -> track to write into
+	layersMu sync.RWMutex
+	layers   map[string]*trackLayer // rid -> layer
 
-	keyframeMu     sync.RWMutex
-	lastKeyframeAt time.Time
+	subsMu sync.RWMutex
+	subs   map[int]*trackSubscriber // subscriber userID -> subscriber state
 }
 
-func newPublishedTrack(userID int, source Source, remote *webrtc.TrackRemote, owner *Peer, audioLevelExtID uint8) *publishedTrack {
+func newPublishedTrack(userID int, source Source, kind webrtc.RTPCodecType, owner *Peer, audioLevelExtID uint8) *publishedTrack {
 	return &publishedTrack{
 		userID:          userID,
 		source:          source,
-		kind:            remote.Kind(),
-		remote:          remote,
+		kind:            kind,
 		owner:           owner,
 		audioLevelExtID: audioLevelExtID,
-		subscribers:     make(map[int]*webrtc.TrackLocalStaticRTP),
+		layers:          make(map[string]*trackLayer),
+		subs:            make(map[int]*trackSubscriber),
 	}
 }
 
-func (t *publishedTrack) addSubscriber(userID int, local *webrtc.TrackLocalStaticRTP) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.subscribers[userID] = local
+// addLayer registers a new simulcast layer (or the sole layer, for a
+// non-simulcast source) and starts forwarding it. Safe to call more than
+// once for the same publishedTrack — a simulcast camera's "m"/"h" layers
+// typically arrive shortly after "l", each as its own OnTrack callback.
+func (t *publishedTrack) addLayer(remote *webrtc.TrackRemote, log *slog.Logger) {
+	layer := &trackLayer{rid: remote.RID(), remote: remote}
+	t.layersMu.Lock()
+	t.layers[layer.rid] = layer
+	t.layersMu.Unlock()
+	go t.forwardLayer(layer, log)
+}
+
+func (t *publishedTrack) layerRIDs() []string {
+	t.layersMu.RLock()
+	defer t.layersMu.RUnlock()
+	rids := make([]string, 0, len(t.layers))
+	for rid := range t.layers {
+		rids = append(rids, rid)
+	}
+	return rids
+}
+
+func (t *publishedTrack) codecCapability() webrtc.RTPCodecCapability {
+	t.layersMu.RLock()
+	defer t.layersMu.RUnlock()
+	for _, l := range t.layers {
+		return l.remote.Codec().RTPCodecCapability
+	}
+	return webrtc.RTPCodecCapability{}
+}
+
+// resolveRID picks which layer best satisfies quality given whatever this
+// track's layers currently are. A non-simulcast track (exactly one layer)
+// always resolves to that one layer regardless of quality — off is handled
+// by the caller before this is ever reached (SubscribeVideo/doUnsubscribe).
+func (t *publishedTrack) resolveRID(quality Quality) string {
+	t.layersMu.RLock()
+	defer t.layersMu.RUnlock()
+
+	if len(t.layers) <= 1 {
+		for rid := range t.layers {
+			return rid
+		}
+		return ""
+	}
+
+	for _, rid := range preferredRIDOrder[quality] {
+		if _, ok := t.layers[rid]; ok {
+			return rid
+		}
+	}
+	// None of the preferred RIDs have started publishing yet (e.g. subscribed
+	// the instant "l" arrived, before "m"/"h" did) — fall back to whatever
+	// layer does exist rather than resolving to a RID that will never match
+	// any layer.forwardLayer call and leave the subscriber stuck forever.
+	for rid := range t.layers {
+		return rid
+	}
+	return ""
+}
+
+// newSubscriber creates subscriberUserID's subscription to this track at
+// quality, returning the local track to hand to pc.AddTrack and the RID it
+// resolved to (for the caller's initial PLI request). Called only when the
+// subscriber has no existing subscription to this track (see doSubscribe).
+func (t *publishedTrack) newSubscriber(userID int, quality Quality) (local *webrtc.TrackLocalStaticRTP, targetRID string, err error) {
+	targetRID = t.resolveRID(quality)
+
+	local, err = webrtc.NewTrackLocalStaticRTP(
+		t.codecCapability(),
+		fmt.Sprintf("u%d-%s-%s", t.userID, t.source, kindString(t.kind)),
+		fmt.Sprintf("u%d-%s", t.userID, t.source),
+	)
+	if err != nil {
+		return nil, "", err
+	}
+
+	t.subsMu.Lock()
+	t.subs[userID] = &trackSubscriber{local: local, requestedQuality: quality, pendingRID: targetRID}
+	t.subsMu.Unlock()
+
+	return local, targetRID, nil
+}
+
+// setSubscriberQuality updates an existing subscriber's requested quality —
+// sfu_subscribe_video with a new quality for a source they're already
+// subscribed to. This never touches the m-line (the client's own transport
+// state doesn't change, only which internal layer feeds it), so unlike a
+// fresh subscription it needs no renegotiation. Returns the RID the
+// subscriber should end up on so the caller can request a key frame for it.
+func (t *publishedTrack) setSubscriberQuality(userID int, quality Quality) string {
+	targetRID := t.resolveRID(quality)
+
+	t.subsMu.RLock()
+	sub, ok := t.subs[userID]
+	t.subsMu.RUnlock()
+	if !ok {
+		return targetRID
+	}
+
+	sub.mu.Lock()
+	sub.requestedQuality = quality
+	// An explicit request from the client overrides any standing
+	// loss-triggered degradation — give the new tier a clean chance.
+	sub.degraded = false
+	if sub.activeRID != targetRID {
+		sub.pendingRID = targetRID
+	}
+	sub.mu.Unlock()
+
+	return targetRID
+}
+
+// setDegraded flips a subscriber's loss-triggered degradation flag (phase 6
+// step 4: sustained RTCP-reported loss steps a "high" subscription down to
+// "low" until loss clears). No-op if the flag is already what's requested.
+// Returns the RID the subscriber should end up on and whether that's a
+// change from where they already are or are already headed.
+func (t *publishedTrack) setDegraded(userID int, degraded bool) (targetRID string, changed bool) {
+	t.subsMu.RLock()
+	sub, ok := t.subs[userID]
+	t.subsMu.RUnlock()
+	if !ok {
+		return "", false
+	}
+
+	sub.mu.Lock()
+	if sub.degraded == degraded {
+		sub.mu.Unlock()
+		return "", false
+	}
+	sub.degraded = degraded
+	effective := sub.requestedQuality
+	if sub.degraded && effective == QualityHigh {
+		effective = QualityLow
+	}
+	sub.mu.Unlock()
+
+	targetRID = t.resolveRID(effective)
+
+	sub.mu.Lock()
+	changed = sub.activeRID != targetRID && sub.pendingRID != targetRID
+	if changed {
+		sub.pendingRID = targetRID
+	}
+	sub.mu.Unlock()
+
+	return targetRID, changed
 }
 
 func (t *publishedTrack) removeSubscriber(userID int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.subscribers, userID)
+	t.subsMu.Lock()
+	delete(t.subs, userID)
+	t.subsMu.Unlock()
 }
 
 // subscriberUserIDs is used when this track's publisher goes away (see
@@ -70,46 +262,68 @@ func (t *publishedTrack) removeSubscriber(userID int) {
 // of the subscription down too, since nothing else ever reaches into
 // another peer's pc/subs otherwise.
 func (t *publishedTrack) subscriberUserIDs() []int {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	ids := make([]int, 0, len(t.subscribers))
-	for id := range t.subscribers {
+	t.subsMu.RLock()
+	defer t.subsMu.RUnlock()
+	ids := make([]int, 0, len(t.subs))
+	for id := range t.subs {
 		ids = append(ids, id)
 	}
 	return ids
 }
 
-// forward reads RTP from the remote track and fans it out to every current
-// subscriber's local track, for the lifetime of the published track. Runs in
-// its own goroutine (started by Peer's OnTrack handling in peer.go).
+// subscriberLayerState reports userID's current active/pending RID, for the
+// debug snapshot (decision #12). Empty strings if userID isn't subscribed.
+func (t *publishedTrack) subscriberLayerState(userID int) (active, pending string) {
+	t.subsMu.RLock()
+	sub, ok := t.subs[userID]
+	t.subsMu.RUnlock()
+	if !ok {
+		return "", ""
+	}
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	return sub.activeRID, sub.pendingRID
+}
+
+// forwardLayer reads RTP from one simulcast layer and fans it out to every
+// subscriber currently on (or switching to) that layer, for the lifetime of
+// the layer. Runs in its own goroutine per layer (started by addLayer).
 //
 // recover() here is load-bearing, not defensive boilerplate (see
 // sfu-migration-plan.md §8 pitfall #5): this loop processes attacker- or
 // bug-reachable RTP straight from the network, and the SFU is a monolith
 // sharing a process with chat (decision #2) — an unrecovered panic here
 // takes the whole server down, not just this one call.
-func (t *publishedTrack) forward(log *slog.Logger) {
+func (t *publishedTrack) forwardLayer(layer *trackLayer, log *slog.Logger) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("sfu: panic in RTP forward loop", "user_id", t.userID, "source", t.source, "panic", r)
+			log.Error("sfu: panic in RTP forward loop", "user_id", t.userID, "source", t.source, "rid", layer.rid, "panic", r)
 		}
 	}()
 
 	isVideo := t.kind == webrtc.RTPCodecTypeVideo
 	// Active-speaker detection (decision #9) is scoped to mic audio only —
-	// screen_audio shouldn't make someone look like they're "speaking".
+	// screen_audio shouldn't make someone look like they're "speaking". Mic
+	// is never simulcast, so this only ever runs against the "" layer.
 	tracksAudioLevel := t.source == SourceMic && t.audioLevelExtID != 0
 
 	for {
-		packet, _, err := t.remote.ReadRTP()
+		packet, _, err := layer.remote.ReadRTP()
 		if err != nil {
-			// Track ended: publisher's connection closed or the transport
-			// tore down. Either way there is nothing left to forward.
+			// Track ended: publisher's connection closed, or (for a
+			// simulcast layer) that specific encoding stopped. Either way
+			// there is nothing left to forward on this layer.
 			return
 		}
 
+		// Audio has no GOP structure to wait on — every packet is a valid
+		// place to start or resume forwarding, so it's treated as a
+		// "keyframe" for the switch logic below. Video only actually
+		// switches subscribers over on a real VP8 key frame.
+		isKeyframe := !isVideo
 		if isVideo && isVP8Keyframe(packet.Payload) {
-			t.markKeyframe()
+			isKeyframe = true
+			layer.markKeyframe()
 		}
 		if tracksAudioLevel {
 			if data := packet.Header.GetExtension(t.audioLevelExtID); len(data) >= 1 {
@@ -120,53 +334,87 @@ func (t *publishedTrack) forward(log *slog.Logger) {
 			}
 		}
 
-		t.mu.RLock()
-		for _, local := range t.subscribers {
-			// Best-effort: one subscriber's write failing (e.g. their
-			// PeerConnection just closed) must not stop forwarding to the
-			// rest of the room.
-			_ = local.WriteRTP(packet)
-		}
-		t.mu.RUnlock()
+		t.forwardToSubscribers(layer, packet, isKeyframe)
 	}
 }
 
-func (t *publishedTrack) markKeyframe() {
-	t.keyframeMu.Lock()
-	t.lastKeyframeAt = time.Now()
-	t.keyframeMu.Unlock()
+// forwardToSubscribers writes packet (from layer) into every subscriber
+// that's either already active on this layer or waiting to cut over to it.
+// A waiting subscriber only cuts over once isKeyframe is true (pitfall: a
+// mid-GOP switch produces frames the decoder can't reconstruct), at which
+// point its rewriter is (re)started so its output sequence numbers and
+// timestamps continue smoothly from wherever they last left off instead of
+// jumping to this layer's own independent numbering.
+func (t *publishedTrack) forwardToSubscribers(layer *trackLayer, packet *rtp.Packet, isKeyframe bool) {
+	t.subsMu.RLock()
+	subs := make([]*trackSubscriber, 0, len(t.subs))
+	for _, s := range t.subs {
+		subs = append(subs, s)
+	}
+	t.subsMu.RUnlock()
+
+	for _, sub := range subs {
+		sub.mu.Lock()
+		switch {
+		case sub.activeRID == layer.rid:
+			// Already receiving this layer — nothing to do but forward.
+		case sub.pendingRID == layer.rid && isKeyframe:
+			sub.rewrite.start(packet.SequenceNumber, packet.Timestamp)
+			sub.activeRID = layer.rid
+			sub.pendingRID = ""
+		default:
+			sub.mu.Unlock()
+			continue
+		}
+		outSeq, outTs := sub.rewrite.apply(packet.SequenceNumber, packet.Timestamp)
+		sub.mu.Unlock()
+
+		out := *packet
+		out.SequenceNumber = outSeq
+		out.Timestamp = outTs
+		// Best-effort: one subscriber's write failing (e.g. their
+		// PeerConnection just closed) must not stop forwarding to the rest
+		// of the room.
+		_ = sub.local.WriteRTP(&out)
+	}
 }
 
-func (t *publishedTrack) hasKeyframeSince(since time.Time) bool {
-	t.keyframeMu.RLock()
-	defer t.keyframeMu.RUnlock()
-	return t.lastKeyframeAt.After(since)
-}
-
-// requestKeyframe sends PLI to the publisher. Called whenever a new
-// subscriber attaches (sfu-migration-plan.md §7 phase 2, §8 pitfall #3): a
-// subscriber that joins between keyframes decodes nothing until the next
-// one arrives, which without this can be several seconds away.
-func (t *publishedTrack) requestKeyframe() {
+// requestKeyframeForRID sends PLI for one specific layer. Used both for a
+// brand-new subscription and for a layer switch (sfu-migration-plan.md §7
+// phase 2/6, §8 pitfall #3): a subscriber waiting on a layer decodes nothing
+// until that layer's next key frame, which without this can be seconds away.
+func (t *publishedTrack) requestKeyframeForRID(rid string) {
 	if t.kind != webrtc.RTPCodecTypeVideo {
 		return
 	}
-	_ = t.owner.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(t.remote.SSRC())}})
+	t.layersMu.RLock()
+	layer, ok := t.layers[rid]
+	t.layersMu.RUnlock()
+	if !ok {
+		return
+	}
+	_ = t.owner.pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(layer.remote.SSRC())}})
 }
 
-// requestKeyframeWithRetry sends PLI immediately and, if no keyframe has
-// been observed 1.5s later, sends it once more — PLI travels over UDP with
-// no delivery guarantee, and a lost PLI otherwise leaves a new subscriber
-// stuck on a black frame with no further recovery attempt.
-func (t *publishedTrack) requestKeyframeWithRetry() {
+// requestKeyframeForRIDWithRetry sends PLI immediately and, if that layer
+// still hasn't produced a keyframe 1.5s later, sends it once more — PLI
+// travels over UDP with no delivery guarantee, and a lost PLI otherwise
+// leaves a subscriber stuck with no further recovery attempt.
+func (t *publishedTrack) requestKeyframeForRIDWithRetry(rid string) {
 	if t.kind != webrtc.RTPCodecTypeVideo {
+		return
+	}
+	t.layersMu.RLock()
+	layer, ok := t.layers[rid]
+	t.layersMu.RUnlock()
+	if !ok {
 		return
 	}
 	requestedAt := time.Now()
-	t.requestKeyframe()
+	t.requestKeyframeForRID(rid)
 	time.AfterFunc(1500*time.Millisecond, func() {
-		if !t.hasKeyframeSince(requestedAt) {
-			t.requestKeyframe()
+		if !layer.hasKeyframeSince(requestedAt) {
+			t.requestKeyframeForRID(rid)
 		}
 	})
 }
