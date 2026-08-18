@@ -3,6 +3,8 @@ import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
+import ImageViewerModal from "../components/ImageViewerModal.tsx";
+import type { ImageViewerState, ViewerImage } from "../components/ImageViewerModal.tsx";
 import MessageInput from "../components/MessageInput.tsx";
 import TypingIndicator from "../components/TypingIndicator.tsx";
 import VideoTile from "../components/VideoTile.tsx";
@@ -86,6 +88,7 @@ export default function ChatPage() {
         }
     });
     const [closingModal, setClosingModal] = useState<string | null>(null);
+    const [imageViewer, setImageViewer] = useState<ImageViewerState | null>(null);
     const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
     const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
     const [notificationPermission, setNotificationPermission] = useState<PermissionState>(() => getPermissionState());
@@ -106,13 +109,22 @@ export default function ChatPage() {
         [navigate],
     );
 
-    function closeModalWithAnim(name: string, close: () => void): void {
+    const closeModalWithAnim = useCallback((name: string, close: () => void): void => {
         setClosingModal(name);
         window.setTimeout(() => {
             close();
             setClosingModal(null);
         }, 160);
-    }
+    }, []);
+
+    const openImageViewer = useCallback((items: ViewerImage[], index: number) => {
+        if (items.length === 0) return;
+        setImageViewer({ items, index: Math.min(Math.max(index, 0), items.length - 1) });
+    }, []);
+
+    const closeImageViewer = useCallback(() => {
+        closeModalWithAnim("imageViewer", () => setImageViewer(null));
+    }, [closeModalWithAnim]);
 
     function toggleTheme(): void {
         setTheme((prev) => (prev === "light" ? "dark" : "light"));
@@ -249,7 +261,6 @@ export default function ChatPage() {
         voiceParticipantsByChannel: voice.voiceParticipantsByChannel,
         showToast,
         navigate,
-        closeModalWithAnim,
     });
 
     const typingEmitter = useTypingEmitter(socketRef, servers.selectedChannelId);
@@ -905,7 +916,7 @@ export default function ChatPage() {
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
-                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onDeleteMessage={messages.handleDeleteMessage} onEditMessage={messages.handleEditMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} hasMoreNewer={hasMoreNewer} isLoadingNewer={isLoadingNewer} onLoadNewer={() => messages.loadNewerMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
+                    <MessageList key={servers.selectedChannelId} messages={activeMessages} currentUserId={currentUserId} onOpenProfile={profile.openUserProfile} onOpenImage={openImageViewer} onDeleteMessage={messages.handleDeleteMessage} onEditMessage={messages.handleEditMessage} onReply={messages.setReplyToMessage} onScrollToMessage={scrollToMessage} isLoading={isMessagesLoading} hasMoreOlder={hasMoreOlder} isLoadingOlder={isLoadingOlder} loadOlderError={loadOlderError} onLoadOlder={() => messages.loadOlderMessages(servers.selectedChannelId)} hasMoreNewer={hasMoreNewer} isLoadingNewer={isLoadingNewer} onLoadNewer={() => messages.loadNewerMessages(servers.selectedChannelId)} serverMembers={serverMembers.members}/>
                 </div>
                 <JumpToLatestButton
                     isVisible={jump.isVisible}
@@ -983,28 +994,25 @@ export default function ChatPage() {
                                     <div className="profile-avatar-block">
                                         <div className="profile-avatar-preview-wrap">
                                             {profile.profileAvatarUrl ? (
-                                                profile.isSelfProfile ? (
-                                                    <button
-                                                        type="button"
-                                                        className="profile-avatar-preview-btn"
-                                                        onClick={profile.openAvatarPreview}
-                                                        aria-label="Open avatar preview"
-                                                        title="Open avatar"
-                                                    >
-                                                        <img
-                                                            src={profile.profileAvatarUrl}
-                                                            alt="Current avatar"
-                                                            className="profile-avatar-preview"
-                                                            onError={() => setAvatarUrl("")}
-                                                        />
-                                                    </button>
-                                                ) : (
+                                                <button
+                                                    type="button"
+                                                    className="profile-avatar-preview-btn"
+                                                    onClick={() => openImageViewer(
+                                                        [{ url: profile.profileAvatarUrl, alt: profile.profileDisplayName || "Avatar" }],
+                                                        0,
+                                                    )}
+                                                    aria-label="Open avatar preview"
+                                                    title="Open avatar"
+                                                >
                                                     <img
                                                         src={profile.profileAvatarUrl}
                                                         alt="User avatar"
                                                         className="profile-avatar-preview"
+                                                        // Сбрасываем только СВОЙ аватар: чужая битая картинка не должна
+                                                        // затирать avatarUrl текущего пользователя.
+                                                        onError={profile.isSelfProfile ? () => setAvatarUrl("") : undefined}
                                                     />
-                                                )
+                                                </button>
                                             ) : (
                                                 <div className="profile-avatar-fallback">{profile.profileInitial}</div>
                                             )}
@@ -1178,24 +1186,13 @@ export default function ChatPage() {
                 </div>
             )}
 
-            {profile.isAvatarPreviewOpen && avatarUrl && (
-                <div className={`avatar-viewer-overlay ${closingModal === "avatarViewer" ? "closing" : ""}`} onClick={profile.closeAvatarPreview}>
-                    <div className="avatar-viewer-content" onClick={(e) => e.stopPropagation()}>
-                        <img
-                            src={avatarUrl}
-                            alt="Avatar full size"
-                            className="avatar-viewer-image"
-                            onError={profile.closeAvatarPreview}
-                        />
-                        <button
-                            type="button"
-                            className="avatar-viewer-close"
-                            onClick={profile.closeAvatarPreview}
-                        >
-                            Close
-                        </button>
-                    </div>
-                </div>
+            {imageViewer && (
+                <ImageViewerModal
+                    state={imageViewer}
+                    isClosing={closingModal === "imageViewer"}
+                    onClose={closeImageViewer}
+                    onIndexChange={(index) => setImageViewer((prev) => (prev ? { ...prev, index } : prev))}
+                />
             )}
 
             {servers.isCreateServerModalOpen && (

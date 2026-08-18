@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type React from "react";
 import type { NavigateFunction } from "react-router-dom";
 import API from "../api";
@@ -31,7 +31,6 @@ type Params = {
     voiceParticipantsByChannel: VoiceParticipantsByChannel;
     showToast: (type: "success" | "error", message: string) => void;
     navigate: NavigateFunction;
-    closeModalWithAnim: (name: string, close: () => void) => void;
 };
 
 export function useProfile({
@@ -47,10 +46,8 @@ export function useProfile({
     voiceParticipantsByChannel,
     showToast,
     navigate,
-    closeModalWithAnim,
 }: Params) {
     const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-    const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
     const [selectedProfileUserId, setSelectedProfileUserId] = useState<number | null>(null);
     const [selectedProfile, setSelectedProfile] = useState<UserProfile | null>(null);
     const [selectedProfileError, setSelectedProfileError] = useState("");
@@ -74,20 +71,6 @@ export function useProfile({
     const profileDisplayName = profileNickname || [profileFirstName, profileLastName].filter(Boolean).join(" ").trim();
     const profileInitial = (profileNickname?.[0] ?? profileFirstName?.[0] ?? profileLastName?.[0] ?? "U").toUpperCase();
 
-    // Escape key effect for avatar preview
-    useEffect(() => {
-        if (!isAvatarPreviewOpen) return;
-
-        const onKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") {
-                closeModalWithAnim("avatarViewer", () => setIsAvatarPreviewOpen(false));
-            }
-        };
-
-        window.addEventListener("keydown", onKeyDown);
-        return () => window.removeEventListener("keydown", onKeyDown);
-    }, [isAvatarPreviewOpen, closeModalWithAnim]);
-
     const openSelfProfile = useCallback(() => {
         setSelectedProfileUserId(null);
         setSelectedProfile(null);
@@ -97,7 +80,6 @@ export function useProfile({
         setDeleteAccountError("");
         setIsDeleteAccountConfirmOpen(false);
         setDeletePasswordDraft("");
-        setIsAvatarPreviewOpen(false);
         setNicknameDraft(currentUserProfile?.nickname ?? "");
         setIsProfileModalOpen(true);
     }, [currentUserProfile?.nickname]);
@@ -113,7 +95,6 @@ export function useProfile({
         setSelectedProfileError("");
         setProfileUpdateError("");
         setIsProfileLoading(true);
-        setIsAvatarPreviewOpen(false);
         setNicknameDraft("");
         setIsProfileModalOpen(true);
 
@@ -239,15 +220,6 @@ export function useProfile({
         }
     }
 
-    function openAvatarPreview(): void {
-        if (!avatarUrl) return;
-        setIsAvatarPreviewOpen(true);
-    }
-
-    function closeAvatarPreview(): void {
-        closeModalWithAnim("avatarViewer", () => setIsAvatarPreviewOpen(false));
-    }
-
     function handleLogout() {
         callClientRef.current?.dispose();
         callClientRef.current = null;
@@ -302,8 +274,6 @@ export function useProfile({
     return {
         isProfileModalOpen,
         setIsProfileModalOpen,
-        isAvatarPreviewOpen,
-        setIsAvatarPreviewOpen,
         selectedProfileUserId,
         selectedProfile,
         selectedProfileError,
@@ -332,8 +302,6 @@ export function useProfile({
         handleSaveNickname,
         openAvatarPicker,
         handleAvatarChange,
-        openAvatarPreview,
-        closeAvatarPreview,
         handleLogout,
         handleDeleteAccount,
     };

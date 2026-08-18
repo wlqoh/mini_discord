@@ -3115,9 +3115,9 @@ button:active:not(:disabled) {
 }
 
 /* ================================================================
-   AVATAR FULL-SIZE VIEWER
+   IMAGE FULL-SIZE VIEWER
    ================================================================ */
-.avatar-viewer-overlay {
+.image-viewer-overlay {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.90);
@@ -3129,7 +3129,7 @@ button:active:not(:disabled) {
     padding: 16px;
 }
 
-.avatar-viewer-content {
+.image-viewer-content {
     position: relative;
     max-width: 90vw;
     max-height: 90vh;
@@ -3139,7 +3139,7 @@ button:active:not(:disabled) {
     animation: modal-enter 0.18s ease-out both;
 }
 
-.avatar-viewer-image {
+.image-viewer-image {
     max-width: 90vw;
     max-height: 85vh;
     width: auto;
@@ -3149,7 +3149,7 @@ button:active:not(:disabled) {
     box-shadow: var(--shadow-xl);
 }
 
-.avatar-viewer-close {
+.image-viewer-close {
     border: 1px solid var(--glass-border-hi);
     background: var(--glass-3);
     color: var(--text-1);
@@ -3163,8 +3163,54 @@ button:active:not(:disabled) {
     transition: background 0.15s, transform 0.12s;
 }
 
-.avatar-viewer-close:hover {
+.image-viewer-close:hover {
     background: rgba(255, 255, 255, 0.14);
+}
+
+.image-viewer-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--glass-border-hi);
+    background: var(--glass-3);
+    color: var(--text-1);
+    border-radius: 50%;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.image-viewer-nav:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.image-viewer-nav.prev {
+    left: -56px;
+}
+
+.image-viewer-nav.next {
+    right: -56px;
+}
+
+.image-viewer-counter {
+    color: var(--text-2);
+    font-family: var(--font);
+    font-size: 12px;
+}
+
+@media (max-width: 768px) {
+    .image-viewer-nav.prev {
+        left: 8px;
+    }
+
+    .image-viewer-nav.next {
+        right: 8px;
+    }
 }
 
 /* ================================================================
@@ -3195,6 +3241,7 @@ button:active:not(:disabled) {
 
 .image-attachment {
     display: block;
+    cursor: zoom-in;
 }
 
 .video-attachment {
@@ -3467,12 +3514,12 @@ button:active:not(:disabled) {
     animation: modal-exit 0.16s ease-out both;
 }
 
-.avatar-viewer-overlay.closing {
+.image-viewer-overlay.closing {
     animation: overlay-fade-out 0.16s ease-out both;
     pointer-events: none;
 }
 
-.avatar-viewer-overlay.closing .avatar-viewer-content {
+.image-viewer-overlay.closing .image-viewer-content {
     animation: modal-exit 0.16s ease-out both;
 }
 
@@ -3549,7 +3596,7 @@ body,
 .channels-add-btn:active:not(:disabled),
 .theme-toggle-btn:active:not(:disabled),
 .profile-open-btn:active:not(:disabled),
-.avatar-viewer-close:active {
+.image-viewer-close:active {
     transform: scale(0.96);
 }
 
@@ -3575,8 +3622,8 @@ body,
 
     .modal-overlay.closing,
     .modal-overlay.closing .modal-card,
-    .avatar-viewer-overlay.closing,
-    .avatar-viewer-overlay.closing .avatar-viewer-content {
+    .image-viewer-overlay.closing,
+    .image-viewer-overlay.closing .image-viewer-content {
         animation: none;
     }
 

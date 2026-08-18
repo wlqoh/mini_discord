@@ -4,6 +4,7 @@ import type { Attachment, Message, ReplyPreview, ServerMember } from "../types/c
 import MediaPlayer from "./MediaPlayer";
 import VideoPlayer from "./VideoPlayer";
 import LinkPreviewCard from "./LinkPreviewCard.tsx";
+import type { ViewerImage } from "./ImageViewerModal.tsx";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu.tsx";
 import { useToast } from "./Toast.tsx";
 import { guessFormatFromContentType } from "../types/media";
@@ -22,6 +23,7 @@ type Props = {
     messages: Message[];
     currentUserId: number | null;
     onOpenProfile?: (userId: number) => void;
+    onOpenImage?: (items: ViewerImage[], index: number) => void;
     onDeleteMessage?: (messageId: number, channelId: number) => void;
     onEditMessage?: (messageId: number, content: string) => Promise<void>;
     onReply?: (message: Message) => void;
@@ -241,10 +243,29 @@ function VideoAttachment({ att }: { att: Attachment }) {
     );
 }
 
-function renderAttachment(att: Attachment) {
+function renderAttachment(
+    att: Attachment,
+    images: ViewerImage[],
+    onOpenImage?: (items: ViewerImage[], index: number) => void,
+) {
     if (isImageType(att.content_type)) {
+        const index = images.findIndex((img) => img.url === att.url);
         return (
-            <a key={att.url} href={att.url} target="_blank" rel="noopener noreferrer" className="message-attachment image-attachment">
+            <a
+                key={att.url}
+                href={att.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="message-attachment image-attachment"
+                onClick={(e) => {
+                    // Модалку открывает только обычный левый клик. Ctrl/Cmd/Shift/Alt
+                    // оставляем браузеру: «открыть в новой вкладке» и «сохранить»
+                    // там нужнее нашего окна.
+                    if (!onOpenImage || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+                    e.preventDefault();
+                    onOpenImage(images, index < 0 ? 0 : index);
+                }}
+            >
                 <img src={att.url} alt={att.file_name} className="message-attachment-img" loading="lazy" />
             </a>
         );
@@ -400,6 +421,7 @@ export default function MessageList({
     messages,
     currentUserId,
     onOpenProfile,
+    onOpenImage,
     onDeleteMessage,
     onEditMessage,
     onReply,
@@ -536,6 +558,9 @@ export default function MessageList({
                 const isNew = msg.id > initialMaxId;
                 const isMentioned =
                     !isOwn && currentUserId !== null && (msg.mentions?.includes(currentUserId) || msg.mentions_everyone === true);
+                const messageImages: ViewerImage[] = (msg.attachments ?? [])
+                    .filter((att) => isImageType(att.content_type))
+                    .map((att) => ({ url: att.url, alt: att.file_name }));
 
                 return (
                     <div
@@ -655,7 +680,7 @@ export default function MessageList({
                             )}
                             {msg.attachments && msg.attachments.length > 0 && (
                                 <div className="message-attachments">
-                                    {msg.attachments.map(renderAttachment)}
+                                    {msg.attachments.map((att) => renderAttachment(att, messageImages, onOpenImage))}
                                 </div>
                             )}
                             {/* Карточки внизу сообщения: они приезжают позже остального
