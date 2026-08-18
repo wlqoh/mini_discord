@@ -3,7 +3,7 @@ import type React from "react";
 import type { NavigateFunction } from "react-router-dom";
 import API from "../api";
 import { extractApiError } from "../services/apiError";
-import { CallClient } from "../services/callClient.ts";
+import type { VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import { clearAuthStorage } from "../services/authToken.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
@@ -20,7 +20,7 @@ const CHAT_SELECTED_SERVER_KEY = "chat_selected_server_id";
 
 type Params = {
     socketRef: React.MutableRefObject<ChatSocket | null>;
-    callClientRef: React.MutableRefObject<CallClient | null>;
+    callClientRef: React.MutableRefObject<VoiceClient | null>;
     avatarInputRef: React.MutableRefObject<HTMLInputElement | null>;
     currentUserId: number | null;
     currentUserProfile: CurrentUserProfile | null;

@@ -15,9 +15,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/embed"
 	"github.com/wlqoh/mini_discord.git/internal/service/push"
+	"github.com/wlqoh/mini_discord.git/internal/service/sfu"
+	"github.com/wlqoh/mini_discord.git/internal/service/webrtc"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -38,6 +41,10 @@ type Hub struct {
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
 	typingChannelByUser  map[int]int64
+	webrtcConfig         config.WebRTCConfig
+	sfuRouter            *sfu.Router         // nil when SFU is disabled or failed to start
+	sfuSessionByUser     map[int]string      // userID -> SFU session ID, guarded by mu
+	sfuGraceTimers       map[int]*time.Timer // userID -> pending expireVoiceSession timer, guarded by mu
 
 	jwtSecret []byte
 
@@ -71,8 +78,8 @@ const maxEditWindow = 15 * time.Minute
 
 var mentionTokenRegex = regexp.MustCompile(`<@(\d+)>`)
 
-func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender, embedService *embed.Service) *Hub {
-	return &Hub{
+func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender, embedService *embed.Service, webrtcConfig config.WebRTCConfig) *Hub {
+	h := &Hub{
 		storage:              storage,
 		s3Client:             s3Client,
 		s3Host:               strings.TrimSpace(s3Host),
@@ -88,12 +95,155 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 		userVoiceChannel:     make(map[int]int64),
 		voiceStatusByUser:    make(map[int]voiceStatus),
 		typingChannelByUser:  make(map[int]int64),
+		webrtcConfig:         webrtcConfig,
+		sfuSessionByUser:     make(map[int]string),
+		sfuGraceTimers:       make(map[int]*time.Timer),
 		pendingAttachments:   make(map[int64]*types.PendingAttachment),
 		log:                  log,
 		Register:             make(chan *Client),
 		Unregister:           make(chan *Client),
 		Commands:             make(chan wsCommandRequest, 64),
 	}
+
+	if webrtcConfig.SFU.Enabled {
+		router, err := sfu.New(sfu.Config{
+			PublicIP:            webrtcConfig.SFU.PublicIP,
+			UDPPort:             webrtcConfig.SFU.UDPPort,
+			StunURLs:            webrtcConfig.SFU.StunURLs,
+			MaxRoomParticipants: webrtcConfig.SFU.MaxRoomParticipants,
+			SessionGracePeriod:  webrtcConfig.SFU.SessionGracePeriod,
+		}, h, h, log)
+		if err != nil {
+			// Never let a router construction failure (e.g. the UDP port is
+			// already in use) take the whole process down with it — chat and
+			// every other feature keep working; only join_voice_channel fails
+			// (h.sfuRouter stays nil, see its nil check there) until this is
+			// fixed and the backend restarted.
+			log.Error("sfu: failed to start router, voice will be unavailable", "err", err)
+		} else {
+			h.sfuRouter = router
+		}
+	}
+
+	return h
+}
+
+// SFURouter exposes the SFU router for the admin debug endpoint
+// (GET /api/v1/admin/sfu/rooms — sfu-migration-plan.md §7 phase 1, decision
+// #12). Returns nil when SFU is disabled or failed to start.
+func (h *Hub) SFURouter() *sfu.Router {
+	return h.sfuRouter
+}
+
+// --- sfu.Authorizer ---
+
+func (h *Hub) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
+	return h.storage.CanUserAccessChannel(ctx, userID, channelID)
+}
+
+// --- sfu.Signaler ---
+//
+// Each method below fans an SFU event out over the same client WebSocket
+// used for chat and the mesh signaling it's replacing (decision #11's
+// choice of a namespace rather than a new connection). pushToUserID/
+// broadcastToChannelVoice release h.mu before calling pushEvent/pushToUsers,
+// which take it again themselves — see those functions' own locking.
+
+func (h *Hub) pushToUserID(userID int, event *types.WsEvent) {
+	h.mu.RLock()
+	cl, ok := h.clientsByUser[userID]
+	h.mu.RUnlock()
+	if !ok {
+		return
+	}
+	h.pushEvent(cl, event)
+}
+
+func (h *Hub) broadcastToChannelVoice(channelID int64, event *types.WsEvent) {
+	h.mu.RLock()
+	participants := h.voiceParticipants[channelID]
+	userIDs := make([]int, 0, len(participants))
+	for userID := range participants {
+		userIDs = append(userIDs, userID)
+	}
+	h.mu.RUnlock()
+	h.pushToUsers(userIDs, event)
+}
+
+func (h *Hub) SendOffer(userID int, sessionID string, sdp string) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuOffer,
+		Data:  types.WsSfuOfferEvent{SessionID: sessionID, SDP: sdp},
+	})
+}
+
+func (h *Hub) SendAnswer(userID int, sessionID string, sdp string) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuAnswer,
+		Data:  types.WsSfuAnswerPayload{SessionID: sessionID, SDP: sdp},
+	})
+}
+
+func (h *Hub) SendCandidate(userID int, sessionID string, c sfu.CandidateInit) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuCandidate,
+		Data: types.WsSfuCandidatePayload{
+			SessionID:     sessionID,
+			Candidate:     c.Candidate,
+			SDPMid:        c.SDPMid,
+			SDPMLineIndex: c.SDPMLineIndex,
+		},
+	})
+}
+
+func (h *Hub) SendTrackPublished(channelID int64, t sfu.TrackInfo) {
+	h.broadcastToChannelVoice(channelID, &types.WsEvent{
+		Event: types.WsEventSfuTrackPublished,
+		Data:  types.WsSfuTrackEvent{ChannelID: channelID, UserID: t.UserID, Source: string(t.Source), Kind: t.Kind},
+	})
+}
+
+func (h *Hub) SendTrackPublishedTo(userID int, channelID int64, t sfu.TrackInfo) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuTrackPublished,
+		Data:  types.WsSfuTrackEvent{ChannelID: channelID, UserID: t.UserID, Source: string(t.Source), Kind: t.Kind},
+	})
+}
+
+func (h *Hub) SendTrackUnpublished(channelID int64, t sfu.TrackInfo) {
+	h.broadcastToChannelVoice(channelID, &types.WsEvent{
+		Event: types.WsEventSfuTrackUnpublished,
+		Data:  types.WsSfuTrackEvent{ChannelID: channelID, UserID: t.UserID, Source: string(t.Source), Kind: t.Kind},
+	})
+}
+
+func (h *Hub) SendActiveSpeakers(channelID int64, userIDs []int) {
+	h.broadcastToChannelVoice(channelID, &types.WsEvent{
+		Event: types.WsEventSfuActiveSpeakers,
+		Data:  types.WsSfuActiveSpeakersEvent{ChannelID: channelID, UserIDs: userIDs},
+	})
+}
+
+func (h *Hub) SendError(userID int, sessionID, code, message string) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuError,
+		Data:  types.WsSfuErrorEvent{SessionID: sessionID, Code: code, Message: message},
+	})
+}
+
+// buildSFUIceServers hands an SFU client the same STUN default and coturn
+// TURN credentials the mesh path uses (see turnApi.ts / MintTurnCredentials)
+// — an SFU client behind a symmetric NAT/CGNAT still needs a relay to reach
+// the SFU's public UDP port, same as a mesh client needs one to reach a peer.
+func (h *Hub) buildSFUIceServers(userID int) []types.WsICEServer {
+	var servers []types.WsICEServer
+	if len(h.webrtcConfig.SFU.StunURLs) > 0 {
+		servers = append(servers, types.WsICEServer{URLs: h.webrtcConfig.SFU.StunURLs})
+	}
+	if creds, ok := webrtc.MintTurnCredentials(h.webrtcConfig, userID); ok {
+		servers = append(servers, types.WsICEServer{URLs: creds.URLs, Username: creds.Username, Credential: creds.Credential})
+	}
+	return servers
 }
 
 func (h *Hub) StorePendingAttachment(pa types.PendingAttachment) int64 {
@@ -159,9 +309,69 @@ func (h *Hub) unregisterClient(cl *Client) {
 	h.mu.Unlock()
 
 	if removed {
-		h.leaveVoiceChannelInternal(cl, false)
+		h.handleVoiceDisconnect(cl.UserID)
 		h.stopTypingOnDisconnect(cl)
 	}
+}
+
+// handleVoiceDisconnect decides how a dropped WebSocket affects voice
+// membership. An SFU session gets a grace period (decision #10,
+// sfu-migration-plan.md §7 phase 3): the media transport to the SFU doesn't
+// depend on the WebSocket, so a brief signaling blip (Wi-Fi↔LTE, a backend
+// restart, a sleeping laptop) no longer has to drop the call. Mesh has no
+// such mechanism — every peer link there IS the signaling connection — so
+// it keeps leaving immediately, same as before this phase.
+func (h *Hub) handleVoiceDisconnect(userID int) {
+	h.mu.RLock()
+	sessionID, hasSFUSession := h.sfuSessionByUser[userID]
+	channelID, inVoice := h.userVoiceChannel[userID]
+	h.mu.RUnlock()
+
+	if !hasSFUSession || !inVoice || h.sfuRouter == nil {
+		h.leaveVoiceChannelInternal(userID)
+		return
+	}
+
+	h.sfuRouter.Detach(sessionID)
+
+	h.mu.RLock()
+	participants := h.voiceParticipants[channelID]
+	notifyUsers := make([]int, 0, len(participants))
+	for id := range participants {
+		if id != userID {
+			notifyUsers = append(notifyUsers, id)
+		}
+	}
+	h.mu.RUnlock()
+	h.pushToUsers(notifyUsers, &types.WsEvent{
+		Event: types.WsEventVoiceUserDetached,
+		Data:  types.WsVoiceUserEvent{ChannelID: channelID, User: types.WsVoiceParticipant{UserID: userID}},
+	})
+
+	timer := time.AfterFunc(h.webrtcConfig.SFU.SessionGracePeriod, func() {
+		h.expireVoiceSession(userID, sessionID)
+	})
+	h.mu.Lock()
+	h.sfuGraceTimers[userID] = timer
+	h.mu.Unlock()
+}
+
+// expireVoiceSession runs when a Detach's grace period times out without a
+// matching Resume. Guards against the timer firing after the user already
+// resumed (fresh session — sfuSessionByUser no longer matches) or already
+// left explicitly (map entry gone) by comparing sessionID before acting;
+// both are legitimate races between this timer and the WS reconnecting.
+func (h *Hub) expireVoiceSession(userID int, sessionID string) {
+	h.mu.Lock()
+	current, ok := h.sfuSessionByUser[userID]
+	delete(h.sfuGraceTimers, userID)
+	h.mu.Unlock()
+
+	if !ok || current != sessionID {
+		return
+	}
+
+	h.leaveVoiceChannelInternal(userID)
 }
 
 func (h *Hub) stopTypingOnDisconnect(cl *Client) {
@@ -225,8 +435,27 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		h.joinVoiceChannel(req, ctx)
 	case types.WsActionLeaveVoiceChannel:
 		h.leaveVoiceChannel(req)
-	case types.WsActionRTCSignal:
-		h.relayRTCSignal(req, ctx)
+	case types.WsActionSfuOffer:
+		// SDP/ICE handling can block on Pion (crypto, SDP parsing) for long
+		// enough to matter, and the sfu package internally serializes
+		// per-session work on its own (see Peer's command queue in
+		// internal/service/sfu/peer.go) — so like the read-only handlers
+		// above, this doesn't need Run()'s serialization and must not block
+		// it (sfu-migration-plan.md §8 pitfall #2).
+		go h.handleSfuOffer(req)
+	case types.WsActionSfuAnswer:
+		go h.handleSfuAnswer(req)
+	case types.WsActionSfuCandidate:
+		go h.handleSfuCandidate(req)
+	case types.WsActionSfuSubscribeVideo:
+		go h.handleSfuSubscribeVideo(req)
+	case types.WsActionSfuResume:
+		go h.handleSfuResume(req, ctx)
+	case types.WsActionSfuPublishState:
+		// Purely an in-memory map read + broadcast (no Pion/DB work), same
+		// as changeVoiceStatus below — runs on Run() like the other fast
+		// handlers instead of being dispatched via go.
+		h.handleSfuPublishState(req)
 	case types.WsActionSearchServers:
 		h.searchServers(req, ctx)
 	case types.WsActionGetUserInfo:
@@ -253,7 +482,7 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 	case types.WsActionSearchMessages:
 		// The only command whose latency is inherently unpredictable (full-text
 		// scan across an arbitrary date range): running it synchronously would
-		// stall send_message/typing/rtc_signal for every other connected client
+		// stall send_message/typing/sfu_offer for every other connected client
 		// until the query returns. Safe to hand off because pushEvent takes
 		// h.mu.RLock before touching clientsByUser, and unregisterClient closes
 		// Outbound under the paired write lock — so a client that disconnects
@@ -425,15 +654,18 @@ func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 }
 
 // isCriticalVoiceEvent identifies events whose silent loss leaves a client in
-// a state it cannot recover from on its own: a missed rtc_signal breaks one
-// P2P link forever, and a missed voice_user_joined/left/status_changed
+// a state it cannot recover from on its own: there is exactly one
+// PeerConnection per SFU client, so losing any offer/answer/candidate
+// breaks the entire call, and a missed voice_user_joined/left/status_changed
 // desyncs the client's view of who's in the call from the server's.
 func isCriticalVoiceEvent(event string) bool {
 	switch event {
-	case types.WsEventRTCSignal,
-		types.WsEventVoiceUserJoined,
+	case types.WsEventVoiceUserJoined,
 		types.WsEventVoiceUserLeft,
-		types.WsEventVoiceStatusChanged:
+		types.WsEventVoiceStatusChanged,
+		types.WsEventSfuOffer,
+		types.WsEventSfuAnswer,
+		types.WsEventSfuCandidate:
 		return true
 	}
 	return false
@@ -1427,7 +1659,23 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 		return
 	}
 
-	h.leaveVoiceChannelInternal(req.client, false)
+	// Mesh was removed once the SFU migration cleared its criteria
+	// (sfu-migration-plan.md §9) — the SFU router is the only voice
+	// transport now, so an unavailable router means voice is unavailable,
+	// not a fallback to a different implementation.
+	if h.sfuRouter == nil {
+		h.pushError(req.client, "voice is not available right now")
+		return
+	}
+
+	h.leaveVoiceChannelInternal(req.client.UserID)
+
+	sessionID, err := h.sfuRouter.Join(req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.log.Error("sfu: join failed", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
+		h.pushError(req.client, "failed to start voice session")
+		return
+	}
 
 	h.mu.Lock()
 	participants := h.voiceParticipants[payload.ChannelID]
@@ -1438,6 +1686,7 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 	participants[req.client.UserID] = struct{}{}
 	h.userVoiceChannel[req.client.UserID] = payload.ChannelID
 	h.voiceStatusByUser[req.client.UserID] = voiceStatus{micEnabled: true, deafened: false}
+	h.sfuSessionByUser[req.client.UserID] = sessionID
 
 	otherUserIDs := make([]int, 0, len(participants))
 	for userID := range participants {
@@ -1453,12 +1702,22 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 		peers = append(peers, h.resolveVoiceParticipant(ctx, userID))
 	}
 
+	iceServers := h.buildSFUIceServers(req.client.UserID)
+	publishSlots := make([]types.WsPublishSlot, 0, len(sfu.PublishSlots))
+	for _, slot := range sfu.PublishSlots {
+		publishSlots = append(publishSlots, types.WsPublishSlot{Kind: slot.Kind, Source: string(slot.Source)})
+	}
+
 	selfParticipant := h.resolveVoiceParticipant(ctx, req.client.UserID)
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,
 		Data: types.WsJoinVoiceChannelResponse{
-			ChannelID:    payload.ChannelID,
-			Participants: peers,
+			ChannelID:     payload.ChannelID,
+			Participants:  peers,
+			TransportMode: types.TransportModeSFU,
+			SessionID:     sessionID,
+			ICEServers:    iceServers,
+			PublishSlots:  publishSlots,
 		},
 	})
 
@@ -1478,108 +1737,278 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 }
 
 func (h *Hub) leaveVoiceChannel(req wsCommandRequest) {
-	h.leaveVoiceChannelInternal(req.client, true)
+	channelID := h.leaveVoiceChannelInternal(req.client.UserID)
+	if channelID == 0 {
+		h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+		return
+	}
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventAck,
+		Data:  map[string]any{"channel_id": channelID},
+	})
 }
 
-// pushRTCSignalError reports a rtc_signal validation failure. It deliberately
-// uses a dedicated event type instead of pushError/WsEventError: rtc_signal
-// is sent fire-and-forget (it bypasses the client's request/ack queue), so a
-// plain "error" event here would be misattributed to whatever unrelated
-// command the client happens to be awaiting (e.g. rejecting a perfectly
-// successful join_voice_channel because of a stale rtc_signal race).
-func (h *Hub) pushRTCSignalError(cl *Client, message string) {
-	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventRTCSignalError, Error: message})
+// pushSfuError mirrors the mesh-era pushRTCSignalError (removed with mesh
+// itself — sfu-migration-plan.md §9) for the sfu_* namespace:
+// sfu_offer/sfu_answer/sfu_candidate all run off the Run() loop (see the
+// dispatch comment in handleCommand), and sfu_candidate specifically
+// bypasses the client's request/ack queue (see chatSocket.ts), so a plain
+// "error" event here would be misattributed to whatever unrelated command
+// the client happens to be awaiting.
+func (h *Hub) pushSfuError(cl *Client, sessionID, code, message string) {
+	h.pushEvent(cl, &types.WsEvent{
+		Event: types.WsEventSfuError,
+		Data:  types.WsSfuErrorEvent{SessionID: sessionID, Code: code, Message: message},
+	})
 }
 
-func (h *Hub) relayRTCSignal(req wsCommandRequest, ctx context.Context) {
-	var payload types.WsRTCSignalRequest
+// ownsSfuSession guards every sfu_* handler below: sessionIDs are
+// unguessable (uuid.NewString(), see sfu.Router.Join) so this is defense in
+// depth rather than the only thing standing between users, but it's cheap
+// and closes off one user ever driving another's SFU peer connection via a
+// stolen/mistyped session_id.
+func (h *Hub) ownsSfuSession(userID int, sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.sfuSessionByUser[userID] == sessionID
+}
+
+func (h *Hub) handleSfuOffer(req wsCommandRequest) {
+	var payload types.WsSfuOfferRequest
 	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
-		h.pushRTCSignalError(req.client, "invalid rtc_signal payload")
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_offer payload")
+		return
+	}
+	if h.sfuRouter == nil || !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
 		return
 	}
 
-	payload.SignalType = strings.TrimSpace(strings.ToLower(payload.SignalType))
-	if payload.ChannelID <= 0 || payload.ToUserID <= 0 || payload.SignalType == "" {
-		h.pushRTCSignalError(req.client, "channel_id, to_user_id and signal_type are required")
+	slots := make([]sfu.SlotDecl, 0, len(payload.Slots))
+	for _, s := range payload.Slots {
+		slots = append(slots, sfu.SlotDecl{MID: s.MID, Kind: s.Kind, Source: sfu.Source(s.Source)})
+	}
+
+	if err := h.sfuRouter.HandleOffer(payload.SessionID, payload.SDP, slots); err != nil {
+		h.pushSfuError(req.client, payload.SessionID, "offer_failed", err.Error())
 		return
 	}
-	if payload.SignalType != "offer" && payload.SignalType != "answer" && payload.SignalType != "candidate" {
-		h.pushRTCSignalError(req.client, "unsupported signal_type")
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
+}
+
+func (h *Hub) handleSfuAnswer(req wsCommandRequest) {
+	var payload types.WsSfuAnswerPayload
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_answer payload")
+		return
+	}
+	if h.sfuRouter == nil || !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
+		return
+	}
+	if err := h.sfuRouter.HandleAnswer(payload.SessionID, payload.SDP); err != nil {
+		h.pushSfuError(req.client, payload.SessionID, "answer_failed", err.Error())
+		return
+	}
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
+}
+
+func (h *Hub) handleSfuCandidate(req wsCommandRequest) {
+	var payload types.WsSfuCandidatePayload
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_candidate payload")
+		return
+	}
+	if h.sfuRouter == nil || !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
+		return
+	}
+	if err := h.sfuRouter.HandleCandidate(payload.SessionID, sfu.CandidateInit{
+		Candidate:     payload.Candidate,
+		SDPMid:        payload.SDPMid,
+		SDPMLineIndex: payload.SDPMLineIndex,
+	}); err != nil {
+		h.pushSfuError(req.client, payload.SessionID, "candidate_failed", err.Error())
+	}
+}
+
+func (h *Hub) handleSfuSubscribeVideo(req wsCommandRequest) {
+	var payload types.WsSfuSubscribeVideoRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_subscribe_video payload")
+		return
+	}
+	if h.sfuRouter == nil || !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
 		return
 	}
 
-	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
-	if err != nil {
-		h.pushRTCSignalError(req.client, "failed to check channel access")
+	quality := sfu.Quality(payload.Quality)
+	if quality != sfu.QualityOff && quality != sfu.QualityLow && quality != sfu.QualityHigh {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_quality", "quality must be off, low, or high")
 		return
 	}
-	if !canAccess {
-		h.pushRTCSignalError(req.client, "access denied")
+
+	if err := h.sfuRouter.SubscribeVideo(payload.SessionID, payload.TargetUserID, sfu.Source(payload.Source), quality); err != nil {
+		h.pushSfuError(req.client, payload.SessionID, "subscribe_failed", err.Error())
+		return
+	}
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
+}
+
+// handleSfuPublishState implements sfu_publish_state (see
+// types.WsActionSfuPublishState's doc comment for why this exists): records
+// a publisher's explicit "this source started/stopped producing media" on
+// the router — so it can request a keyframe on resume and answer a late
+// joiner's snapshot honestly — then relays it through as the same
+// sfu_track_published/unpublished events a first publish uses. Unlike every
+// other sfu_* handler it runs synchronously on Run() instead of via go:
+// SetPublishState is cheap (a map write under a narrow mutex, no I/O), the
+// same shape as changeVoiceStatus below.
+func (h *Hub) handleSfuPublishState(req wsCommandRequest) {
+	var payload types.WsSfuPublishStateRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_publish_state payload")
+		return
+	}
+	if !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
+		return
+	}
+	source := sfu.Source(payload.Source)
+	if source != sfu.SourceScreen && source != sfu.SourceCamera {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_source", "publish state is only supported for screen and camera")
 		return
 	}
 
 	h.mu.RLock()
-	senderChannelID, senderInVoice := h.userVoiceChannel[req.client.UserID]
-	targetChannelID, targetInVoice := h.userVoiceChannel[payload.ToUserID]
-	targetClient, targetConnected := h.clientsByUser[payload.ToUserID]
+	channelID := h.userVoiceChannel[req.client.UserID]
 	h.mu.RUnlock()
 
-	if !senderInVoice || senderChannelID != payload.ChannelID {
-		h.pushRTCSignalError(req.client, "join voice channel before signaling")
+	if h.sfuRouter != nil {
+		if err := h.sfuRouter.SetPublishState(payload.SessionID, source, payload.Active); err != nil {
+			h.log.Debug("sfu: set publish state failed", "err", err)
+		}
+	}
+
+	info := sfu.TrackInfo{UserID: req.client.UserID, Source: source, Kind: "video"}
+	if payload.Active {
+		h.SendTrackPublished(channelID, info)
+	} else {
+		h.SendTrackUnpublished(channelID, info)
+	}
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck, RequestID: req.command.RequestID})
+}
+
+// handleSfuResume implements sfu_resume (migration phase 3, decision #10):
+// the client's WebSocket reconnected within the grace period Detach opened,
+// so it's asking to keep using its existing SFU PeerConnection instead of a
+// fresh join. Runs off the Run() loop (dispatched via go in handleCommand)
+// since it hits the DB (CanUserAccessChannel, resolveVoiceParticipant).
+func (h *Hub) handleSfuResume(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsSfuResumeRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushSfuError(req.client, "", "invalid_payload", "invalid sfu_resume payload")
 		return
 	}
-	if !targetInVoice || targetChannelID != payload.ChannelID || !targetConnected {
-		h.pushRTCSignalError(req.client, "recipient not in channel")
+	if h.sfuRouter == nil || !h.ownsSfuSession(req.client.UserID, payload.SessionID) {
+		h.pushSfuError(req.client, payload.SessionID, "invalid_session", "unknown or foreign SFU session")
 		return
 	}
 
-	h.pushEvent(targetClient, &types.WsEvent{
-		Event: types.WsEventRTCSignal,
-		Data: types.WsRTCSignalEvent{
-			ChannelID:     payload.ChannelID,
-			FromUserID:    req.client.UserID,
-			SignalType:    payload.SignalType,
-			SDP:           payload.SDP,
-			Candidate:     payload.Candidate,
-			SDPMid:        payload.SDPMid,
-			SDPMLineIndex: payload.SDPMLineIndex,
-		},
+	if err := h.sfuRouter.Resume(ctx, payload.SessionID, req.client.UserID); err != nil {
+		h.pushSfuError(req.client, payload.SessionID, "resume_failed", err.Error())
+		// Don't make them wait out the rest of the grace period for a resume
+		// that's already known to have failed (e.g. access was revoked while
+		// they were disconnected) — expireVoiceSession is idempotent against
+		// a concurrent real timer firing (it re-checks the session ID).
+		h.expireVoiceSession(req.client.UserID, payload.SessionID)
+		return
+	}
+
+	h.mu.Lock()
+	if timer, ok := h.sfuGraceTimers[req.client.UserID]; ok {
+		timer.Stop()
+		delete(h.sfuGraceTimers, req.client.UserID)
+	}
+	channelID := h.userVoiceChannel[req.client.UserID]
+	participants := h.voiceParticipants[channelID]
+	otherUserIDs := make([]int, 0, len(participants))
+	for userID := range participants {
+		if userID != req.client.UserID {
+			otherUserIDs = append(otherUserIDs, userID)
+		}
+	}
+	h.mu.Unlock()
+
+	peers := make([]types.WsVoiceParticipant, 0, len(otherUserIDs))
+	for _, userID := range otherUserIDs {
+		peers = append(peers, h.resolveVoiceParticipant(ctx, userID))
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event:     types.WsEventAck,
+		RequestID: req.command.RequestID,
+		Data:      types.WsSfuResumeResponse{OK: true, Participants: peers},
+	})
+
+	h.pushToUsers(otherUserIDs, &types.WsEvent{
+		Event: types.WsEventVoiceUserResumed,
+		Data:  types.WsVoiceUserEvent{ChannelID: channelID, User: h.resolveVoiceParticipant(ctx, req.client.UserID)},
 	})
 }
 
-func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
+// leaveVoiceChannelInternal removes userID from whatever voice channel it is
+// in — including tearing down its SFU session, if any — and broadcasts
+// voice_user_left. Returns the channel ID it left (0 if it wasn't in one).
+// Deals only with domain state, not any one WebSocket connection: callers
+// that need to ack a specific client build that themselves from the
+// returned channel ID (see leaveVoiceChannel below), since a caller acting
+// on a grace-period expiry (see expireVoiceSession) may have no live
+// *Client for this user to push anything to at all.
+func (h *Hub) leaveVoiceChannelInternal(userID int) int64 {
 	h.mu.Lock()
-	channelID, ok := h.userVoiceChannel[cl.UserID]
+	channelID, ok := h.userVoiceChannel[userID]
 	if !ok {
 		h.mu.Unlock()
-		if ack {
-			h.pushEvent(cl, &types.WsEvent{Event: types.WsEventAck})
-		}
-		return
+		return 0
 	}
 
-	delete(h.userVoiceChannel, cl.UserID)
-	delete(h.voiceStatusByUser, cl.UserID)
+	delete(h.userVoiceChannel, userID)
+	delete(h.voiceStatusByUser, userID)
+	sfuSessionID, hadSFUSession := h.sfuSessionByUser[userID]
+	delete(h.sfuSessionByUser, userID)
+	if timer, ok := h.sfuGraceTimers[userID]; ok {
+		timer.Stop()
+		delete(h.sfuGraceTimers, userID)
+	}
 	participants := h.voiceParticipants[channelID]
 	if participants != nil {
-		delete(participants, cl.UserID)
+		delete(participants, userID)
 		if len(participants) == 0 {
 			delete(h.voiceParticipants, channelID)
 		}
 	}
 
 	notifyUsers := make([]int, 0, len(participants))
-	for userID := range participants {
-		notifyUsers = append(notifyUsers, userID)
+	for id := range participants {
+		notifyUsers = append(notifyUsers, id)
 	}
 	h.mu.Unlock()
+
+	if hadSFUSession && h.sfuRouter != nil {
+		h.sfuRouter.Leave(sfuSessionID)
+	}
 
 	ctx := context.Background()
 	channel, err := h.storage.GetChannelByID(ctx, channelID)
 	if err != nil {
 		h.log.Warn("failed to resolve channel for voice leave broadcast", "channel_id", channelID, "err", err)
 	} else if channel != nil {
-		serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, cl.UserID)
+		serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, userID)
 		if err != nil {
 			h.log.Warn("failed to resolve online users for voice leave broadcast", "server_id", channel.ServerID, "err", err)
 		} else {
@@ -1591,16 +2020,11 @@ func (h *Hub) leaveVoiceChannelInternal(cl *Client, ack bool) {
 		Event: types.WsEventVoiceUserLeft,
 		Data: types.WsVoiceUserEvent{
 			ChannelID: channelID,
-			User:      types.WsVoiceParticipant{UserID: cl.UserID},
+			User:      types.WsVoiceParticipant{UserID: userID},
 		},
 	})
 
-	if ack {
-		h.pushEvent(cl, &types.WsEvent{
-			Event: types.WsEventAck,
-			Data:  map[string]any{"channel_id": channelID},
-		})
-	}
+	return channelID
 }
 
 func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsVoiceParticipant {

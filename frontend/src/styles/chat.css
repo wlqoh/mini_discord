@@ -1147,6 +1147,23 @@ body {
     white-space: nowrap;
 }
 
+/* SFU grace-period reconnect (sfu-migration-plan.md §7 phase 3): media keeps
+   flowing the whole time, this is purely "their connection is having
+   trouble" affordance, not a membership change. */
+.video-tile--detached {
+    opacity: 0.5;
+}
+
+.video-tile--detached .video-el {
+    filter: grayscale(0.6);
+}
+
+/* Active speaker (decision #9): a steady ring, not an animation — a pulsing
+   border on every talking tile at once reads as noisy rather than helpful. */
+.video-tile--speaking {
+    box-shadow: 0 0 0 2px #22c55e, var(--shadow-md);
+}
+
 /* Connection quality indicator */
 .cq {
     display: inline-flex;
