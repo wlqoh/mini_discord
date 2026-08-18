@@ -27,6 +27,39 @@ import {
   CAMERA_SIMULCAST_ENCODINGS,
   SCREEN_BITRATE_PRESET,
 } from "./webrtcShared";
+import {
+  QUALITY_SAMPLE_INTERVAL_MS,
+  EMPTY_METRICS,
+  applyHysteresis,
+  buildQuality,
+  createQualityTracker,
+  qualitySignature,
+  readForcedLevel,
+  readQualitySample,
+  type PeerQuality,
+  type QualityLevel,
+  type QualityTracker,
+} from "./connectionQuality";
+
+/**
+ * States getStats() can't measure anything useful for — the RTCPeerConnection
+ * itself already knows definitively (mirrors the mesh-era helper of the same
+ * name, adapted to the SFU's single shared connection instead of one per
+ * remote peer).
+ */
+function serviceLevelOf(pc: RTCPeerConnection): QualityLevel | null {
+  switch (pc.connectionState) {
+    case "new":
+    case "connecting":
+      return "connecting";
+    case "disconnected":
+    case "failed":
+    case "closed":
+      return "disconnected";
+    default:
+      return null;
+  }
+}
 
 /**
  * SFU transport (sfu-migration-plan.md): the only VoiceClient implementation
@@ -45,13 +78,28 @@ export class SfuCallClient implements VoiceClient {
   private readonly onRemoteLeft: RemoteLeftListener;
   private readonly onLocalStream: LocalStreamListener;
   private readonly onError: ErrorListener;
-  // Unused in phase 1 (no per-connection quality signal in a star topology
-  // yet) — kept so this satisfies VoiceClient's constructor shape.
+  // There's exactly one PeerConnection (the star topology to the server),
+  // so unlike mesh there's only ever one quality reading to make — see
+  // sampleQuality/sampleConnection. It's reported under every currently
+  // known participant's userID, since in a star topology everyone's
+  // audio/video shares the same transport health.
   private readonly onQualityChange: QualityListener;
 
   private readonly unsubscribers: Array<() => void> = [];
   private readonly participants = new Map<number, VoiceParticipant>();
   private readonly remoteStreams = new Map<number, MediaStream>();
+  // Camera and screen publish as separate slots and can be live
+  // simultaneously (decision #3/§4.3), but the UI renders one tile per
+  // participant — a MediaStream with two video tracks leaves the browser to
+  // arbitrarily pick which one a <video> element actually shows, and it
+  // reliably picks camera. This tracks both candidates per participant so
+  // reconcileRemoteVideo can decide which one is actually in the combined
+  // stream, preferring an active screen share (see handleTrack).
+  private readonly remoteVideoTracks = new Map<number, { camera?: MediaStreamTrack; screen?: MediaStreamTrack }>();
+
+  private qualitySampleTimer: number | null = null;
+  private qualityTracker: QualityTracker = createQualityTracker();
+  private lastQualitySignature = "";
 
   private capture: LocalCapture | null = null;
   private localStream: MediaStream | null = null;
@@ -293,6 +341,8 @@ export class SfuCallClient implements VoiceClient {
 
     debugLog("sfu:offer-send", { sessionID: this.sessionID, slots });
     await this.socket.sendSfuOffer(this.sessionID, offer.sdp ?? "", slots);
+
+    this.startQualityMonitor();
   }
 
   private localTrackForSource(source: string): MediaStreamTrack | null {
@@ -314,13 +364,14 @@ export class SfuCallClient implements VoiceClient {
     const streamID = event.streams[0]?.id ?? "";
     // Server-assigned stream IDs are "u{userID}-{source}" (sfu-migration-
     // plan.md §4.4) — this is the only place that needs to know that format.
-    const match = /^u(\d+)-/.exec(streamID);
+    const match = /^u(\d+)-(.+)$/.exec(streamID);
     if (!match) {
       debugLog("sfu:ontrack-unrecognized-stream", { streamID });
       return;
     }
 
     const userID = Number(match[1]);
+    const source = match[2];
     if (userID === this.selfUserID) {
       return;
     }
@@ -332,11 +383,47 @@ export class SfuCallClient implements VoiceClient {
       stream = new MediaStream();
       this.remoteStreams.set(userID, stream);
     }
-    if (!stream.getTracks().some((existing) => existing.id === event.track.id)) {
-      stream.addTrack(event.track);
+    const combinedStream = stream;
+
+    if (event.track.kind === "video" && (source === "camera" || source === "screen")) {
+      const slots = this.remoteVideoTracks.get(userID) ?? {};
+      slots[source] = event.track;
+      this.remoteVideoTracks.set(userID, slots);
+
+      // Camera never truly stops (toggling it off just disables it, still
+      // sending black frames — decision #3), so `ended` alone would cover
+      // that slot. Screen sharing stops via replaceTrack(null) instead
+      // (sfu-migration-plan.md §6.4 / decision #3), which produces no more
+      // RTP at all without ever closing the transceiver — `ended` never
+      // fires for that. `mute`/`unmute` is what the browser actually uses
+      // to signal "no RTP arriving for this receiver right now", which is
+      // exactly this case, so it's the one that makes stopping a share
+      // reliably swap the tile back to camera.
+      const onSlotChanged = () => {
+        this.reconcileRemoteVideo(userID, combinedStream);
+        this.onRemoteStream(participant, combinedStream);
+      };
+      event.track.onmute = onSlotChanged;
+      event.track.onunmute = onSlotChanged;
+      event.track.onended = () => {
+        const current = this.remoteVideoTracks.get(userID);
+        if (current?.[source] === event.track) {
+          delete current[source];
+        }
+        onSlotChanged();
+      };
+
+      this.reconcileRemoteVideo(userID, combinedStream);
+      this.onRemoteStream(participant, combinedStream);
+      return;
     }
 
-    const combinedStream = stream;
+    // Audio (mic/screen_audio): the browser mixes and plays every audio
+    // track in a stream simultaneously, so — unlike video — there's no
+    // "only one wins" problem and both can just coexist here.
+    if (!combinedStream.getTracks().some((existing) => existing.id === event.track.id)) {
+      combinedStream.addTrack(event.track);
+    }
     event.track.onended = () => {
       const existing = combinedStream.getTracks().find((t) => t.id === event.track.id);
       if (existing) {
@@ -345,7 +432,26 @@ export class SfuCallClient implements VoiceClient {
       this.onRemoteStream(participant, combinedStream);
     };
 
-    this.onRemoteStream(participant, stream);
+    this.onRemoteStream(participant, combinedStream);
+  }
+
+  /** Picks which of a participant's camera/screen tracks should actually be
+   * in their combined tile's MediaStream, live screen share taking priority
+   * over camera (see the field doc on remoteVideoTracks for why this is
+   * needed at all). */
+  private reconcileRemoteVideo(userID: number, stream: MediaStream): void {
+    const slots = this.remoteVideoTracks.get(userID);
+    const isLive = (track?: MediaStreamTrack) => Boolean(track && track.readyState === "live" && !track.muted);
+    const desired = isLive(slots?.screen) ? slots!.screen! : isLive(slots?.camera) ? slots!.camera! : null;
+
+    for (const track of stream.getVideoTracks()) {
+      if (track !== desired) {
+        stream.removeTrack(track);
+      }
+    }
+    if (desired && !stream.getTracks().includes(desired)) {
+      stream.addTrack(desired);
+    }
   }
 
   private async handleServerOffer(event: SfuOfferEvent): Promise<void> {
@@ -503,6 +609,97 @@ export class SfuCallClient implements VoiceClient {
     }
   }
 
+  private startQualityMonitor(): void {
+    if (this.qualitySampleTimer !== null) {
+      return;
+    }
+    this.qualitySampleTimer = window.setInterval(() => {
+      void this.sampleQuality();
+    }, QUALITY_SAMPLE_INTERVAL_MS);
+  }
+
+  private stopQualityMonitor(): void {
+    if (this.qualitySampleTimer !== null) {
+      window.clearInterval(this.qualitySampleTimer);
+      this.qualitySampleTimer = null;
+    }
+    this.qualityTracker = createQualityTracker();
+    this.lastQualitySignature = "";
+    this.onQualityChange({});
+  }
+
+  /**
+   * Star topology (decision #6/§4): there's exactly one PeerConnection, so
+   * unlike mesh's per-peer sampling there's only ever one quality reading —
+   * getStats() aggregates inbound (everything from the server, i.e.
+   * everyone's audio/video) and outbound (this client's own publish slots)
+   * across every track on the connection. The same reading is reported
+   * under every currently known participant so both the per-tile badges and
+   * the toolbar's aggregate (worst-of-all, which collapses to this single
+   * value) light up correctly.
+   */
+  private async sampleQuality(): Promise<void> {
+    if (this.currentChannelID <= 0) {
+      return;
+    }
+
+    const quality = await this.sampleConnection(readForcedLevel());
+
+    // getStats() is async — leave()/teardown may have run while awaiting it.
+    if (this.currentChannelID <= 0) {
+      return;
+    }
+
+    const snapshot: Record<number, PeerQuality> = {};
+    for (const userID of this.participants.keys()) {
+      snapshot[userID] = quality;
+    }
+
+    const signature = qualitySignature(snapshot);
+    if (signature === this.lastQualitySignature) {
+      return;
+    }
+    this.lastQualitySignature = signature;
+    this.onQualityChange(snapshot);
+  }
+
+  private async sampleConnection(forcedLevel: QualityLevel | null): Promise<PeerQuality> {
+    const tracker = this.qualityTracker;
+
+    if (forcedLevel) {
+      tracker.level = forcedLevel;
+      return buildQuality(forcedLevel, EMPTY_METRICS, null);
+    }
+
+    const pc = this.pc;
+    if (!pc) {
+      return buildQuality(applyHysteresis(tracker, "disconnected"), EMPTY_METRICS, null);
+    }
+
+    const serviceLevel = serviceLevelOf(pc);
+    if (serviceLevel) {
+      return buildQuality(applyHysteresis(tracker, serviceLevel), EMPTY_METRICS, null);
+    }
+
+    let report: RTCStatsReport;
+    try {
+      report = await pc.getStats();
+    } catch {
+      return buildQuality(applyHysteresis(tracker, "connecting"), EMPTY_METRICS, null);
+    }
+
+    const sample = readQualitySample(report, tracker);
+    debugLog("sfu:quality-sample", { level: sample.level, ...sample.metrics });
+
+    // No previous counters yet, or nothing flowed this interval — nothing to
+    // measure, not evidence of a problem.
+    if (!sample.level) {
+      return buildQuality(applyHysteresis(tracker, "connecting"), sample.metrics, null);
+    }
+
+    return buildQuality(applyHysteresis(tracker, sample.level), sample.metrics, sample.direction);
+  }
+
   private handleVoiceUserJoined(event: VoiceUserEvent): void {
     if (event.channel_id !== this.currentChannelID || !event.user || event.user.user_id === this.selfUserID) {
       return;
@@ -515,6 +712,7 @@ export class SfuCallClient implements VoiceClient {
       return;
     }
     this.participants.delete(event.user.user_id);
+    this.remoteVideoTracks.delete(event.user.user_id);
     if (this.remoteStreams.has(event.user.user_id)) {
       this.remoteStreams.delete(event.user.user_id);
       this.onRemoteLeft(event.user.user_id);
@@ -559,12 +757,8 @@ export class SfuCallClient implements VoiceClient {
       }
     }
 
-    this.teardownPeerConnection();
+    this.teardownPeerConnection(); // also stops the quality monitor and clears onQualityChange
     this.participants.clear();
-    // No per-connection quality signal in phase 1 (see the field's doc
-    // comment) — clear whatever the UI was last showing rather than leave
-    // it stale.
-    this.onQualityChange({});
 
     this.screenStream?.getTracks().forEach((track) => track.stop());
     this.screenStream = null;
@@ -596,7 +790,10 @@ export class SfuCallClient implements VoiceClient {
       this.onRemoteLeft(userID);
     }
     this.remoteStreams.clear();
+    this.remoteVideoTracks.clear();
     this.currentChannelID = 0;
+
+    this.stopQualityMonitor();
   }
 
   dispose(): void {
