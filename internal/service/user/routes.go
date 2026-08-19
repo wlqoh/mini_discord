@@ -52,13 +52,13 @@ func (h *Handler) RegisterRoutes(router fiber.Router) {
 	uploadLimiterMW := uploadLimiter.FiberRateLimitMiddleware()
 	secret := []byte(h.cfg.JWTSecret)
 	router.Get("/getAvatar", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleGetImage)
-	router.Post("/setAvatar", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleSetImage)
+	router.Post("/setAvatar", uploadLimiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleSetImage)
 	router.Post("/upload", uploadLimiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpload)
 	router.Post("/login", limiterMW, h.handleLogin)
 	router.Post("/register", limiterMW, h.handleRegister)
 	router.Post("/verify-email", limiterMW, h.handleVerifyEmail)
 	router.Post("/resend-verification", limiterMW, h.handleResendVerification)
-	router.Post("/updateUser", middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpdateUser)
+	router.Post("/updateUser", limiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleUpdateUser)
 	router.Delete("/deleteUser", limiterMW, middleware.WithJWTAuth(h.storage, h.log, false, secret), h.handleDeleteUser)
 
 	router.Route("/tokens", func(router fiber.Router) {

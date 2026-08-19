@@ -64,7 +64,8 @@ export function useVoice({
     const [activeVolumeUserId, setActiveVolumeUserId] = useState<number | null>(null);
     const [isDeafened, setIsDeafened] = useState(false);
     const [isMicEnabled, setIsMicEnabled] = useState(true);
-    const [isCameraEnabled, setIsCameraEnabled] = useState(true);
+    const [isCameraEnabled, setIsCameraEnabled] = useState(false);
+    const [isCameraStarting, setIsCameraStarting] = useState(false);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
     const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
@@ -155,11 +156,9 @@ export function useVoice({
 
     const onLocalStream = useCallback((stream: MediaStream | null) => {
         setLocalStream(stream);
-        const hasVideoTrack = Boolean(stream?.getVideoTracks()[0]);
-        const isVideoEnabled = stream?.getVideoTracks()[0]?.enabled ?? false;
-        setIsCameraEnabled(hasVideoTrack && isVideoEnabled);
         setIsScreenSharing(callClientRef.current?.isScreenShareActive() ?? false);
         if (!stream) {
+            setIsCameraEnabled(false);
             setRemoteStreams([]);
             setIsSwitchingCamera(false);
             setIsTogglingScreenShare(false);
@@ -322,6 +321,7 @@ export function useVoice({
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
+            setIsCameraStarting(false);
             setIsSwitchingCamera(false);
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
@@ -386,6 +386,7 @@ export function useVoice({
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
+            setIsCameraStarting(false);
             setIsSwitchingCamera(false);
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
@@ -430,18 +431,26 @@ export function useVoice({
         }
     }, [isDeafened, isMicEnabled, callClientRef, currentUserId, voiceChannelId, socketRef]);
 
-    const toggleCamera = useCallback((): void => {
-        const videoTrack = localStream?.getVideoTracks()[0];
-        if (!videoTrack) {
-            setIsCameraEnabled(false);
-            setError("Camera is unavailable on this device");
+    const toggleCamera = useCallback(async (): Promise<void> => {
+        if (!callClientRef.current || isCameraStarting || isSwitchingCamera) {
             return;
         }
-
         const next = !isCameraEnabled;
-        setIsCameraEnabled(next);
-        callClientRef.current?.setCameraEnabled(next);
-    }, [localStream, isCameraEnabled, callClientRef, setError]);
+        try {
+            if (next) {
+                setIsCameraStarting(true);
+            }
+            setError("");
+            await callClientRef.current.setCameraEnabled(next);
+            setIsCameraEnabled(next);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to enable camera";
+            setIsCameraEnabled(false);
+            setError(message);
+        } finally {
+            setIsCameraStarting(false);
+        }
+    }, [callClientRef, isCameraEnabled, isCameraStarting, isSwitchingCamera, setError]);
 
     const switchCameraFacingMode = useCallback(async (): Promise<void> => {
         if (!callClientRef.current || isSwitchingCamera) {
@@ -555,6 +564,7 @@ export function useVoice({
         isDeafened,
         isMicEnabled,
         isCameraEnabled,
+        isCameraStarting,
         isScreenSharing,
         isSwitchingCamera,
         isTogglingScreenShare,

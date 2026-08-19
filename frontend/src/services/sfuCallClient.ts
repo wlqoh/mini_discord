@@ -115,6 +115,13 @@ export class SfuCallClient implements VoiceClient {
   private screenStream: MediaStream | null = null;
   private screenSharePromise: Promise<boolean> | null = null;
   private switchCameraPromise: Promise<void> | null = null;
+  // Single source of truth for whether the camera is on (lazy-capture
+  // design): a track's presence in localStream can't be trusted for this —
+  // after a reconnect the slot is recreated empty, and the server treats an
+  // unannounced source as active by default (see peer.go publishState).
+  // Replayed into a freshly (re)created slot by restoreCameraState().
+  private cameraEnabled = false;
+  private cameraStartPromise: Promise<void> | null = null;
 
   private pc: RTCPeerConnection | null = null;
   private sessionID = "";
@@ -213,24 +220,18 @@ export class SfuCallClient implements VoiceClient {
     }
 
     this.capture = capture;
+    this.cameraEnabled = false;
     const stream = capture.currentStream;
-    if (stream) {
-      // Start voice channels in audio-first mode to reduce bandwidth until
-      // the user explicitly turns their camera on.
-      stream.getVideoTracks().forEach((track) => {
-        track.enabled = false;
-      });
-    }
     this.localStream = stream;
     this.onLocalStream(stream);
 
     this.applySession(response);
     await this.openPeerConnection();
 
-    // The camera starts disabled above (audio-first join) — announce that
-    // now so it's already reflected in the snapshot anyone joining after us
-    // receives (see sendTrackSnapshot on the server).
-    this.announcePublishState("camera", false);
+    // Camera starts off (lazy capture) — announce that now so it's already
+    // reflected in the snapshot anyone joining after us receives (see
+    // sendTrackSnapshot on the server).
+    this.restoreCameraState();
 
     return response;
   }
@@ -260,6 +261,7 @@ export class SfuCallClient implements VoiceClient {
         response.participants.forEach((participant) => {
           this.participants.set(participant.user_id, participant);
         });
+        this.restoreCameraState();
         return;
       } catch (err) {
         debugLog("sfu:resume-failed-falling-back-to-rejoin", err);
@@ -271,6 +273,7 @@ export class SfuCallClient implements VoiceClient {
     const response = await this.socket.joinVoiceChannel(channelID);
     this.applySession(response);
     await this.openPeerConnection();
+    this.restoreCameraState();
   }
 
   private applySession(response: JoinVoiceResponse): void {
@@ -839,6 +842,8 @@ export class SfuCallClient implements VoiceClient {
     this.onLocalScreenStream(null);
     this.screenSharePromise = null;
     this.switchCameraPromise = null;
+    this.cameraEnabled = false;
+    this.cameraStartPromise = null;
 
     this.capture?.stopAll();
     this.capture = null;
@@ -884,15 +889,89 @@ export class SfuCallClient implements VoiceClient {
     });
   }
 
-  setCameraEnabled(enabled: boolean): void {
-    this.localStream?.getVideoTracks().forEach((track) => {
-      track.enabled = enabled;
+  /**
+   * Camera is captured lazily: turning it on requests getUserMedia for the
+   * first time (or again, since turning it off fully releases the device —
+   * see releaseCameraTrack), turning it off stops the track so the camera
+   * LED actually goes out instead of just muting frames.
+   */
+  async setCameraEnabled(enabled: boolean): Promise<void> {
+    if (this.cameraStartPromise) {
+      await this.cameraStartPromise; // don't let two clicks race two getUserMedia calls
+    }
+    if (enabled === this.cameraEnabled) {
+      return;
+    }
+    if (!enabled) {
+      this.cameraEnabled = false;
+      this.releaseCameraTrack();
+      this.announcePublishState("camera", false);
+      return;
+    }
+    this.cameraStartPromise = this.startCamera().finally(() => {
+      this.cameraStartPromise = null;
     });
-    // The camera track is never physically stopped (decision #3), so the
-    // SFU can't tell a disabled camera from a black frame on its own —
-    // announce it explicitly, or a peer joining later would subscribe to a
-    // black stream instead of skipping it.
-    this.announcePublishState("camera", enabled);
+    return this.cameraStartPromise;
+  }
+
+  /** Captures the camera on demand and drops it into the already-declared
+   * publish slot. No renegotiation: the simulcast sendEncodings live on the
+   * transceiver, not the track, and survive replaceTrack. */
+  private async startCamera(): Promise<void> {
+    if (!this.capture || !this.localStream) {
+      throw new Error("Join voice channel before enabling camera");
+    }
+    const sender = this.senderBySource.get("camera");
+    if (!sender) {
+      throw new Error("Camera slot is not available in this session");
+    }
+    const track = await this.capture.acquireVideoTrack(this.capture.facingMode);
+    // The user may have left the channel while the permission prompt was up.
+    if (!this.capture || !this.localStream || !this.senderBySource.get("camera")) {
+      track.stop();
+      return;
+    }
+    track.onended = () => { void this.setCameraEnabled(false); };
+    await sender.replaceTrack(track);
+
+    const nextStream = new MediaStream([...this.localStream.getAudioTracks(), track]);
+    this.localStream = nextStream;
+    this.capture.setStream(nextStream);
+    this.onLocalStream(nextStream);
+
+    this.cameraEnabled = true;
+    this.announcePublishState("camera", true);
+  }
+
+  /** Releases the device (camera LED goes out) instead of just muting frames. */
+  private releaseCameraTrack(): void {
+    const sender = this.senderBySource.get("camera");
+    void sender?.replaceTrack(null).catch(() => { /* session already torn down */ });
+
+    const track = this.localStream?.getVideoTracks()[0];
+    if (track) {
+      track.onended = null;
+      track.stop();
+    }
+    if (this.localStream && this.capture) {
+      const nextStream = new MediaStream(this.localStream.getAudioTracks());
+      this.localStream = nextStream;
+      this.capture.setStream(nextStream);
+      this.onLocalStream(nextStream);
+    }
+  }
+
+  /** Replays cameraEnabled into a freshly (re)created slot and re-announces
+   * publish_state. Needed after join/rejoin/resume, since the server treats
+   * an unannounced source as active by default (peer.go publishState). */
+  private restoreCameraState(): void {
+    const track = this.localStream?.getVideoTracks()[0] ?? null;
+    if (this.cameraEnabled && track) {
+      void this.senderBySource.get("camera")?.replaceTrack(track).catch((err) => {
+        debugLog("sfu:camera-restore-failed", err);
+      });
+    }
+    this.announcePublishState("camera", this.cameraEnabled && Boolean(track));
   }
 
   isScreenShareActive(): boolean {
@@ -1028,7 +1107,6 @@ export class SfuCallClient implements VoiceClient {
 
     const nextFacingMode = this.capture.facingMode === "user" ? "environment" : "user";
     const replacementTrack = await this.capture.acquireVideoTrack(nextFacingMode);
-    replacementTrack.enabled = currentVideoTrack.enabled;
 
     try {
       // replaceTrack alone preserves the sender's existing encoding

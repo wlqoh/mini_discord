@@ -1098,6 +1098,14 @@ body {
     cursor: not-allowed;
 }
 
+.micam-spinner {
+    animation: micam-spin 1s linear infinite;
+}
+
+@keyframes micam-spin {
+    to { transform: rotate(360deg); }
+}
+
 /* Video grid */
 .video-grid {
     display: grid;

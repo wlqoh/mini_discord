@@ -7,7 +7,7 @@ import { debugLog } from "./webrtcShared";
 
 export type CameraFacingMode = "user" | "environment";
 
-function formatMediaError(err: unknown): string {
+export function formatMediaError(err: unknown): string {
   if (!(err instanceof DOMException)) {
     return "Failed to access microphone/camera";
   }
@@ -33,6 +33,9 @@ function formatMediaError(err: unknown): string {
  * join_voice_channel is sent (see SfuCallClient.join): the server can
  * broadcast our presence — and other peers can react to it — as soon as
  * we're in the channel, so localStream needs to already exist by then.
+ * acquire() only ever captures the microphone — the camera is captured
+ * lazily, on demand, via acquireVideoTrack (see SfuCallClient.startCamera),
+ * so the camera LED stays off until the user actually turns it on.
  */
 export class LocalCapture {
   private readonly onError: ErrorListener;
@@ -85,37 +88,16 @@ export class LocalCapture {
 
     let stream: MediaStream;
     try {
-      const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      };
-      // Prefer full voice+video for channels, fallback to audio-only.
-      // Resolution/framerate match the camera's simulcast "h" layer (see
-      // webrtcShared.ts CAMERA_SIMULCAST_ENCODINGS / sfu-migration-plan.md
-      // §7 phase 6) — capping the capture itself, not just the encoder.
       stream = await mediaDevices.getUserMedia({
-        audio: audioConstraints,
-        video: {
-          facingMode: { ideal: this.preferredFacingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         },
+        video: false,
       });
-    } catch (videoErr) {
-      try {
-        stream = await mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-          video: false,
-        });
-      } catch (audioErr) {
-        throw new Error(formatMediaError(audioErr ?? videoErr));
-      }
+    } catch (err) {
+      throw new Error(formatMediaError(err));
     }
 
     await this.enforceAudioProcessing(stream);
@@ -129,12 +111,21 @@ export class LocalCapture {
       throw new Error("This browser does not support camera switching");
     }
 
+    // Resolution/framerate match the camera's simulcast "h" layer (see
+    // webrtcShared.ts CAMERA_SIMULCAST_ENCODINGS / sfu-migration-plan.md §7
+    // phase 6) — capping the capture itself, not just the encoder.
+    const videoConstraints = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 30 },
+    };
     const attempts: MediaStreamConstraints[] = [
-      { audio: false, video: { facingMode: { exact: facingMode } } },
-      { audio: false, video: { facingMode: { ideal: facingMode } } },
+      { audio: false, video: { facingMode: { exact: facingMode }, ...videoConstraints } },
+      { audio: false, video: { facingMode: { ideal: facingMode }, ...videoConstraints } },
       { audio: false, video: true },
     ];
 
+    let lastErr: unknown;
     for (const constraints of attempts) {
       try {
         const stream = await mediaDevices.getUserMedia(constraints);
@@ -149,12 +140,13 @@ export class LocalCapture {
           return track;
         }
         stream.getTracks().forEach((streamTrack) => streamTrack.stop());
-      } catch {
+      } catch (err) {
+        lastErr = err;
         // Try the next constraints profile.
       }
     }
 
-    throw new Error("Failed to access another camera on this device");
+    throw new Error(formatMediaError(lastErr));
   }
 
   stopAll(): void {

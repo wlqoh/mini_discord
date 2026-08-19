@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
@@ -828,15 +828,22 @@ export default function ChatPage() {
                                             {voice.isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
                                                 <MicOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
-                                        <button className="micam-btn" onClick={voice.toggleCamera}>
-                                            {voice.isCameraEnabled ? <Camera size={18} aria-hidden="true"/> :
-                                                <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
+                                        <button
+                                            className="micam-btn"
+                                            onClick={() => void voice.toggleCamera()}
+                                            disabled={voice.isCameraStarting || voice.isSwitchingCamera || !voice.localStream}
+                                            title={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
+                                            aria-label={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
+                                        >
+                                            {voice.isCameraStarting ? <Loader2 size={18} className="micam-spinner" aria-hidden="true"/>
+                                                : voice.isCameraEnabled ? <Camera size={18} aria-hidden="true"/>
+                                                : <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
                                         </button>
                                         {isMobileDevice ? (
                                             <button
                                                 className="micam-btn"
                                                 onClick={() => void voice.switchCameraFacingMode()}
-                                                disabled={voice.isSwitchingCamera || !voice.localStream}
+                                                disabled={voice.isSwitchingCamera || voice.isCameraStarting || !voice.isCameraEnabled}
                                                 title="Switch camera"
                                                 aria-label="Switch camera"
                                             >
@@ -846,7 +853,7 @@ export default function ChatPage() {
                                             <button
                                                 className="micam-btn"
                                                 onClick={() => void voice.toggleScreenShare()}
-                                                disabled={!voice.localStream || voice.isTogglingScreenShare || voice.isSwitchingCamera}
+                                                disabled={!voice.localStream || voice.isTogglingScreenShare || voice.isSwitchingCamera || voice.isCameraStarting}
                                                 title={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
                                                 aria-label={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
                                             >

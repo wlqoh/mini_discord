@@ -22,7 +22,7 @@ export interface VoiceClient {
   dispose(): void;
 
   setMicrophoneEnabled(enabled: boolean): void;
-  setCameraEnabled(enabled: boolean): void;
+  setCameraEnabled(enabled: boolean): Promise<void>;
   toggleCameraFacingMode(): Promise<void>;
 
   isScreenShareActive(): boolean;
