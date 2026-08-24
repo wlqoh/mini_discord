@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # Экшены протухают быстрее всего и ломают CI молча — эта экосистема
+  # важнее двух остальных.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Группировка минорных и патчей в один PR — иначе Dependabot
+      # открывает по PR на пакет (в go.mod ~40 модулей).
+      go-minor-patch:
+        update-types: [minor, patch]
+    # pion/webrtc проверяется только живым звонком, поэтому его мажоры
+    # приходят отдельным PR и требуют ручной проверки голоса.
+    ignore:
+      - dependency-name: github.com/pion/*
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
