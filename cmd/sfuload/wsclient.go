@@ -163,6 +163,9 @@ func (c *wsClient) sendFireAndForget(action string, payload any) error {
 	return c.conn.WriteMessage(websocket.TextMessage, raw)
 }
 
+// Close sends a normal-closure WebSocket close frame and closes the
+// underlying connection. Safe to call more than once; only the first call
+// has any effect.
 func (c *wsClient) Close() {
 	c.closeOnce.Do(func() {
 		c.writeMu.Lock()

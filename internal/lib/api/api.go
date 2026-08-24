@@ -1,3 +1,6 @@
+// Package api is the composition root: it builds the Fiber app, wires
+// together every storage/service/handler, and owns the process's
+// listen/shutdown lifecycle.
 package api
 
 import (
@@ -25,11 +28,15 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// APIServer owns the Fiber app and its dependencies for one run of the
+// backend.
 type APIServer struct {
 	addr string
 	db   *postgresql.Storage
 }
 
+// NewAPIServer builds an APIServer bound to db, listening on addr once Run
+// is called.
 func NewAPIServer(addr string, db *postgresql.Storage) *APIServer {
 	return &APIServer{
 		addr: addr,
@@ -37,6 +44,12 @@ func NewAPIServer(addr string, db *postgresql.Storage) *APIServer {
 	}
 }
 
+// Run builds the Fiber app, wires every handler and background service
+// (S3 client, push sender, embed service, the hub, the admin SFU debug
+// route) to db, then starts the hub's event loop and the HTTP listener as
+// background goroutines. It blocks until SIGINT/SIGTERM, then shuts the
+// Fiber app down gracefully (15s budget) and runs every registered
+// closer.Add callback (10s budget) before returning.
 func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
