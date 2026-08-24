@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Local pre-commit checks: godoc coverage (`make doc-check`) and doc-drift
+# (`make docs-check`). Both are cheap, local-only, and never touch a
+# network or a database — see Readme.md's "Make targets" table. This repo
+# has no CI, so this hook is the only place these run; skip it for one
+# commit with `git commit --no-verify` if you really need to.
+#
+# Installed via `make install-hooks` (sets core.hooksPath to this
+# directory) — not active until you run that once per clone.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+staged() {
+	git diff --cached --name-only --diff-filter=ACMR
+}
+
+go_touched=false
+docs_touched=false
+
+while IFS= read -r f; do
+	[ -z "$f" ] && continue
+	case "$f" in
+	*.go)
+		go_touched=true
+		docs_touched=true
+		;;
+	sql/init/* | docker-compose.yml | Makefile | Readme.md | docs/*.md)
+		docs_touched=true
+		;;
+	esac
+done < <(staged)
+
+status=0
+
+if $go_touched; then
+	echo "pre-commit: running make doc-check..."
+	if ! make doc-check; then
+		echo "pre-commit: doc-check failed — some exported Go symbols are missing a godoc comment." >&2
+		echo "  see: go run scripts/doccheck.go -list -max 0 ." >&2
+		status=1
+	fi
+fi
+
+if $docs_touched; then
+	echo "pre-commit: running make docs-check..."
+	if ! make docs-check; then
+		echo "pre-commit: docs-check failed — code and docs/ (or Readme.md) have drifted." >&2
+		echo "  see: go run scripts/docscheck.go -list ." >&2
+		status=1
+	fi
+fi
+
+if [ "$status" -ne 0 ]; then
+	echo "pre-commit: bypass with 'git commit --no-verify' if this is intentional." >&2
+fi
+
+exit "$status"
