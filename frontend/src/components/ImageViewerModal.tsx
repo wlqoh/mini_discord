@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 export type ViewerImage = { url: string; alt: string };
 export type ImageViewerState = { items: ViewerImage[]; index: number };
@@ -16,8 +16,14 @@ export default function ImageViewerModal({ state, isClosing, onClose, onIndexCha
     const hasMany = state.items.length > 1;
     const current = state.items[state.index];
 
-    const goPrev = () => onIndexChange((state.index + state.items.length - 1) % state.items.length);
-    const goNext = () => onIndexChange((state.index + 1) % state.items.length);
+    const goPrev = useCallback(
+        () => onIndexChange((state.index + state.items.length - 1) % state.items.length),
+        [state.index, state.items.length, onIndexChange],
+    );
+    const goNext = useCallback(
+        () => onIndexChange((state.index + 1) % state.items.length),
+        [state.index, state.items.length, onIndexChange],
+    );
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -37,7 +43,7 @@ export default function ImageViewerModal({ state, isClosing, onClose, onIndexCha
 
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [hasMany, state.index, state.items.length, onClose, onIndexChange]);
+    }, [hasMany, onClose, goPrev, goNext]);
 
     useEffect(() => {
         const previousOverflow = document.body.style.overflow;
