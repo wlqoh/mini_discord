@@ -1,0 +1,32 @@
+# golangci-lint v2. Набор standard: errcheck, govet, ineffassign,
+# staticcheck, unused. Базовая линия приведена к нулю в этапе 0
+# (tmp/CI_PLAN.md §3.1), поэтому diff-режим (new-from-merge-base) не
+# используется: линтер строг ко всему репозиторию одинаково.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  exclusions:
+    generated: lax
+    paths:
+      # Untracked стray в корне репозитория (см. CLAUDE.md): содержит
+      # flatted/golang/pkg/flatted/flatted.go и даёт 2 ложных govet.
+      - node_modules
+
+formatters:
+  enable:
+    - gofmt
+
+# Отключено намеренно: golangci-lint по умолчанию режет вывод одного
+# линтера после 50 находок и схлопывает больше 3 находок с одинаковым
+# текстом сообщения (max-same-issues). На этом репозитории это скрыло
+# 5 из 33 замечаний в исходном аудите (tmp/CI_PLAN.md §2) — errcheck на
+# rows.Close/Close/Rollback и staticcheck QF1008/QF1012 повторяются
+# буквально одинаковым текстом чаще трёх раз. Раз базовая линия и так
+# должна быть нулевой, урезание тут только прячет реальные находки.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

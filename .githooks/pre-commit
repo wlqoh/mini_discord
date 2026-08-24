@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Local pre-commit checks: godoc coverage (`make doc-check`) and doc-drift
 # (`make docs-check`). Both are cheap, local-only, and never touch a
-# network or a database — see Readme.md's "Make targets" table. This repo
-# has no CI, so this hook is the only place these run; skip it for one
-# commit with `git commit --no-verify` if you really need to.
+# network or a database — see Readme.md's "Make targets" table. The same
+# two checks also run in CI (job "backend"), so this hook is fast local
+# feedback rather than the only place they run; skipping it with
+# `git commit --no-verify` just defers the check to the PR instead of
+# skipping it outright.
 #
 # Installed via `make install-hooks` (sets core.hooksPath to this
 # directory) — not active until you run that once per clone.

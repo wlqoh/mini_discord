@@ -227,3 +227,11 @@ rolls back to the previous commit if the health check fails. `DEPLOY_TARGET`
 / `DEPLOY_PATH` / `DEPLOY_KEY` come from the gitignored `local.env` rather
 than being checked into the Makefile — the server address is intentionally
 not committed to the repo. Run `scripts/deploy.sh -h` for the full flag list.
+
+`.github/workflows/ci.yml` only builds and tests the Go module and the
+`frontend/` project — it does not build Docker images, push anywhere, or
+run `scripts/deploy.sh` (which isn't even in git). Deploying is still this
+manual, SSH-driven step; there is no CD. Also note the root `Dockerfile`'s
+`COPY config/ ./config/` can't succeed on a fresh clone since `config/` is
+gitignored — the production checkout works only because `config/prod.yaml`
+was placed there by hand once, outside of git.

@@ -1,4 +1,4 @@
-include local.env
+-include local.env
 export
 
 MIGRATIONS=./sql/schema
@@ -19,8 +19,10 @@ docs-check:
 	@go run scripts/docscheck.go .
 
 # Points git at .githooks so pre-commit runs doc-check/docs-check on
-# relevant staged changes. Local-only (no CI in this repo) — run once per
-# clone; bypass a single commit with `git commit --no-verify`.
+# relevant staged changes. The same two checks also run in CI (job
+# "backend"), so this hook is fast local feedback, not the only place
+# they run — bypassing it with `git commit --no-verify` just defers the
+# check to the PR instead of skipping it. Run once per clone.
 install-hooks:
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook installed (runs doc-check/docs-check on staged Go/doc changes)"

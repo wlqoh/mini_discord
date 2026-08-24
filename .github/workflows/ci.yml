@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Новый пуш в тот же PR отменяет предыдущий прогон, а не досчитывает его.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ВНИМАНИЕ: имена job'ов backend/frontend — публичный контракт с
+  # настройками GitHub (required status checks, см. tmp/CI_PLAN.md §6).
+  # Переименование подвесит все PR в состоянии "Expected — waiting for
+  # status". Меняешь имя — сразу правь branch protection.
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          # Единственный источник правды по версии Go. Кеш модулей и
+          # build-кеш у setup-go включены по умолчанию.
+          go-version-file: go.mod
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test (race)
+        # -race: SFU — конкурентный код (пул горутин, peer.enqueue,
+        # коллбэки Pion в hub), гонки здесь наиболее вероятны.
+        # -timeout: smoke_test.go реально биндит UDP-порт; дефолтные
+        # 10 мин на пакет при зависании жгут лимит job'а впустую.
+        run: go test -race -count=1 -timeout=5m ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+
+      - name: docs (godoc coverage + doc drift)
+        # Те же команды, что в .githooks/pre-commit. Makefile использует
+        # -include local.env (не include), поэтому это не падает без
+        # local.env в этом чекауте.
+        run: make doc-check docs-check
+
+      - name: govulncheck
+        # Анализ достижимости: ругается, только если уязвимая функция
+        # реально вызывается этим кодом.
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Держать в синхроне с frontend/Dockerfile (node:22-alpine) —
+          # именно он собирает то, что уезжает в прод.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: eslint
+        run: npm run lint
+
+      - name: build
+        # npm run build == tsc -b && vite build, то есть типы тоже здесь.
+        run: npm run build

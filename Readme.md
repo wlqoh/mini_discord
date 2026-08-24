@@ -1,5 +1,6 @@
 # Mini Discord
 
+[![CI](https://github.com/wlqoh/mini_discord/actions/workflows/ci.yml/badge.svg)](https://github.com/wlqoh/mini_discord/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-personal%20project-lightgrey)
@@ -181,6 +182,8 @@ This brings up `db` → `migrate` → `backend` → `frontend` in dependency ord
 ## Tests
 
 Backend tests currently live only in `internal/service/sfu/` (simulcast layer selection, RTP sequence rewriting, active-speaker detection, publish-state semantics, plus `smoke_test.go` which actually binds the UDP mux) and `cmd/sfuload`, a headless load-test client. There is **no frontend test runner** — UI changes are verified manually. See [`docs/voice.md`](docs/voice.md#tests) for the test file breakdown.
+
+CI (`.github/workflows/ci.yml`) runs `go build`, `go test -race`, `golangci-lint`, `make doc-check docs-check` and `govulncheck` for the backend, and `npm run lint`/`npm run build` for the frontend, on every push/PR to `main` — it doesn't add coverage beyond what's described above, it just runs the same commands automatically.
 
 ```bash
 go test ./...
