@@ -62,7 +62,7 @@ export type SimulcastEncoding = RTCRtpEncodingParameters & { rid: string };
 export const CAMERA_SIMULCAST_ENCODINGS: SimulcastEncoding[] = [
   { rid: "l", scaleResolutionDownBy: 4, maxBitrate: 150_000 },
   { rid: "m", scaleResolutionDownBy: 2, maxBitrate: 400_000 },
-  { rid: "h", scaleResolutionDownBy: 1, maxBitrate: 1_200_000 },
+  { rid: "h", scaleResolutionDownBy: 1, maxBitrate: 4_000_000 },
 ];
 
 export async function applyVideoBitratePreset(sender: RTCRtpSender, preset: VideoBitratePreset): Promise<void> {

@@ -115,9 +115,9 @@ export class LocalCapture {
     // webrtcShared.ts CAMERA_SIMULCAST_ENCODINGS / sfu-migration-plan.md §7
     // phase 6) — capping the capture itself, not just the encoder.
     const videoConstraints = {
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-      frameRate: { ideal: 30 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      frameRate: { ideal: 60 },
     };
     const attempts: MediaStreamConstraints[] = [
       { audio: false, video: { facingMode: { exact: facingMode }, ...videoConstraints } },
