@@ -119,7 +119,7 @@ func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64,
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var serverID int64
 	err = tx.QueryRowContext(ctx,
@@ -224,7 +224,7 @@ func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) 
 			s.cache.Delete(fmt.Sprintf("%s%d", serversUserKey, memberID))
 			s.cache.Delete(fmt.Sprintf("%s%d:%d", memberKey, memberID, serverID))
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 
 	_, err = s.db.ExecContext(ctx, "DELETE FROM servers WHERE id = $1", serverID)
@@ -333,7 +333,7 @@ func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	userIDs := make([]int, 0)
 	for rows.Next() {
@@ -372,7 +372,7 @@ func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	userIDs := make([]int, 0)
 	for rows.Next() {
@@ -476,16 +476,16 @@ func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, c
 	for rows.Next() {
 		msg, err := scanMessageRow(rows, s3Host)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, nil, false, err
 		}
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, nil, false, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	hasMore := len(messages) > limit
 	if hasMore {
@@ -547,16 +547,16 @@ func (s *Storage) GetMessagesAfter(ctx context.Context, channelID int64, limit i
 	for rows.Next() {
 		msg, err := scanMessageRow(rows, s3Host)
 		if err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, nil, false, err
 		}
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, nil, false, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	hasMore := len(messages) > limit
 	if hasMore {
@@ -653,7 +653,7 @@ func (s *Storage) GetMessagesAround(ctx context.Context, channelID, messageID in
 			&msg.MentionsEveryone,
 			&half,
 		); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, nil, nil, false, false, err
 		}
 		finalizeMessage(&msg, avatarKey, replyToID, s3Host)
@@ -664,10 +664,10 @@ func (s *Storage) GetMessagesAround(ctx context.Context, channelID, messageID in
 		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, nil, nil, false, false, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	sort.Slice(older, func(i, j int) bool {
 		if !older[i].CreatedAt.Equal(older[j].CreatedAt) {
@@ -740,7 +740,7 @@ func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var fileKeys []string
 
@@ -841,7 +841,7 @@ func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, a
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	const batchSize = 100
 	for i := 0; i < len(attachments); i += batchSize {
@@ -858,7 +858,7 @@ func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, a
 			if j > 0 {
 				sb.WriteString(", ")
 			}
-			sb.WriteString(fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5))
+			fmt.Fprintf(&sb, "($%d, $%d, $%d, $%d, $%d)", len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5)
 			args = append(args, messageID, a.FileKey, a.FileName, a.ContentType, a.SizeBytes)
 		}
 
@@ -897,7 +897,7 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[int64][]types.Attachment)
 	for rows.Next() {
@@ -951,7 +951,7 @@ func (s *Storage) GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	referencedIDs := make(map[int64]bool)
 	msgToReplyID := make(map[int64]int64)
@@ -993,7 +993,7 @@ func (s *Storage) GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3
 	if err != nil {
 		return nil, err
 	}
-	defer refRows.Close()
+	defer func() { _ = refRows.Close() }()
 
 	type refInfo struct {
 		content         string
@@ -1126,32 +1126,6 @@ func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID in
 	return nil
 }
 
-func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64, error) {
-	query := "SELECT server_id FROM server_members WHERE user_id = $1"
-
-	rows, err := s.db.QueryContext(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	defer rows.Close()
-
-	serverIDs := make([]int64, 0)
-	for rows.Next() {
-		var serverID int64
-		if err := rows.Scan(&serverID); err != nil {
-			return nil, err
-		}
-		serverIDs = append(serverIDs, serverID)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return serverIDs, nil
-}
-
 // GetServerChannels implements types.ServerStorage, caching the result for
 // 5 minutes; callers always get a defensive copy of the cached slice.
 // Channel.Type is normalized to ChannelTypeVoice/ChannelTypeText regardless
@@ -1181,7 +1155,7 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var channels []types.Channel
 	for rows.Next() {
@@ -1221,7 +1195,7 @@ func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.S
 		return nil, err
 	}
 
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var servers []types.Server
 	for rows.Next() {
@@ -1296,7 +1270,7 @@ func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsCh
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make([]types.WsChannelUnread, 0)
 	for rows.Next() {
@@ -1362,15 +1336,15 @@ func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearch
 		WHERE m.search_vector @@ q.tsq`)
 
 	if params.ServerID > 0 {
-		sb.WriteString(fmt.Sprintf(" AND c.server_id = $%d AND c.type = $%d", len(args)+1, len(args)+2))
+		fmt.Fprintf(&sb, " AND c.server_id = $%d AND c.type = $%d", len(args)+1, len(args)+2)
 		args = append(args, params.ServerID, types.ChannelTypeText)
 	} else {
-		sb.WriteString(fmt.Sprintf(" AND m.channel_id = $%d", len(args)+1))
+		fmt.Fprintf(&sb, " AND m.channel_id = $%d", len(args)+1)
 		args = append(args, params.ChannelID)
 	}
 
 	if params.AuthorID > 0 {
-		sb.WriteString(fmt.Sprintf(" AND m.author_id = $%d", len(args)+1))
+		fmt.Fprintf(&sb, " AND m.author_id = $%d", len(args)+1)
 		args = append(args, params.AuthorID)
 	}
 	if params.HasFile {
@@ -1380,19 +1354,19 @@ func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearch
 		sb.WriteString(" AND EXISTS (SELECT 1 FROM message_embeds e WHERE e.message_id = m.id)")
 	}
 	if params.Before != nil {
-		sb.WriteString(fmt.Sprintf(" AND m.created_at < $%d", len(args)+1))
+		fmt.Fprintf(&sb, " AND m.created_at < $%d", len(args)+1)
 		args = append(args, *params.Before)
 	}
 	if params.After != nil {
-		sb.WriteString(fmt.Sprintf(" AND m.created_at > $%d", len(args)+1))
+		fmt.Fprintf(&sb, " AND m.created_at > $%d", len(args)+1)
 		args = append(args, *params.After)
 	}
 	if params.Cursor != nil {
-		sb.WriteString(fmt.Sprintf(" AND (m.created_at, m.id) < ($%d, $%d)", len(args)+1, len(args)+2))
+		fmt.Fprintf(&sb, " AND (m.created_at, m.id) < ($%d, $%d)", len(args)+1, len(args)+2)
 		args = append(args, params.Cursor.CreatedAt, params.Cursor.ID)
 	}
 
-	sb.WriteString(fmt.Sprintf(" ORDER BY m.created_at DESC, m.id DESC LIMIT $%d", len(args)+1))
+	fmt.Fprintf(&sb, " ORDER BY m.created_at DESC, m.id DESC LIMIT $%d", len(args)+1)
 	args = append(args, limitPlusOne)
 
 	rows, err := s.db.QueryContext(ctx, sb.String(), args...)
@@ -1416,7 +1390,7 @@ func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearch
 			&hit.Headline,
 			&hit.CreatedAt,
 		); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, nil, false, err
 		}
 		if avatarKey.Valid {
@@ -1425,10 +1399,10 @@ func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearch
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return nil, nil, false, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	hasMore := len(hits) > limit
 	if hasMore {
@@ -1471,7 +1445,7 @@ func (s *Storage) SearchServersByName(ctx context.Context, userID int, query str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	servers := make([]types.Server, 0)
 	for rows.Next() {

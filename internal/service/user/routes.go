@@ -241,8 +241,8 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	res := types.LoginUserResponse{
 		AccessToken:           accessToken,
 		RefreshToken:          refreshToken,
-		AccessTokenExpiresAt:  accessClaims.RegisteredClaims.ExpiresAt.Time,
-		RefreshTokenExpiresAt: refreshClaims.RegisteredClaims.ExpiresAt.Time,
+		AccessTokenExpiresAt:  accessClaims.ExpiresAt.Time,
+		RefreshTokenExpiresAt: refreshClaims.ExpiresAt.Time,
 		User: types.UserResponse{
 			FirstName: u.FirstName,
 			LastName:  u.LastName,
@@ -491,44 +491,27 @@ func (h *Handler) handleRenewAccessToken(c *fiber.Ctx) error {
 
 	res := types.RenewAccessTokenResponse{
 		AccessToken:          accessToken,
-		AccessTokenExpiresAt: accessClaims.RegisteredClaims.ExpiresAt.Time,
+		AccessTokenExpiresAt: accessClaims.ExpiresAt.Time,
 	}
 
 	return c.Status(fiber.StatusOK).JSON(res)
 }
 
-func (h *Handler) turnURLs() []string {
-	if len(h.cfg.WebRTC.TurnURLs) == 0 {
-		return nil
-	}
-
-	urls := make([]string, 0, len(h.cfg.WebRTC.TurnURLs))
-	for _, rawURL := range h.cfg.WebRTC.TurnURLs {
-		url := strings.TrimSpace(rawURL)
-		if url == "" {
-			continue
-		}
-		urls = append(urls, url)
-	}
-
-	return urls
-}
-
 func isAllowedMediaType(contentType string) bool {
-	switch {
-	case contentType == "image/jpeg",
-		contentType == "image/png",
-		contentType == "image/gif",
-		contentType == "image/webp",
-		contentType == "image/avif",
-		contentType == "video/mp4",
-		contentType == "video/webm",
-		contentType == "video/quicktime",
-		contentType == "audio/mpeg",
-		contentType == "audio/ogg",
-		contentType == "audio/wav",
-		contentType == "audio/webm",
-		contentType == "audio/mp4":
+	switch contentType {
+	case "image/jpeg",
+		"image/png",
+		"image/gif",
+		"image/webp",
+		"image/avif",
+		"video/mp4",
+		"video/webm",
+		"video/quicktime",
+		"audio/mpeg",
+		"audio/ogg",
+		"audio/wav",
+		"audio/webm",
+		"audio/mp4":
 		return true
 	default:
 		return false

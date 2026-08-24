@@ -107,6 +107,12 @@ func newAPI(cfg Config) (api *webrtc.API, closeUDP func() error, err error) {
 		// Required in Docker: without it Pion advertises host ICE candidates
 		// with the container's internal address and ICE never connects for
 		// anyone — sfu-migration-plan.md §8 pitfall #1.
+		//
+		// SA1019: SetNAT1To1IPs устарел в пользу SetICEAddressRewriteRules, но
+		// миграция меняет объявляемые ICE-кандидаты и проверяется только живым
+		// звонком через TURN, а не go test. Вынесено в отдельную задачу; см.
+		// tmp/CI_PLAN.md §7.2.
+		//nolint:staticcheck // см. комментарий выше
 		settingEngine.SetNAT1To1IPs([]string{cfg.PublicIP}, webrtc.ICECandidateTypeHost)
 	}
 

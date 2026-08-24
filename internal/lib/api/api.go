@@ -54,9 +54,9 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	app := fiber.New(fiber.Config{
-		ReadTimeout:  cfg.HTTPServer.Timeout,
-		WriteTimeout: cfg.HTTPServer.Timeout,
-		IdleTimeout:  cfg.HTTPServer.IdleTimeout,
+		ReadTimeout:  cfg.Timeout,
+		WriteTimeout: cfg.Timeout,
+		IdleTimeout:  cfg.IdleTimeout,
 		BodyLimit:    10 * 1024 * 1024,
 	})
 	app.Use(
@@ -64,7 +64,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		middleware.RequestID(),
 		middleware.Logger(log),
 	)
-	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.HTTPServer.CORSOrigins, ",")}))
+	app.Use(cors.New(cors.Config{AllowOrigins: strings.Join(cfg.CORSOrigins, ",")}))
 
 	s3Client := objectStorage.NewS3Client(cfg, log)
 
@@ -86,7 +86,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	userHandler := user.NewHandler(s.db, s.db, cfg, log, s3Client, hub)
 	userHandler.RegisterRoutes(v1)
 
-	wsHandler := server.NewHandler(hub, cfg.HTTPServer.WSAllowedOrigins)
+	wsHandler := server.NewHandler(hub, cfg.WSAllowedOrigins)
 	wsHandler.RegisterRoutes(v1)
 
 	notificationHandler := notification.NewHandler(s.db, cfg, log)
@@ -104,11 +104,11 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	// track), so this exists to answer "what does the router think is
 	// happening right now" directly instead of reconstructing it from logs.
 	// Gated on the same operator credentials as the rest of this deployment
-	// (cfg.HTTPServer.User/Password) rather than a per-user role: this
-	// project has no admin-role concept, and inventing one just for this
-	// debug endpoint would be more surface than the endpoint is worth.
+	// (cfg.User/Password) rather than a per-user role: this project has no
+	// admin-role concept, and inventing one just for this debug endpoint
+	// would be more surface than the endpoint is worth.
 	adminAuth := basicauth.New(basicauth.Config{
-		Users: map[string]string{cfg.HTTPServer.User: cfg.HTTPServer.Password},
+		Users: map[string]string{cfg.User: cfg.Password},
 	})
 	v1.Get("/admin/sfu/rooms", adminAuth, func(c *fiber.Ctx) error {
 		router := hub.SFURouter()

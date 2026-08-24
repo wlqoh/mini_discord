@@ -336,7 +336,7 @@ func (t *publishedTrack) forwardLayer(layer *trackLayer, log *slog.Logger) {
 			layer.markKeyframe()
 		}
 		if tracksAudioLevel {
-			if data := packet.Header.GetExtension(t.audioLevelExtID); len(data) >= 1 {
+			if data := packet.GetExtension(t.audioLevelExtID); len(data) >= 1 {
 				level := data[0] & 0x7F // RFC 6464: 0 = loudest, 127 = silence
 				if level < audioLevelSpeakingThreshold {
 					t.owner.room.speakers.markLoud(t.userID)

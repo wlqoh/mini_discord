@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,28 +125,28 @@ func (m *Mailer) sendMultipart(to, subject, plainText, htmlBody string) error {
 		fromHeader = fmt.Sprintf("%s <%s>", m.cfg.FromName, m.cfg.FromAddress)
 	}
 
-	msg.WriteString(fmt.Sprintf("From: %s\r\n", fromHeader))
-	msg.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	fmt.Fprintf(&msg, "From: %s\r\n", fromHeader)
+	fmt.Fprintf(&msg, "To: %s\r\n", to)
+	fmt.Fprintf(&msg, "Subject: %s\r\n", subject)
 	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary))
+	fmt.Fprintf(&msg, "Content-Type: multipart/alternative; boundary=\"%s\"\r\n", boundary)
 	msg.WriteString("\r\n")
 
 	// plain-text part
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s\r\n", boundary)
 	msg.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
 	msg.WriteString("\r\n")
 	msg.WriteString(plainText)
 	msg.WriteString("\r\n")
 
 	// HTML part
-	msg.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s\r\n", boundary)
 	msg.WriteString("Content-Type: text/html; charset=\"utf-8\"\r\n")
 	msg.WriteString("\r\n")
 	msg.WriteString(htmlBody)
 	msg.WriteString("\r\n")
 
-	msg.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+	fmt.Fprintf(&msg, "--%s--\r\n", boundary)
 
 	return m.dial(to, msg.String())
 }
@@ -156,7 +157,7 @@ func (m *Mailer) dial(to, rawMsg string) error {
 		return fmt.Errorf("mailer: SMTP is not configured")
 	}
 
-	addr := fmt.Sprintf("%s:%d", m.cfg.SMTPHost, m.cfg.SMTPPort)
+	addr := net.JoinHostPort(m.cfg.SMTPHost, strconv.Itoa(m.cfg.SMTPPort))
 
 	var conn net.Conn
 	var err error

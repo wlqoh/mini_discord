@@ -108,7 +108,7 @@ func (f *Fetcher) Fetch(ctx context.Context, normalizedURL string) (types.LinkPr
 	if err != nil {
 		return types.LinkPreviewRecord{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return types.LinkPreviewRecord{}, errNotFetchable
@@ -148,7 +148,7 @@ func (f *Fetcher) FetchImage(ctx context.Context, imageURL string) (FetchedImage
 	if err != nil {
 		return FetchedImage{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return FetchedImage{}, errNotFetchable

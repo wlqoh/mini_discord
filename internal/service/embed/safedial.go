@@ -29,13 +29,13 @@ func isBlockedIP(ip net.IP) bool {
 		case ip4[0] == 0, // 0.0.0.0/8
 			ip4[0] == 10,                                // 10/8
 			ip4[0] == 127,                               // loopback
-			ip4[0] == 100 && ip4[1]&0xC0 == 64,           // 100.64/10 CGNAT
-			ip4[0] == 169 && ip4[1] == 254,               // link-local + метаданные облака
-			ip4[0] == 172 && ip4[1]&0xF0 == 16,           // 172.16/12
-			ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0,  // IETF protocol assignments
-			ip4[0] == 192 && ip4[1] == 168,               // 192.168/16
-			ip4[0] == 198 && ip4[1]&0xFE == 18,           // 198.18/15 benchmarking
-			ip4[0] >= 224:                                // multicast, reserved, broadcast
+			ip4[0] == 100 && ip4[1]&0xC0 == 64,          // 100.64/10 CGNAT
+			ip4[0] == 169 && ip4[1] == 254,              // link-local + метаданные облака
+			ip4[0] == 172 && ip4[1]&0xF0 == 16,          // 172.16/12
+			ip4[0] == 192 && ip4[1] == 0 && ip4[2] == 0, // IETF protocol assignments
+			ip4[0] == 192 && ip4[1] == 168,              // 192.168/16
+			ip4[0] == 198 && ip4[1]&0xFE == 18,          // 198.18/15 benchmarking
+			ip4[0] >= 224:                               // multicast, reserved, broadcast
 			return true
 		}
 		return false

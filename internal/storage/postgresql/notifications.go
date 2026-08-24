@@ -45,7 +45,7 @@ func (s *Storage) ListServerMembers(ctx context.Context, serverID int64, s3Host 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	members := make([]types.WsServerMember, 0)
 	for rows.Next() {
@@ -77,7 +77,7 @@ func (s *Storage) SaveMessageMentions(ctx context.Context, messageID int64, user
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO message_mentions (message_id, user_id)
@@ -87,7 +87,7 @@ func (s *Storage) SaveMessageMentions(ctx context.Context, messageID int64, user
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	for _, userID := range userIDs {
 		if _, err := stmt.ExecContext(ctx, messageID, userID); err != nil {
@@ -123,7 +123,7 @@ func (s *Storage) GetMessageMentions(ctx context.Context, messageIDs []int64) (m
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var messageID int64
@@ -169,7 +169,7 @@ func (s *Storage) GetNotificationSettings(ctx context.Context, userID int) (*typ
 	if err != nil {
 		return nil, err
 	}
-	defer serverRows.Close()
+	defer func() { _ = serverRows.Close() }()
 
 	settings.Servers = make([]types.ServerNotificationOverride, 0)
 	for serverRows.Next() {
@@ -199,7 +199,7 @@ func (s *Storage) GetNotificationSettings(ctx context.Context, userID int) (*typ
 	if err != nil {
 		return nil, err
 	}
-	defer channelRows.Close()
+	defer func() { _ = channelRows.Close() }()
 
 	settings.Channels = make([]types.ChannelNotificationOverride, 0)
 	for channelRows.Next() {
@@ -341,7 +341,7 @@ func (s *Storage) ListPushSubscriptions(ctx context.Context, userIDs []int) ([]t
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var subs []types.PushSubscription
 	for rows.Next() {
@@ -392,7 +392,7 @@ func (s *Storage) ResolveNotificationTargets(ctx context.Context, channelID int6
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var targets []types.ResolvedNotificationTarget
 	for rows.Next() {

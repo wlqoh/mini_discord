@@ -70,7 +70,7 @@ func publishIVFOnce(path string, track *webrtc.TrackLocalStaticSample, stop <-ch
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	reader, header, err := ivfreader.NewWith(file)
 	if err != nil {
@@ -134,7 +134,7 @@ func publishOggOnce(path string, track *webrtc.TrackLocalStaticSample, stop <-ch
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	reader, _, err := oggreader.NewWith(file)
 	if err != nil {
