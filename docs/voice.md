@@ -116,6 +116,54 @@ as "reconnecting…"), not membership changes — unlike
 `voice_user_joined`/`voice_user_left`, the frontend doesn't treat them as
 critical voice events.
 
+## Ghost-session cleanup
+
+A dead PeerConnection (`failed`/`closed` on `pc.OnConnectionStateChange`)
+tears its session down immediately — no grace period, since `sfu_resume`
+would just hand the client back the same dead peer. This is reported to the
+hub through `sfu.SessionObserver`, a callback interface separate from
+`Signaler` (the SFU tells the hub a session died; it doesn't relay anything
+to a client over it).
+
+Beyond that targeted path, the hub also runs a periodic reconciliation sweep
+(`SFU_RECONCILE_INTERVAL`, default `15s`, `0` disables it) that
+cross-checks its own voice membership against `Router.LiveSessions()` in
+both directions:
+
+- **Hub → router**: a user the hub still counts as "in voice" whose SFU
+  session is missing from the router, or whose `ConnectionState` is already
+  `failed`/`closed` — removed the same way an explicit leave would be.
+- **Router → hub**: a session the router still holds that no longer belongs
+  to any hub voice membership — a leaked peer, `Router.Leave`d.
+
+Any record younger than one `SFU_RECONCILE_INTERVAL` is skipped in both
+directions: the hub's voice maps and the router's peer map are written by
+different goroutines with no shared transaction, so a join still in flight
+between them would otherwise look identical to a ghost. A participant
+that's merely `Detach`ed (mid grace-period) is never touched by the sweep —
+`Detach` doesn't remove anything from the router, so its session still
+shows up as live.
+
+Every one of these server-initiated teardowns (a PC failure, a grace-period
+expiry, either sweep direction) sends the affected user their own
+`sfu_session_closed` event — the only path back to the client, since
+`leaveVoiceChannelInternal`'s `voice_user_left` broadcast deliberately
+excludes whoever just left (see its doc comment). Without it, a client
+whose call the server tore down while its WebSocket was still connected
+would otherwise sit in a call that no longer exists anywhere else. The
+frontend reacts by attempting a bounded auto-rejoin (see below); a client
+whose WebSocket wasn't connected at teardown time simply never receives it,
+and instead learns its call is over the normal way — the participant list
+it gets back on reconnect (`get_server_channels`) just won't have it
+anymore.
+
+A participant's `detached` flag (in `WsVoiceParticipant`, wherever one
+appears — `get_server_channels`, a `join_voice_channel`/`sfu_resume` ack)
+reports whether they're currently mid grace-period, so a client that
+(re)connects during someone else's grace period renders them as
+"reconnecting" immediately instead of only finding out from a later
+`voice_user_detached` event it wasn't around to receive.
+
 ## Degradation
 
 If the router fails to construct — most commonly a UDP port already in
@@ -189,11 +237,25 @@ docker compose logs -f turn
 
 `GET /api/v1/admin/sfu/rooms` (HTTP Basic auth, `http_server.user`/`password`)
 returns a live JSON snapshot of every room and peer the router currently
-knows about. It exists because SFU bugs tend to be silent: the WebRTC
-connection looks perfectly healthy, but one specific subscriber just never
-receives a track. This endpoint answers "what does the router think is
-happening right now" directly, instead of reconstructing it from logs after
-the fact.
+knows about, under `rooms`. It exists because SFU bugs tend to be silent:
+the WebRTC connection looks perfectly healthy, but one specific subscriber
+just never receives a track. This endpoint answers "what does the router
+think is happening right now" directly, instead of reconstructing it from
+logs after the fact.
+
+A `voice` key sits alongside `rooms`: ghost-session cleanup succeeding looks
+identical to it never having been needed, so without counters there's no
+way to tell the two apart from the outside. It reports `close_counts` — one
+counter per reason a voice session ended (`ws_closed`, `grace_expired`,
+`pc_failed`, `pc_closed`, `reconcile_hub`, `reconcile_hub_dead_pc`,
+`reconcile_router`, `evicted` — see "Ghost-session cleanup" above and
+`decision #8` on eviction) — plus `last_reconcile_at` (unix ms of the most
+recent sweep tick, 0 if the sweep has never run) and
+`last_reconcile_removed` (how many ghosts/orphans that tick acted on). On a
+healthy deployment the `reconcile_*` counters and `last_reconcile_removed`
+should sit at or near zero; a sustained climb means something upstream of
+the sweep (a missed PC-failure callback, a network partition) is happening
+more than expected.
 
 ## Load testing
 

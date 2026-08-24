@@ -115,7 +115,13 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 		if router == nil {
 			return utils.WriteError(c, fiber.StatusNotFound, "SFU is not enabled")
 		}
-		return c.JSON(router.Snapshot())
+		// "voice" (ghost-participants-plan.md §5) sits alongside "rooms"
+		// rather than replacing it: this endpoint is already used for
+		// debugging, and rooms is its original, still-load-bearing shape.
+		return c.JSON(fiber.Map{
+			"rooms": router.Snapshot().Rooms,
+			"voice": hub.VoiceDiagnostics(),
+		})
 	})
 
 	go hub.Run()

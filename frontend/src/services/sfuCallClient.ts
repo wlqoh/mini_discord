@@ -5,6 +5,7 @@ import type {
   SfuCandidatePayload,
   SfuErrorEvent,
   SfuOfferEvent,
+  SfuSessionClosedEvent,
   SfuSlotDecl,
   SfuTrackEvent,
   VoiceParticipant,
@@ -19,6 +20,7 @@ import type {
   LocalScreenStreamListener,
   ErrorListener,
   QualityListener,
+  CallStatusListener,
 } from "./voiceClient";
 import { LocalCapture } from "./localCapture";
 import {
@@ -86,6 +88,9 @@ export class SfuCallClient implements VoiceClient {
   // known participant's userID, since in a star topology everyone's
   // audio/video shares the same transport health.
   private readonly onQualityChange: QualityListener;
+  // ghost-participants-plan.md §6: reports auto-rejoin progress after the
+  // server tears down our own session out from under us.
+  private readonly onCallStatusChange: CallStatusListener;
 
   private readonly unsubscribers: Array<() => void> = [];
   private readonly participants = new Map<number, VoiceParticipant>();
@@ -148,6 +153,19 @@ export class SfuCallClient implements VoiceClient {
   // against itself.
   private signalQueue: Promise<void> = Promise.resolve();
 
+  // ghost-participants-plan.md §6 decision #7: session-loss recovery state.
+  // sessionLostHandled dedupes the two triggers that can both fire for the
+  // same death (our own pc.onconnectionstatechange AND the server's
+  // sfu_session_closed) — only the first starts a recovery run.
+  // recoveryGeneration is bumped by every teardownPeerConnection call
+  // (explicit leave, a channel switch, or recovery itself giving up); an
+  // in-flight recovery loop checks it after every backoff sleep and quietly
+  // stops if it's stale, so an explicit leave/rejoin elsewhere can't be
+  // clobbered by a delayed retry.
+  private sessionLostHandled = false;
+  private recoveryGeneration = 0;
+  private static readonly RECOVERY_DELAYS_MS = [1000, 3000, 7000];
+
   constructor(
     socket: ChatSocket,
     selfUserID: number,
@@ -157,6 +175,7 @@ export class SfuCallClient implements VoiceClient {
     onLocalScreenStream: LocalScreenStreamListener,
     onError: ErrorListener,
     onQualityChange: QualityListener,
+    onCallStatusChange: CallStatusListener,
   ) {
     this.socket = socket;
     this.selfUserID = selfUserID;
@@ -166,6 +185,7 @@ export class SfuCallClient implements VoiceClient {
     this.onLocalScreenStream = onLocalScreenStream;
     this.onError = onError;
     this.onQualityChange = onQualityChange;
+    this.onCallStatusChange = onCallStatusChange;
 
     this.unsubscribers.push(this.socket.onVoiceUserJoined((event) => this.handleVoiceUserJoined(event)));
     this.unsubscribers.push(this.socket.onVoiceUserLeft((event) => this.handleVoiceUserLeft(event)));
@@ -175,6 +195,7 @@ export class SfuCallClient implements VoiceClient {
       this.socket.onSfuCandidate((event) => this.enqueueSignal(() => this.handleServerCandidate(event))),
     );
     this.unsubscribers.push(this.socket.onSfuError((event) => this.handleSfuError(event)));
+    this.unsubscribers.push(this.socket.onSfuSessionClosed((event) => this.handleSfuSessionClosed(event)));
     this.unsubscribers.push(this.socket.onSfuTrackPublished((event) => this.handleTrackPublished(event)));
     this.unsubscribers.push(this.socket.onSfuTrackUnpublished((event) => this.handleTrackUnpublished(event)));
     this.unsubscribers.push(this.socket.onSfuActiveSpeakers((event) => this.handleActiveSpeakers(event)));
@@ -257,6 +278,8 @@ export class SfuCallClient implements VoiceClient {
     if (this.pc && this.sessionID && this.currentChannelID === channelID) {
       try {
         const response = await this.socket.sendSfuResume(this.sessionID);
+        this.sessionLostHandled = false;
+        this.onCallStatusChange("connected");
         this.participants.clear();
         response.participants.forEach((participant) => {
           this.participants.set(participant.user_id, participant);
@@ -281,6 +304,8 @@ export class SfuCallClient implements VoiceClient {
       throw new Error("SFU response is missing session_id");
     }
 
+    this.sessionLostHandled = false;
+    this.onCallStatusChange("connected");
     this.sessionID = response.session_id;
     this.iceServers = (response.ice_servers ?? []).map((server) => ({
       urls: server.urls,
@@ -323,10 +348,25 @@ export class SfuCallClient implements VoiceClient {
 
     pc.ontrack = (event) => this.handleTrack(event);
     pc.oniceconnectionstatechange = () => {
+      // Log-only, same reasoning as the backend's equivalent handler
+      // (ghost-participants-plan.md §3 decision #2): ICE state flaps on its
+      // own and isn't a reliable "this call is dead" signal by itself. The
+      // recovery decision is made on connectionState below instead, which
+      // aggregates ICE+DTLS and is terminal.
       debugLog("sfu:ice-state", { state: pc.iceConnectionState });
     };
     pc.onconnectionstatechange = () => {
       debugLog("sfu:connection-state", { state: pc.connectionState });
+      if (this.pc !== pc) {
+        // Stale event from a pc we've already torn down or replaced (our
+        // own teardownPeerConnection sets this.pc to null/a new instance
+        // before this fires) — not a session the server is waiting for us
+        // to recover.
+        return;
+      }
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        this.handleSessionLost("pc_failed");
+      }
     };
 
     // Fixed publish slots (decision #3): every transceiver is created up
@@ -557,6 +597,79 @@ export class SfuCallClient implements VoiceClient {
     }
     debugLog("sfu:error", event);
     this.onError(`Voice connection error: ${event.message}`);
+  }
+
+  // The server tore down our own SFU session (ghost-participants-plan.md
+  // §6) — a PC failure it caught before we did, a grace-period expiry, or
+  // the reconciliation sweep. Same recovery path as our own
+  // pc.onconnectionstatechange detecting it; handleSessionLost dedupes
+  // whichever of the two fires first.
+  private handleSfuSessionClosed(event: SfuSessionClosedEvent): void {
+    if (event.session_id !== this.sessionID) {
+      return;
+    }
+    debugLog("sfu:session-closed", event);
+    this.handleSessionLost(event.reason);
+  }
+
+  private handleSessionLost(reason: string): void {
+    if (this.sessionLostHandled || this.currentChannelID <= 0) {
+      return;
+    }
+    this.sessionLostHandled = true;
+    void this.runSessionRecovery(this.currentChannelID, this.recoveryGeneration, reason);
+  }
+
+  // Up to 3 automatic rejoin attempts with backoff (decision #7), only
+  // while the WebSocket itself is up — if it's not, ChatSocket's own
+  // reconnect flow will call rejoin()/sfu_resume once it's back (see
+  // useVoice's onReconnectRestored), and starting a second recovery here
+  // would just race it.
+  private async runSessionRecovery(channelID: number, generation: number, reason: string): Promise<void> {
+    debugLog("sfu:session-lost", { reason });
+
+    if (!this.socket.isOpen()) {
+      return;
+    }
+
+    this.onCallStatusChange("reconnecting");
+
+    for (const delay of SfuCallClient.RECOVERY_DELAYS_MS) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+
+      if (generation !== this.recoveryGeneration) {
+        // Superseded by an explicit leave, channel switch, or another
+        // recovery run elsewhere — not ours to finish anymore.
+        return;
+      }
+      if (!this.socket.isOpen()) {
+        // The WebSocket dropped mid-retry — defer to its own reconnect
+        // flow (decision #7) instead of racing it with a concurrent
+        // rejoin() once it comes back.
+        return;
+      }
+
+      try {
+        // rejoin() itself calls onCallStatusChange("connected") on success
+        // (applySession / the sfu_resume branch) — covers this call and
+        // the WS's own reconnect-driven rejoin() equally, so a call that
+        // recovers via that path instead never leaves the banner stuck.
+        await this.rejoin(channelID);
+        return;
+      } catch (err) {
+        debugLog("sfu:session-lost-rejoin-failed", err);
+      }
+    }
+
+    if (generation === this.recoveryGeneration) {
+      this.onCallStatusChange("lost");
+      // Full leave() rather than a bare teardownPeerConnection(): the local
+      // mic/camera/screen capture must stop too, or the UI is left showing
+      // a "you" tile with no one else in a call that's actually over.
+      // Telling the server is harmless even though it already knows —
+      // leaveVoiceChannelInternal is idempotent for a user it doesn't have.
+      await this.leave();
+    }
   }
 
   private handleTrackPublished(event: SfuTrackEvent): void {
@@ -852,6 +965,10 @@ export class SfuCallClient implements VoiceClient {
   }
 
   private teardownPeerConnection(): void {
+    // Invalidates any in-flight session-recovery loop (runSessionRecovery) —
+    // this teardown is either an explicit leave/channel-switch or recovery
+    // giving up on its own, neither of which a delayed retry should clobber.
+    this.recoveryGeneration++;
     this.pc?.close();
     this.pc = null;
     this.sessionID = "";

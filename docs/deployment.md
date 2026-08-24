@@ -138,6 +138,7 @@ resolve to a non-empty value from *either* source, or `MustLoad` calls
 | `webrtc.sfu.stun_urls` | `SFU_STUN_URLS` (comma-separated) | | |
 | `webrtc.sfu.max_room_participants` | `SFU_MAX_ROOM_PARTICIPANTS` | `20` | |
 | `webrtc.sfu.session_grace_period` | `SFU_SESSION_GRACE_PERIOD` | `30s` | |
+| `webrtc.sfu.reconcile_interval` | `SFU_RECONCILE_INTERVAL` | `15s` | `0` disables the ghost-session sweep (see [`voice.md`](voice.md)) |
 
 `env-required` fields (✅ above) are the ones that make `MustLoad` fatal if
 missing: `storage_path`, `jwt_secret`, `http_server.user`,

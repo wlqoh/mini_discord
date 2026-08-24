@@ -105,6 +105,13 @@ type SFUConfig struct {
 
 	MaxRoomParticipants int           `yaml:"max_room_participants" env:"SFU_MAX_ROOM_PARTICIPANTS" env-default:"20"`
 	SessionGracePeriod  time.Duration `yaml:"session_grace_period" env:"SFU_SESSION_GRACE_PERIOD" env-default:"30s"`
+
+	// ReconcileInterval paces the hub's ghost-session sweep (ghost-
+	// participants-plan.md §5): it cross-checks hub voice membership against
+	// the router's live sessions and tears down whichever side is stale in
+	// the other. 0 disables the sweep entirely — an emergency off-switch if
+	// it ever misfires in production without needing a rebuild.
+	ReconcileInterval time.Duration `yaml:"reconcile_interval" env:"SFU_RECONCILE_INTERVAL" env-default:"15s"`
 }
 
 // S3Config configures internal/storage/objectStorage's S3-compatible
