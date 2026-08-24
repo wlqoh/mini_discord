@@ -1,7 +1,7 @@
 # Mini Discord
 
 [![CI](https://github.com/wlqoh/mini_discord/actions/workflows/ci.yml/badge.svg)](https://github.com/wlqoh/mini_discord/actions/workflows/ci.yml)
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![status](https://img.shields.io/badge/status-personal%20project-lightgrey)
 
@@ -58,7 +58,7 @@ See [`docs/architecture.md`](docs/architecture.md) for the rest.
 
 | Layer | Choice |
 |---|---|
-| Language | Go 1.25 |
+| Language | Go 1.26 |
 | HTTP | Fiber v2 |
 | WebSocket | `gofiber/contrib/websocket` |
 | Voice/video | Pion WebRTC v4 (embedded SFU) |
@@ -107,7 +107,7 @@ Authoritative: the tree itself — regenerate with `find . -type d`.
 
 ## Quick start
 
-**Requirements:** Go 1.25+, PostgreSQL 18, [goose](https://github.com/pressly/goose), Node 20+ (frontend only), Docker (optional, for the all-in-one path).
+**Requirements:** Go 1.26+, PostgreSQL 18, [goose](https://github.com/pressly/goose), Node 20+ (frontend only), Docker (optional, for the all-in-one path).
 
 1. Clone and create `local.env` in the repo root (gitignored):
 
