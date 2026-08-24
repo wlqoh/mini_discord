@@ -1,436 +1,203 @@
 # Mini Discord
 
-REST API сервер на Go — бэкенд для мини-версии Discord с регистрацией, аутентификацией пользователей и JWT-авторизацией.
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![status](https://img.shields.io/badge/status-personal%20project-lightgrey)
 
-## Технологии
+A self-hosted, Discord-style chat app: servers, channels, real-time messaging, and voice/video calls. The backend is Go on Fiber v2 with a single WebSocket hub and an embedded Pion SFU for calls (not a peer-to-peer mesh); the frontend is React 19 + TypeScript.
 
-- **Go 1.25+**
-- **Chi** — HTTP-роутер
-- **PostgreSQL 18** — база данных
-- **JWT** — аутентификация (`golang-jwt`)
-- **bcrypt** — хеширование паролей
-- **Goose** — миграции базы данных
-- **cleanenv** — конфигурация из YAML
-- **validator** — валидация входных данных
+<!--
+![Chat](docs/assets/chat.png)
+Expected screenshots once captured: docs/assets/chat.png, docs/assets/voice.png, docs/assets/search.png
+-->
 
-## Структура проекта
+## Features
 
-```
-├── cmd/discord_go/        # Точка входа приложения
-├── config/                # Конфигурационные файлы (YAML)
-├── internal/
-│   ├── config/            # Загрузка конфигурации
-│   ├── lib/
-│   │   ├── api/           # HTTP-сервер и маршрутизация
-│   │   └── logger/sl/     # Хелперы для логирования
-│   ├── service/
-│   │   ├── auth/          # JWT-токены и хеширование паролей
-│   │   └── user/          # Хендлеры и хранилище пользователей
-│   └── storage/
-│       └── postgresql/    # Подключение к PostgreSQL
-├── sql/schema/            # SQL-миграции (Goose)
-├── types/                 # Типы данных и интерфейсы
-├── utils/                 # Утилиты (JSON, валидация)
-└── tests/                 # Тесты
-```
+**Auth** — Registration with email verification ([`docs/api.md`](docs/api.md)); JWT access + refresh tokens, `POST /tokens/renew`; avatar upload, profile updates, account deletion.
 
-## Требования
+**Chat** — Servers/channels, membership, search & join; real-time messaging over one WS hub, edit/delete, replies ([`docs/architecture.md`](docs/architecture.md)); file/image/audio/video attachments via upload-then-send ([`docs/api.md`](docs/api.md#flows-that-dont-show-up-in-the-type-table)); @-mentions; ephemeral typing indicators; link previews with a three-tier cache and SSRF-hardened image proxy ([`docs/architecture.md`](docs/architecture.md#link-previews)); custom audio/video players with a lazy Web Audio equalizer/visualizer ([`docs/frontend.md`](docs/frontend.md#media-players)).
 
-- Go 1.25+
-- Docker (для PostgreSQL)
-- [Goose](https://github.com/pressly/goose) (для миграций)
+**Search & unread** — Full-text message search scoped to a channel or server; jump-to-message with a two-sided history window; per-channel unread tracking ([`docs/api.md`](docs/api.md)).
 
-## Установка и запуск
+**Notifications** — In-app sound + browser notifications out of the box; per-server/per-channel overrides, mute, Do Not Disturb, hide-preview ([`docs/architecture.md`](docs/architecture.md#notifications-pipeline)); Web Push for closed-tab delivery, opt-in via VAPID keys ([`docs/deployment.md`](docs/deployment.md#web-push)).
 
-### 1. Клонируйте репозиторий
+**Voice/Video** — Server-side SFU (Pion), one `RTCPeerConnection` per client with four fixed publish slots; mic, camera, screen share, screen audio; reconnect grace period that keeps media flowing through brief WS drops; TURN/coturn with short-lived per-user credentials; live room/peer diagnostics and a headless SFU load-test client ([`docs/voice.md`](docs/voice.md)).
 
-```bash
-git clone https://github.com/wlqoh/mini_discord.git
-cd mini_discord
-```
+**Ops** — Per-action/user rate limiting (token bucket); graceful shutdown, structured JSON logging, request IDs ([`docs/architecture.md`](docs/architecture.md#cross-cutting)); two-path DB migrations kept in sync mechanically ([`docs/deployment.md`](docs/deployment.md#migrations--two-parallel-paths)).
 
-### 2. Запустите PostgreSQL в Docker
+## Architecture at a glance
 
-```bash
-docker run -d \
-  --name postgres_db \
-  -e POSTGRES_USER=murad \
-  -e POSTGRES_PASSWORD=123 \
-  -p 5432:5432 \
-  postgres:18
+```mermaid
+flowchart LR
+    Browser["Browser (React SPA)"]
+    Browser -- "REST /api/v1" --> Fiber
+    Browser -- "WebSocket /server/ws" --> Fiber
+    Browser -. "WebRTC / DTLS-SRTP (direct UDP)" .-> SFU
+    subgraph Fiber["Fiber app"]
+        Handlers["user / notification / embed / webrtc handlers"]
+        Hub["Hub (single goroutine)"]
+    end
+    subgraph SFU["SFU Router (same process)"]
+    end
+    Hub -. "Signaler / Authorizer interfaces" .-> SFU
+    Handlers --> PG[(PostgreSQL)]
+    Hub --> PG
+    Handlers --> S3[(S3-compatible storage)]
+    Handlers --> SMTP[(SMTP)]
+    Hub --> Push[(Web Push)]
+    style Hub fill:#4a5568,color:#fff
+    style SFU fill:#2d3748,color:#fff
 ```
 
-### 3. Настройте конфигурацию
+Three things worth internalizing before touching the backend: `Hub.Run` is a **single goroutine** — all chat/voice-membership state is mutated only there, never concurrently. The SFU lives in the same process but **does not import** `internal/service/server` — coupling goes only through the `Signaler`/`Authorizer` interfaces, and media itself flows directly over UDP, bypassing Fiber entirely. Nothing about an active call is persisted — voice/SFU state is in-memory only and disappears on restart.
 
-Создайте файл `local.env`:
+See [`docs/architecture.md`](docs/architecture.md) for the rest.
 
-```env
-CONFIG_PATH=./config/local.yaml
-DB_URL=postgres://murad:123@localhost:5432/postgres?sslmode=disable
+## Tech stack
+
+| Layer | Choice |
+|---|---|
+| Language | Go 1.25 |
+| HTTP | Fiber v2 |
+| WebSocket | `gofiber/contrib/websocket` |
+| Voice/video | Pion WebRTC v4 (embedded SFU) |
+| Database | PostgreSQL 18, `lib/pq` (raw SQL, no ORM) |
+| Migrations | goose |
+| Config | `cleanenv` (YAML + env overlay) |
+| Auth | `golang-jwt` v5, bcrypt |
+| Object storage | AWS SDK v2 against Yandex Object Storage (S3-compatible) |
+| Web Push | `webpush-go` |
+| Frontend | React 19 + Vite + TypeScript |
+
+## Project structure
+
+```
+cmd/                    # Entrypoints: discord_go (server), genvapid, sfuload (load test)
+config/                 # Gitignored YAML config (see Quick start)
+docs/                   # Topic docs — see "Documentation" below
+frontend/               # React 19 + Vite + TypeScript SPA
+internal/
+├── config/              # YAML+env config loading (cleanenv, singleton)
+├── lib/                 # Composition root (api/), graceful shutdown (closer/), logging (logger/)
+├── middleware/           # JWT auth, rate limiting, request ID, recovery, logger
+├── service/
+│   ├── auth/             # JWT issuance, password hashing
+│   ├── embed/            # Link-preview fetch/cache pipeline
+│   ├── mailer/           # SMTP verification emails
+│   ├── notification/     # Notification-settings + push REST handlers
+│   ├── push/             # Web Push worker pool + aggregation
+│   ├── server/           # The hub: WS connections, chat/voice state
+│   ├── sfu/              # Pion-based SFU: rooms, peers, simulcast
+│   ├── user/              # Auth/profile/avatar/upload REST handlers
+│   └── webrtc/            # TURN credential minting
+└── storage/
+    ├── cache/              # Generic TTL map
+    ├── objectStorage/      # S3-compatible client
+    ├── postgresql/         # Storage interface implementation, raw SQL
+    └── single_flight/       # Concurrent-call deduplication
+sql/
+├── schema/               # goose migrations (make up/down)
+└── init/                 # Idempotent mirror for docker-compose's migrate service
+types/                  # Shared types + storage interfaces + the WS wire contract
+utils/                  # JSON/validation/URL helpers
 ```
 
-Создайте файл `config/local.yaml`:
+Authoritative: the tree itself — regenerate with `find . -type d`.
 
-```yaml
-env: "local"
-storage_path: "postgres://murad:123@localhost:5432/postgres?sslmode=disable"
-http_server:
-  host: "localhost:8080"
-  timeout: 4s
-  idle_timeout: 60s
-  user: "myuser"
-  password: "mypass"
-jwt_secret: "your-secret-key"
-jwt_expiration_in_seconds: 604800
-```
+## Quick start
 
-### 4. Примените миграции
+**Requirements:** Go 1.25+, PostgreSQL 18, [goose](https://github.com/pressly/goose), Node 20+ (frontend only), Docker (optional, for the all-in-one path).
 
-```bash
-make up
-```
+1. Clone and create `local.env` in the repo root (gitignored):
 
-### 5. Запустите сервер
+   ```env
+   CONFIG_PATH=./config/local.yaml
+   DB_URL=postgres://user:pass@localhost:5432/postgres?sslmode=disable
+   ```
 
-```bash
-make run
-```
+2. Create `config/local.yaml` (the whole `config/` directory is gitignored) — minimal working template, only the `env-required` fields plus a couple of obvious ones:
 
-Сервер запустится на `localhost:8080`.
+   ```yaml
+   env: "local"
+   storage_path: "postgres://user:pass@localhost:5432/postgres?sslmode=disable"
+   http_server:
+     host: "localhost:8080"
+     user: "myuser"
+     password: "mypass"
+   jwt_secret: "your-secret-key"
+   s3:
+     bucket: "your-bucket"
+     access_key_id: "your-key-id"
+     secret_access_key: "your-secret-key"
+   ```
 
-### 2.5. Если запускаете через docker-compose
+   The `s3.*` fields are `env-required` — without them `config.MustLoad()` calls `log.Fatal` and the process exits at startup. Full schema (mail, push, link previews, TURN/SFU, etc.): [`docs/deployment.md`](docs/deployment.md#config-reference) and `internal/config/config.go`.
 
-Теперь в `docker-compose.yml` есть сервис `migrate`, который при каждом `docker compose up`
-применяет SQL-скрипты из `sql/init` (`01_users.sql` и `02_chat_schema.sql`).
-Это закрывает кейс с уже существующим volume, где стандартный `/docker-entrypoint-initdb.d`
-у Postgres больше не выполняется.
+3. Apply migrations and run:
 
-Запуск:
+   ```bash
+   make up
+   make run
+   ```
 
-```bash
-docker compose up -d --build
-```
+4. Frontend, in a separate shell:
 
-Проверка, что таблицы созданы:
+   ```bash
+   cd frontend
+   npm install
+   npm run dev   # http://localhost:5174 (strictPort)
+   ```
 
-```bash
-docker compose exec db psql -U murad -d postgres -c "\\dt"
-```
-
-Если после обновления compose-файла контейнеры уже были запущены, перезапустите стек:
-
-```bash
-docker compose down
-docker compose up -d --build
-```
-
-### Production routing notes
-
-- Frontend container is published only to localhost: `127.0.0.1:8081:80`.
-- Public traffic should go through host Nginx.
-- API requests are expected under `/api/*`.
-- For backward compatibility, `/api/v1/auth/*` is rewritten to `/api/v1/*` in `frontend/nginx.conf`.
-
-## Voice/Video channels (WebRTC via SFU)
-
-- Calls use the same websocket endpoint: `/api/v1/server/ws`.
-- Channel types:
-  - `text` for chat
-  - `voice` for voice/video rooms
-- Voice runs through a server-side SFU (`internal/service/sfu/`, Pion-based): each client
-  holds a single `RTCPeerConnection` to the server, which forwards published tracks to
-  subscribers — there is no peer-to-peer mesh.
-- Signaling actions over websocket:
-  - `join_voice_channel` — returns `transport_mode: "sfu"`, a `session_id`, ICE servers, and
-    the fixed publish-slot declarations (mic/camera/screen/screen_audio)
-  - `leave_voice_channel`
-  - `sfu_offer` / `sfu_answer` / `sfu_candidate` — SDP/ICE exchange with the SFU (server is
-    always the offerer after the client's initial offer)
-  - `sfu_subscribe_video` — explicit opt-in to receive a given participant's video (audio is
-    auto-subscribed on publish)
-  - `sfu_resume` — reattaches an existing SFU session after a brief websocket reconnect,
-    without tearing down media
-- A short-lived debug snapshot of active rooms is available at
-  `GET /api/v1/admin/sfu/rooms` (same HTTP Basic Auth as `http_server.user`/`password`).
-
-### Frontend env for WebRTC
-
-```bash
-VITE_API_URL=/api/v1
-VITE_WEBRTC_STUN_URLS=stun:stun.l.google.com:19302
-VITE_WEBRTC_TURN_URLS=turn:turn.your-domain.com:3478?transport=udp,turn:turn.your-domain.com:3478?transport=tcp,turns:turn.your-domain.com:5349?transport=tcp
-VITE_WEBRTC_TURN_USERNAME=mini_discord
-VITE_WEBRTC_TURN_CREDENTIAL=change-me
-# optional debug switch (forces TURN relay only)
-VITE_WEBRTC_FORCE_RELAY=false
-```
-
-For docker-compose production build, export the same `VITE_*` variables in shell (or `.env`) before running:
+**All-in-one alternative:**
 
 ```bash
 docker compose up -d --build
 ```
 
-## Notifications (sound + browser + Web Push)
+This brings up `db` → `migrate` → `backend` → `frontend` in dependency order — see [`docs/deployment.md`](docs/deployment.md) for what each service does and the full migration story.
 
-- **Sound & in-app notifications** work out of the box for any logged-in session — no config needed. They cover the tab-open case (WS-live) and are governed by per-user settings under `REST /api/v1/notifications/settings` (default level, per-server/per-channel overrides, mute, Do Not Disturb, hide-preview).
-- **Web Push** (notifications while the tab is closed) requires a VAPID key pair and is disabled by default. To enable it:
+## Make targets
 
-  1. Generate a key pair:
-     ```bash
-     make genvapid
-     ```
-  2. Add the printed keys to `config/local.yaml` (or the prod config):
-     ```yaml
-     push:
-       enabled: true
-       vapid_public_key: "<public key>"
-       vapid_private_key: "<private key>"
-       vapid_subject: "mailto:admin@example.com"
-       ttl_seconds: 43200
-     ```
-  3. Rebuild/restart the backend. `GET /api/v1/push/public-key` returns `404` whenever `push.enabled` is `false` — the frontend treats that as "push unavailable" and silently falls back to sound + in-tab notifications only.
+| Target | Does |
+|---|---|
+| `make build` | Build the binary to `bin/discord_go.exe` |
+| `make run` | Build, then run |
+| `make up` | Apply DB migrations (goose, `sql/schema`) |
+| `make down` | Roll back DB migrations |
+| `make genvapid` | Generate a VAPID key pair for Web Push |
+| `make doc-check` | Fail if any exported Go symbol is missing a godoc comment |
+| `make docs-check` | Fail if code and `docs/`/`Readme.md` have drifted (WS actions/events, REST routes, migrations, make targets) — see below |
+| `make deploy` | Deploy to a server over SSH via `scripts/deploy.sh` |
 
-- **Testing the Service Worker locally**: the dev server only registers `public/sw.js` when `VITE_ENABLE_SW=true` is set (production builds always register it) — without it, push and background notifications can't be exercised in `npm run dev`:
-  ```bash
-  VITE_ENABLE_SW=true npm run dev
-  ```
-- Push delivery uses a small worker pool with a ~10s aggregation window per `(user, channel)` so a burst of ordinary messages collapses into one notification; mentions bypass the window and send immediately with high urgency. See `internal/service/push/`.
-- Migrations `019`–`021` (`sql/schema/`, mirrored without goose markers in `sql/init/`) add mentions, notification settings, and push subscriptions respectively.
+## Environments
 
-Example file: `frontend/.env.production.example`.
+| `env` | Log level |
+|---|---|
+| `local` | Debug (JSON) |
+| `dev` | Debug (JSON) |
+| `prod` | Info (JSON) |
 
-### Required TURN setup for stable production calls
+## Tests
 
-Without TURN, calls can work inconsistently across different ISPs/NATs (exactly the case when VPN helps some users).
-
-1. Set TURN variables in your deployment `.env`:
+Backend tests currently live only in `internal/service/sfu/` (simulcast layer selection, RTP sequence rewriting, active-speaker detection, publish-state semantics, plus `smoke_test.go` which actually binds the UDP mux) and `cmd/sfuload`, a headless load-test client. There is **no frontend test runner** — UI changes are verified manually. See [`docs/voice.md`](docs/voice.md#tests) for the test file breakdown.
 
 ```bash
-TURN_REALM=your-domain.com
-TURN_PUBLIC_IP=YOUR_SERVER_PUBLIC_IP
-TURN_USERNAME=mini_discord
-TURN_PASSWORD=strong-turn-password
-TURN_TLS_PORT=5349
-TURN_TLS_CERT_FILE=/etc/coturn/certs/fullchain.pem
-TURN_TLS_KEY_FILE=/etc/coturn/certs/privkey.pem
-TURN_MIN_PORT=49160
-TURN_MAX_PORT=49260
-
-VITE_WEBRTC_TURN_URLS=turn:your-domain.com:3478?transport=udp,turn:your-domain.com:3478?transport=tcp,turns:your-domain.com:5349?transport=tcp
-VITE_WEBRTC_TURN_USERNAME=mini_discord
-VITE_WEBRTC_TURN_CREDENTIAL=strong-turn-password
-VITE_WEBRTC_FORCE_RELAY=false
+go test ./...
+go test ./internal/service/sfu -run TestForwardToSubscribersSwitchesOnlyOnKeyframe -v   # single test
 ```
 
-2. Open firewall ports on the host:
+## Documentation
 
-- `3478/tcp`
-- `3478/udp`
-- `5349/tcp`
-- `49160-49260/udp`
-- `49160-49260/tcp`
+- [`docs/architecture.md`](docs/architecture.md) — the hub, storage layer, link previews, notifications, boundaries to preserve
+- [`docs/api.md`](docs/api.md) — REST routes and the full WS action/event contract
+- [`docs/voice.md`](docs/voice.md) — the SFU, signaling, TURN/coturn, diagnostics
+- [`docs/deployment.md`](docs/deployment.md) — docker compose, migrations, config reference, S3/push/nginx
+- [`docs/frontend.md`](docs/frontend.md) — hooks/services layout, media players, CORS pitfalls
 
-3. Put certificates for coturn to `deploy/coturn/certs/`:
+Field lists and directory trees in `docs/` link back to the code rather than duplicating it — the one exception is the minimal config template in "Quick start" above, kept here because it's the first thing a new clone needs.
 
-- `deploy/coturn/certs/fullchain.pem`
-- `deploy/coturn/certs/privkey.pem`
+`make docs-check` (`scripts/docscheck.go`) mechanically checks that every `WsAction*`/`WsEvent*` value, every REST route, every `sql/init/` migration file, and every Make target is *mentioned* somewhere in the docs above — it catches "forgot to document," not "documented incorrectly."
 
-For highly restrictive networks (some VPN/corporate/mobile providers), TURN over UDP can still be blocked. In that case, keep `transport=tcp` in `VITE_WEBRTC_TURN_URLS` and temporarily set `VITE_WEBRTC_FORCE_RELAY=true` to validate that relay path is healthy.
-
-4. Rebuild and restart:
-
-```bash
-docker compose down
-docker compose up -d --build
-```
-
-Optional websocket override:
-
-```bash
-VITE_WS_URL=wss://your-domain.com/api/v1/server/ws
-```
-
-Quick check after deploy (logs should show allocations when users join calls):
-
-```bash
-docker compose logs -f turn
-```
-
-### Origin allow-lists
-
-Configure allowed browser origins in backend config:
-
-- `http_server.cors_allowed_origins`
-- `http_server.ws_allowed_origins`
-
-## Link previews
-
-Сообщение со ссылкой получает карточку с метаданными страницы (Open Graph / Twitter Card / `<title>`).
-
-- Метаданные забирает бэкенд (`internal/service/embed/`) **асинхронно**, воркер-пулом: горутина `Hub.Run()` последовательна и не может ждать внешний сайт. Готовое превью прилетает отдельным WS-событием `message_embeds`, фронт домёрживает его в сообщение по `message_id`.
-- Превью делается только для **первой** подходящей ссылки в сообщении. Ссылки на собственный фронтенд и на S3-бакет пропускаются.
-- Кэш трёхуровневый: память (`internal/storage/cache`) → `link_previews` в Postgres → сеть. Параллельные запросы одного URL схлопываются через `single_flight`. Неудачные фетчи кэшируются отдельным, более коротким TTL.
-- Картинка `og:image` **проксируется** через `GET /api/v1/embeds/image/:token`, чтобы IP пользователей не утекали на чужие сайты. Токен случайный (128 бит) и хранится в `link_previews.image_token`; сырой URL наружу не отдаётся. `image/svg+xml` отклоняется.
-- SSRF закрыт на уровне сокета: `DialContext` отклоняет приватные, loopback, link-local (включая `169.254.169.254`) и CGNAT-адреса и разрешает только порты 80/443. Проверка идёт по фактическому IP, поэтому устойчива к DNS-rebinding и повторяется на каждом редиректе.
-- Превью получают только сообщения, отправленные после включения фичи: бэкфилла истории нет.
-
-Настройки — блок `link_preview` в конфиге (включён по умолчанию):
-
-```yaml
-link_preview:
-  enabled: true
-  timeout: 5s
-  max_body_bytes: 524288
-  max_image_bytes: 2097152
-  max_redirects: 3
-  cache_ttl: 168h
-  negative_cache_ttl: 6h
-  workers: 4
-  user_agent: "MiniDiscordBot/1.0 (+link preview)"
-```
-
-Миграция `022` (`sql/schema/`, зеркало без goose-маркеров в `sql/init/14_link_previews.sql`) добавляет таблицы `link_previews` и `message_embeds`.
-
-## Media Player (frontend)
-
-Audio message attachments render with a custom, reusable player instead of the bare native `<audio>` control.
-
-**Files:**
-
-- `frontend/src/types/media.ts` — `Track`, `PlayerState`, `EqualizerBand`, `LoopMode` types. `PlayerState.volume` (0..1) and `PlayerState.boost` (1..2) are independent fields — boost is an extra Web-Audio gain multiplier on top of volume, not a second interpretation of the same number.
-- `frontend/src/hooks/useMediaPlayer.ts` — headless playback hook: owns an `<audio>` ref, playback state (play/pause/seek/volume/boost/rate/loop/shuffle), a lazily-created Web Audio graph (5-band equalizer + analyser + gain boost), and DOM event wiring (`timeupdate`, `loadedmetadata`, `ended`, `error`, `progress`). By default all instances on a page share one lazily-created `AudioContext` (module-level singleton) instead of one each, since browsers such as Safari cap concurrent AudioContexts — pass `audioContext` to opt into a different shared context (e.g. from a call) instead.
-- `frontend/src/services/playlistService.ts` — `shuffleTracks` (Fisher-Yates), `getNextIndex`/`getPreviousIndex` for advancing the queue, and `addToHistory` (`localStorage`-backed playback history).
-- `frontend/src/components/MediaPlayer.tsx` — the UI: transport controls, interactive seek bar with hover time preview (available in both expanded and mini mode), volume slider + mute, playback-speed dropdown, loop-mode cycling, shuffle, a collapsible equalizer/volume-boost/spectrum-visualizer panel, a queue panel, and a mini/compact mode. Mini mode keeps the seek bar, mute, and volume controls, and surfaces playback errors as a small alert icon (with the message as a tooltip/accessible name) next to the track title. Keyboard shortcuts (when the player has focus): `Space` play/pause, `M` mute, `←`/`→` seek ±5s.
-- `frontend/src/styles/mediaPlayer.css` — styling, reusing the `chat.css` design tokens (`--glass-*`, `--accent*`, `--text-*`, `--radius-*`) so it matches the dark/light theme automatically.
-
-**Usage:**
-
-```tsx
-import MediaPlayer from "./components/MediaPlayer";
-import type { Track } from "./types/media";
-
-const tracks: Track[] = [
-  { id: 1, title: "Song A", artist: "Artist", duration: 0, url: "https://.../a.mp3" },
-  { id: 2, title: "Song B", artist: "Artist", duration: 0, url: "https://.../b.ogg" },
-];
-
-<MediaPlayer
-  tracks={tracks}
-  compact={false}        // start expanded (true = mini/now-playing bar)
-  showPlaylist={true}    // queue panel toggle
-  showEqualizer={true}   // EQ + volume-boost panel toggle
-  showVisualizer={true}  // spectrum visualizer toggle
-  audioContext={sharedCtx} // optional: reuse an AudioContext (e.g. from a call) instead of the default shared one
-/>
-```
-
-The equalizer/visualizer/volume-boost only create a `MediaElementAudioSourceNode` graph the first time they're actually toggled on, so a plain playback session never pays for Web Audio setup. If `AudioContext` is unavailable, playback still works through the native `<audio>` element.
-
-**Chat integration:** `MessageList.tsx` renders an `<AudioAttachment>` wrapper per audio attachment (mapped from `Attachment` via `guessFormatFromContentType`, memoized so the `tracks` array stays referentially stable across unrelated message-list re-renders) around `<MediaPlayer tracks={tracks} compact showPlaylist={false} />`, starting collapsed as a now-playing bar the user can expand.
-
-### Video player
-
-- `frontend/src/components/VideoPlayer.tsx` — reuses `useMediaPlayer<HTMLVideoElement>` (the hook is generic over the media element type) around a visible `<video>` element instead of a hidden `<audio>` one. Controls (play/pause, seek bar with hover preview, volume + mute, playback speed, fullscreen, Picture-in-Picture) render as an overlay bar that auto-hides after ~2.5s of inactivity while playing, and stays visible while paused. Keyboard shortcuts: `Space` play/pause, `M` mute, `F` fullscreen, `←`/`→` seek ±5s.
-- `frontend/src/styles/videoPlayer.css` — dark/translucent overlay chrome (video content itself sets the backdrop, so this doesn't reuse `chat.css`'s glass-surface tokens, only `--accent*`/`--radius-*`).
-- **Chat integration:** `MessageList.tsx`'s `VideoAttachment` wrapper mirrors `AudioAttachment` (same memoized single-track mapping) around `<VideoPlayer tracks={tracks} />`.
-
-### Web Audio + cross-origin attachments — required bucket CORS
-
-Both `<audio crossOrigin="anonymous">` (MediaPlayer) and `<video crossOrigin="anonymous">` (VideoPlayer) route through `createMediaElementSource` once the equalizer, volume boost, or spectrum visualizer is enabled. Per the Web Audio spec, an element's audio is silently zeroed once piped through the graph if the underlying resource is cross-origin and wasn't loaded in CORS mode with permission from the server (this is a security measure, not an error — no exception is thrown, playback just goes silent the moment those features are toggled on).
-
-Since attachments are served straight from the Yandex Object Storage bucket (`S3HOST`, see below), **the bucket itself must return `Access-Control-Allow-Origin` for the app's origin(s)** — this can't be fixed from application code alone. Bucket CORS is configured out-of-band (e.g. via `boto3`/`aws s3api put-bucket-cors` against the Yandex Object Storage S3-compatible endpoint), not from this repo. A rule like the following is sufficient:
-
-```json
-{
-  "CORSRules": [
-    {
-      "AllowedOrigins": ["https://hyorward.tech", "https://www.hyorward.tech"],
-      "AllowedMethods": ["GET", "HEAD"],
-      "AllowedHeaders": ["*"],
-      "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges", "ETag"],
-      "MaxAgeSeconds": 3600
-    }
-  ]
-}
-```
-
-Without this, plain playback still works fine (no CORS involved for normal `<audio>`/`<video>` fetches), but toggling the equalizer/boost/visualizer goes silent.
-
-## API Эндпоинты
-
-Базовый путь: `/api/v1`
-
-### Регистрация
-
-```
-POST /api/v1/register
-```
-
-**Body:**
-
-```json
-{
-  "first_name": "Ivan",
-  "last_name": "Ivanov",
-  "email": "ivan@example.com",
-  "password": "secret123"
-}
-```
-
-**Ответ:** `201 Created`
-
-```json
-{
-  "status": "ok"
-}
-```
-
-### Авторизация
-
-```
-POST /api/v1/login
-```
-
-**Body:**
-
-```json
-{
-  "email": "ivan@example.com",
-  "password": "secret123"
-}
-```
-
-**Ответ:** `200 OK`
-
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIs..."
-}
-```
-
-## Makefile команды
-
-| Команда      | Описание                        |
-|--------------|---------------------------------|
-| `make build` | Сборка бинарного файла          |
-| `make run`   | Сборка и запуск сервера         |
-| `make up`    | Применить миграции БД (goose)   |
-| `make down`  | Откатить миграции БД (goose)    |
-| `make genvapid` | Сгенерировать пару VAPID-ключей для Web Push |
-| `make doc-check` | Проверить, что у каждого экспортированного символа Go-кода есть godoc-комментарий (`scripts/doccheck.go`) |
-
-## Окружения
-
-Приложение поддерживает три режима работы через параметр `env` в конфигурации:
-
-| Окружение | Уровень логов |
-|-----------|---------------|
-| `local`   | Debug (JSON)  |
-| `dev`     | Debug (JSON)  |
-| `prod`    | Info (JSON)   |
-
-## Лицензия
+## License
 
 MIT
-

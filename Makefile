@@ -10,10 +10,13 @@ DEPLOY_KEY ?= ~/.ssh/mini_discord_deploy
 build:
 	@go build -o bin/discord_go.exe cmd/discord_go/main.go
 
-.PHONY: up down genvapid deploy doc-check
+.PHONY: up down genvapid deploy doc-check docs-check
 
 doc-check:
 	@go run scripts/doccheck.go -max 0 .
+
+docs-check:
+	@go run scripts/docscheck.go .
 
 up:
 	goose -dir $(MIGRATIONS) postgres "$(DB_URL)" up
