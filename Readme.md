@@ -167,6 +167,7 @@ This brings up `db` → `migrate` → `backend` → `frontend` in dependency ord
 | `make genvapid` | Generate a VAPID key pair for Web Push |
 | `make doc-check` | Fail if any exported Go symbol is missing a godoc comment |
 | `make docs-check` | Fail if code and `docs/`/`Readme.md` have drifted (WS actions/events, REST routes, migrations, make targets) — see below |
+| `make install-hooks` | Point git at `.githooks` so `doc-check`/`docs-check` run automatically pre-commit on relevant staged changes (run once per clone; `git commit --no-verify` bypasses a single commit) |
 | `make deploy` | Deploy to a server over SSH via `scripts/deploy.sh` |
 
 ## Environments
