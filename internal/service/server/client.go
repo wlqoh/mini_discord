@@ -17,6 +17,12 @@ const (
 	pingPeriod = 25 * time.Second
 )
 
+// Client is one user's WebSocket connection. There is at most one Client
+// per user in Hub.clientsByUser; a second connection for the same user
+// evicts the first. Outbound is drained by a dedicated writer goroutine
+// (writeMessage, started by Handler alongside readMessage) that also sends
+// a ping every pingPeriod, so callers must never write to c.Conn directly —
+// send events through Outbound instead.
 type Client struct {
 	Conn     *websocket.Conn
 	Outbound chan *types.WsEvent
