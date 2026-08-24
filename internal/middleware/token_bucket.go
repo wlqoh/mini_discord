@@ -23,7 +23,6 @@ type TokenBucket struct {
 	cleanupInterval time.Duration
 	stopCh          chan struct{}
 	startOnce       sync.Once
-	stopOnce        sync.Once
 }
 
 type bucketState struct {

@@ -155,7 +155,7 @@ func (s *Storage) GetMessageEmbeds(ctx context.Context, messageIDs []int64) (map
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[int64][]types.WsLinkPreview)
 	for rows.Next() {

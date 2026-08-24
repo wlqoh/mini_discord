@@ -686,14 +686,6 @@ func (h *Hub) pushToUsers(userIDs []int, event *types.WsEvent) {
 	h.mu.RUnlock()
 }
 
-func (h *Hub) pushToAllUsers(event *types.WsEvent) {
-	h.mu.RLock()
-	for _, cl := range h.clientsByUser {
-		h.enqueueEvent(cl, event)
-	}
-	h.mu.RUnlock()
-}
-
 func (h *Hub) pushEvent(cl *Client, event *types.WsEvent) {
 	h.mu.RLock()
 	current, ok := h.clientsByUser[cl.UserID]

@@ -153,7 +153,7 @@ func (b *bot) run(stop <-chan struct{}) error {
 		return fmt.Errorf("create peer connection: %w", err)
 	}
 	b.pc = pc
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 
 	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		b.log.Printf("ice state: %s", state)
