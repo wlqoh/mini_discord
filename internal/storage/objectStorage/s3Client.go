@@ -1,3 +1,6 @@
+// Package objectStorage is an S3-compatible client (AWS SDK v2, path-style
+// requests) for user avatars and message attachments, used against Yandex
+// Object Storage. It implements types.S3ClientStorage.
 package objectStorage
 
 import (
@@ -18,12 +21,16 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// S3Client is the AWS SDK v2-backed implementation of types.S3ClientStorage.
 type S3Client struct {
 	s3Client *s3.Client
 	cfg      *config.Config
 	log      *slog.Logger
 }
 
+// NewS3Client builds an S3Client from cfg.S3. It returns nil (not an error)
+// if the bucket or credentials are missing from config, or if the AWS SDK
+// fails to load its configuration; either case is logged via log.
 func NewS3Client(cfg *config.Config, log *slog.Logger) *S3Client {
 	if strings.TrimSpace(cfg.S3.Bucket) == "" || strings.TrimSpace(cfg.S3.AccessKeyID) == "" || strings.TrimSpace(cfg.S3.SecretAccessKey) == "" {
 		log.Error("s3 configuration is incomplete")
@@ -50,6 +57,9 @@ func NewS3Client(cfg *config.Config, log *slog.Logger) *S3Client {
 	return &S3Client{s3Client, cfg, log}
 }
 
+// PutAvatar implements types.S3ClientStorage, storing data under the
+// "avatars/" prefix and returning its public URL. Content type is guessed
+// from filename's extension.
 func (s3Client *S3Client) PutAvatar(ctx context.Context, key string, data []byte, filename string) (string, error) {
 	contentType := mime.TypeByExtension(filepath.Ext(filename))
 	if contentType == "" {
@@ -69,6 +79,8 @@ func (s3Client *S3Client) PutAvatar(ctx context.Context, key string, data []byte
 	return utils.AvatarURLFromKey(key, s3Client.cfg.S3HOST), nil
 }
 
+// DeleteAttachment implements types.S3ClientStorage, deleting all keys in
+// one batch request; an empty keys is a no-op.
 func (s3Client *S3Client) DeleteAttachment(ctx context.Context, keys []string) error {
 
 	objects := make([]types.ObjectIdentifier, 0, len(keys))
@@ -97,6 +109,9 @@ func (s3Client *S3Client) DeleteAttachment(ctx context.Context, keys []string) e
 	return nil
 }
 
+// PutAttachment implements types.S3ClientStorage, storing data under
+// "attachments/{key}/{uniqueSuffix}_{filename}" and returning its public
+// URL. If contentType is empty it is guessed from filename's extension.
 func (s3Client *S3Client) PutAttachment(ctx context.Context, key string, data []byte, filename string, contentType string, uniqueSuffix string) (string, error) {
 	if contentType == "" {
 		contentType = mime.TypeByExtension(filepath.Ext(filename))

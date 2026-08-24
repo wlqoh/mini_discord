@@ -12,6 +12,7 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// IsChannelServerOwner implements types.NotificationStorage.
 func (s *Storage) IsChannelServerOwner(ctx context.Context, userID int, channelID int64) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx,
@@ -31,6 +32,8 @@ func (s *Storage) IsChannelServerOwner(ctx context.Context, userID int, channelI
 	return exists, nil
 }
 
+// ListServerMembers implements types.ServerStorage, excluding
+// soft-deleted users.
 func (s *Storage) ListServerMembers(ctx context.Context, serverID int64, s3Host string) ([]types.WsServerMember, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT u.id, u.first_name, u.last_name, COALESCE(u.nickname, ''), u.avatar_key
@@ -63,6 +66,8 @@ func (s *Storage) ListServerMembers(ctx context.Context, serverID int64, s3Host 
 	return members, nil
 }
 
+// SaveMessageMentions implements types.ServerStorage inside a transaction;
+// duplicate (message, user) pairs are silently ignored.
 func (s *Storage) SaveMessageMentions(ctx context.Context, messageID int64, userIDs []int) error {
 	if len(userIDs) == 0 {
 		return nil
@@ -93,6 +98,8 @@ func (s *Storage) SaveMessageMentions(ctx context.Context, messageID int64, user
 	return tx.Commit()
 }
 
+// GetMessageMentions implements types.ServerStorage in a single query for
+// the whole batch.
 func (s *Storage) GetMessageMentions(ctx context.Context, messageIDs []int64) (map[int64][]int, error) {
 	result := make(map[int64][]int)
 	if len(messageIDs) == 0 {
@@ -133,6 +140,8 @@ func (s *Storage) GetMessageMentions(ctx context.Context, messageIDs []int64) (m
 	return result, nil
 }
 
+// GetNotificationSettings implements types.NotificationStorage, merging the
+// global row with every server- and channel-level override row.
 func (s *Storage) GetNotificationSettings(ctx context.Context, userID int) (*types.NotificationSettings, error) {
 	settings := &types.NotificationSettings{
 		DefaultLevel:       types.NotificationLevelAll,
@@ -215,6 +224,7 @@ func (s *Storage) GetNotificationSettings(ctx context.Context, userID int) (*typ
 	return settings, nil
 }
 
+// UpsertGlobalNotificationSettings implements types.NotificationStorage.
 func (s *Storage) UpsertGlobalNotificationSettings(ctx context.Context, userID int, defaultLevel string, hideMessagePreview bool, dndUntil *time.Time) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO user_notification_settings (user_id, default_level, hide_message_preview, dnd_until, updated_at)
@@ -250,6 +260,9 @@ func (s *Storage) UpsertServerNotificationSetting(ctx context.Context, userID in
 	return err
 }
 
+// UpsertChannelNotificationSetting mirrors UpsertServerNotificationSetting:
+// it deletes the override row when both fields are cleared, since a row
+// only exists when the user set something explicitly.
 func (s *Storage) UpsertChannelNotificationSetting(ctx context.Context, userID int, channelID int64, level *string, mutedUntil *time.Time) error {
 	if level == nil && mutedUntil == nil {
 		_, err := s.db.ExecContext(ctx, `
@@ -298,11 +311,14 @@ func (s *Storage) UpsertPushSubscription(ctx context.Context, sub types.PushSubs
 	return err
 }
 
+// DeletePushSubscriptionByEndpoint implements types.NotificationStorage.
 func (s *Storage) DeletePushSubscriptionByEndpoint(ctx context.Context, endpoint string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE endpoint = $1`, endpoint)
 	return err
 }
 
+// ListPushSubscriptions implements types.NotificationStorage in a single
+// query for the whole batch.
 func (s *Storage) ListPushSubscriptions(ctx context.Context, userIDs []int) ([]types.PushSubscription, error) {
 	if len(userIDs) == 0 {
 		return nil, nil

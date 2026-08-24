@@ -87,8 +87,9 @@ type ServerStorage interface {
 	GetServerChannels(ctx context.Context, serverID int64) ([]Channel, error)
 	// GetChannelByID looks up a channel by ID.
 	GetChannelByID(ctx context.Context, channelID int64) (*Channel, error)
-	// SearchServersByName returns up to limit servers userID is a member of
-	// whose name matches query.
+	// SearchServersByName returns up to limit servers whose name matches
+	// query that userID is not already a member of — for discovering
+	// servers to join, not for searching one's own server list.
 	SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]Server, error)
 	// SaveMessageAttachments links attachments to messageID.
 	SaveMessageAttachments(ctx context.Context, messageID int64, attachments []Attachment) error

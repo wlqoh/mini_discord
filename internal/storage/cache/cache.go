@@ -1,3 +1,7 @@
+// Package cache is a thread-safe, in-memory TTL cache used by
+// internal/storage/postgresql to avoid round-tripping to Postgres for hot,
+// short-lived reads (membership checks, channel/server lookups) and by the
+// link-preview cache tiers.
 package cache
 
 import (
@@ -9,13 +13,26 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
 )
 
+// InterfaceCache is the interface Cache implements; callers depend on this
+// rather than the concrete type so it can be swapped or mocked.
 type InterfaceCache interface {
+	// Set stores value under key. duration is the entry's TTL; zero means
+	// use the cache's default expiration, and a cache constructed with a
+	// zero default (duration 0 passed through) never expires that entry.
 	Set(key string, value interface{}, duration time.Duration)
+	// Get returns the value stored under key and whether it was found and
+	// not yet expired. An expired entry is evicted as a side effect of Get,
+	// in addition to the periodic background sweep.
 	Get(key string) (interface{}, bool)
+	// Delete removes key and reports whether it was present.
 	Delete(key string) bool
+	// DeleteByPrefix removes every key with the given prefix and returns
+	// how many were removed.
 	DeleteByPrefix(prefix string) int
 }
 
+// Cache is an in-memory, mutex-protected TTL map with an optional
+// background goroutine that periodically evicts expired entries.
 type Cache struct {
 	mu                sync.RWMutex
 	defaultExpiration time.Duration
@@ -24,12 +41,19 @@ type Cache struct {
 	items             map[string]Item
 }
 
+// Item is one entry of Cache, exported so InterfaceCache implementations
+// built on Cache's internals can inspect it.
 type Item struct {
 	Value      interface{}
 	Created    time.Time
-	Expiration int64
+	Expiration int64 // UnixNano; zero means the entry never expires
 }
 
+// NewCache creates a Cache with defaultExpiration used by Set calls that
+// pass duration 0, and registers a background goroutine (via
+// internal/lib/closer) that sweeps expired entries every cleanupInterval.
+// Passing cleanupInterval <= 0 disables the background sweep; entries still
+// expire lazily on Get.
 func NewCache(defaultExpiration, cleanupInterval time.Duration) *Cache {
 
 	items := make(map[string]Item)
@@ -53,6 +77,7 @@ func NewCache(defaultExpiration, cleanupInterval time.Duration) *Cache {
 	return &cache
 }
 
+// Set implements InterfaceCache.
 func (c *Cache) Set(key string, value interface{}, duration time.Duration) {
 
 	var expiration int64
@@ -76,6 +101,7 @@ func (c *Cache) Set(key string, value interface{}, duration time.Duration) {
 	}
 }
 
+// Get implements InterfaceCache.
 func (c *Cache) Get(key string) (interface{}, bool) {
 	c.mu.RLock()
 	item, ok := c.items[key]
@@ -99,6 +125,7 @@ func (c *Cache) Get(key string) (interface{}, bool) {
 	return item.Value, true
 }
 
+// Delete implements InterfaceCache.
 func (c *Cache) Delete(key string) bool {
 	c.mu.Lock()
 
@@ -113,6 +140,7 @@ func (c *Cache) Delete(key string) bool {
 	return true
 }
 
+// DeleteByPrefix implements InterfaceCache with an O(n) scan of all entries.
 func (c *Cache) DeleteByPrefix(prefix string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
