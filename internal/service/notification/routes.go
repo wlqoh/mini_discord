@@ -1,3 +1,5 @@
+// Package notification is the REST handler for notification settings and
+// Web Push subscription management.
 package notification
 
 import (
@@ -12,16 +14,20 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// Handler serves the /notifications/* and /push/* REST routes.
 type Handler struct {
 	storage types.NotificationStorage
 	cfg     *config.Config
 	log     *slog.Logger
 }
 
+// NewHandler builds a Handler.
 func NewHandler(storage types.NotificationStorage, cfg *config.Config, log *slog.Logger) *Handler {
 	return &Handler{storage: storage, cfg: cfg, log: log}
 }
 
+// RegisterRoutes mounts the notification-settings and push-subscription
+// routes on router; all but GET /push/public-key require JWT auth.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	secret := []byte(h.cfg.JWTSecret)
 	auth := middleware.WithJWTAuth(h.storage, h.log, false, secret)

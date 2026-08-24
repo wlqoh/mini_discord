@@ -18,6 +18,8 @@ type PayloadData struct {
 	URL       string `json:"url"`
 }
 
+// Payload is the JSON body sent as the Web Push message; the browser's
+// service worker (public/sw.js) renders it as a notification.
 type Payload struct {
 	Type     string      `json:"type"`
 	Title    string      `json:"title"`

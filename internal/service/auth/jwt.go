@@ -7,6 +7,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// CreateJWT issues an HS256-signed JWT for userID, expiring after
+// expiration, returning both the signed string and the claims it encodes.
 func CreateJWT(secret []byte, userID int, expiration time.Duration) (string, *UserClaims, error) {
 	claims, err := NewUserClaims(userID, expiration)
 	if err != nil {
@@ -22,6 +24,9 @@ func CreateJWT(secret []byte, userID int, expiration time.Duration) (string, *Us
 	return signedString, claims, nil
 }
 
+// ValidateToken parses and verifies tokenString's HMAC signature against
+// secret, rejecting any token not using an HMAC signing method, and returns
+// its claims.
 func ValidateToken(tokenString string, secret []byte) (*UserClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &UserClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {

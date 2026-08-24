@@ -25,13 +25,17 @@ const (
 	memoryCacheSweep = 5 * time.Minute
 )
 
-// Broadcaster реализует Hub. Интерфейс объявлен здесь, а не в server, чтобы
-// embed не импортировал server (это дало бы цикл: server → embed → server).
+// Broadcaster is implemented by Hub. The interface is declared here rather
+// than in server so embed does not import server (that would create a
+// cycle: server → embed → server).
 type Broadcaster interface {
+	// BroadcastEmbeds delivers resolved link previews for messageID to
+	// recipientIDs as a message_embeds event.
 	BroadcastEmbeds(channelID, messageID int64, recipientIDs []int, embeds []types.WsLinkPreview)
 }
 
-// Job — всё, что нужно воркеру, чтобы не обращаться обратно к хабу.
+// Job is everything a worker needs to resolve a message's link preview
+// without calling back into the hub.
 type Job struct {
 	MessageID    int64
 	ChannelID    int64
@@ -40,6 +44,12 @@ type Job struct {
 	RecipientIDs []int
 }
 
+// Service resolves link previews for chat messages: it extracts the first
+// eligible URL from a message, resolves it through a three-tier cache
+// (memory → Postgres → network fetch, see resolve), and broadcasts the
+// result back through Broadcaster once ready. Work is queued via Enqueue
+// and processed by a pool of background workers, so it never blocks the
+// hub's event loop.
 type Service struct {
 	cfg       config.LinkPreviewConfig
 	storage   types.EmbedStorage
@@ -61,6 +71,10 @@ type cachedPreview struct {
 	ok      bool
 }
 
+// NewService builds a Service and, if cfg.Enabled, starts cfg.Workers
+// background goroutines (at least 1) draining its job queue. If disabled,
+// Enqueue becomes a no-op. The service has no Broadcaster yet — call
+// SetBroadcaster once the hub exists.
 func NewService(storage types.EmbedStorage, cfg config.LinkPreviewConfig, log *slog.Logger, skipHosts map[string]struct{}) *Service {
 	service := &Service{
 		cfg:     cfg,
@@ -92,17 +106,21 @@ func NewService(storage types.EmbedStorage, cfg config.LinkPreviewConfig, log *s
 	return service
 }
 
-// SetBroadcaster вызывается после создания Hub — хаб и сервис ссылаются друг
-// на друга, поэтому связь замыкается вторым шагом.
+// SetBroadcaster is called once after the Hub is constructed — the hub and
+// this service reference each other, so the cycle is closed as a second
+// step rather than at construction. Safe for concurrent use with Enqueue's
+// workers.
 func (s *Service) SetBroadcaster(broadcaster Broadcaster) {
 	s.mu.Lock()
 	s.broadcaster = broadcaster
 	s.mu.Unlock()
 }
 
-// Enqueue не блокируется никогда: он вызывается из горутины Hub.Run(),
-// которая обслуживает все команды всех пользователей. Переполнение очереди —
-// это просто сообщение без превью, ничего критичного.
+// Enqueue never blocks: it is called from the Hub.Run goroutine that
+// services every user's commands. If job is eligible (content contains a
+// link, the per-author rate limit allows it) but the queue is full, the job
+// is dropped and logged rather than blocking — a message with no preview is
+// not a critical failure.
 func (s *Service) Enqueue(job Job) {
 	if !s.cfg.Enabled {
 		return
@@ -180,9 +198,9 @@ func (s *Service) firstEligibleURL(content string) string {
 	return ""
 }
 
-// resolve — трёхуровневый кэш: память → Postgres → сеть. Сетевой слой обёрнут
-// в single_flight, чтобы десять человек, одновременно кинувших одну ссылку,
-// сходили за ней один раз.
+// resolve is the three-tier cache: memory → Postgres → network. The
+// network tier is wrapped in single_flight so that ten people posting the
+// same link at once trigger exactly one fetch.
 func (s *Service) resolve(ctx context.Context, normalizedURL string) (cachedPreview, bool) {
 	sum := sha256.Sum256([]byte(normalizedURL))
 	hash := hex.EncodeToString(sum[:])
@@ -274,9 +292,9 @@ func cacheKey(hash string) string {
 	return "linkpreview:" + hash
 }
 
-// newImageToken должен быть неугадываемым: если бы наружу торчал sha256 от
-// URL, кто угодно мог бы проверить «постил ли кто-нибудь в этом чате такую
-// ссылку», просто посчитав хэш и дёрнув прокси.
+// newImageToken must be unguessable: if the URL's sha256 were exposed
+// directly, anyone could check "has this link been posted in this chat" by
+// hashing it themselves and hitting the image proxy.
 func newImageToken() string {
 	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {

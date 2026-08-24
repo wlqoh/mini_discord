@@ -1,3 +1,5 @@
+// Package auth implements password hashing, JWT issuance/validation, and
+// email-verification token generation.
 package auth
 
 import (
@@ -8,11 +10,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// UserClaims is the JWT claims payload used for both access and refresh
+// tokens.
 type UserClaims struct {
 	UserID int `json:"user_id"`
 	jwt.RegisteredClaims
 }
 
+// NewUserClaims builds UserClaims for userID with a random JWT ID, expiring
+// after duration.
 func NewUserClaims(userID int, duration time.Duration) (*UserClaims, error) {
 	tokenID, err := uuid.NewRandom()
 	if err != nil {

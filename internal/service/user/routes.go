@@ -1,3 +1,5 @@
+// Package user is the REST handler for auth (register/login/refresh, email
+// verification), profile updates, and avatar/attachment upload.
 package user
 
 import (
@@ -23,6 +25,8 @@ import (
 
 const emailVerificationTokenTTL = 24 * time.Hour
 
+// Handler serves the user-facing REST routes: auth, profile, avatar and
+// attachment upload.
 type Handler struct {
 	storage       types.UserStorage
 	serverStorage types.ServerStorage
@@ -33,6 +37,9 @@ type Handler struct {
 	mailer        *mailer.Mailer
 }
 
+// NewHandler builds a Handler. pendingStore is the hub's in-memory
+// PendingAttachmentStore, shared so an upload here can later be consumed by
+// a send_message command on the WS connection.
 func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cfg *config.Config, log *slog.Logger, s3Client types.S3ClientStorage, pendingStore types.PendingAttachmentStore) *Handler {
 	return &Handler{
 		storage:       storage,
@@ -45,6 +52,7 @@ func NewHandler(storage types.UserStorage, serverStorage types.ServerStorage, cf
 	}
 }
 
+// RegisterRoutes mounts every user-facing REST route on router.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	limiter := middleware.NewTokenBucket(5.0/60.0, 5)
 	limiterMW := limiter.FiberRateLimitMiddleware()
