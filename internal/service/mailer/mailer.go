@@ -1,3 +1,7 @@
+// Package mailer sends transactional email (currently just email
+// verification) over SMTP, speaking the protocol directly rather than via
+// net/smtp.SendMail so the whole conversation can be bounded by a single
+// deadline.
 package mailer
 
 import (
@@ -15,10 +19,13 @@ import (
 
 const sendTimeout = 10 * time.Second
 
+// Mailer sends email over SMTP using cfg.
 type Mailer struct {
 	cfg config.MailConfig
 }
 
+// New builds a Mailer from cfg. It does not connect to anything yet; see
+// Configured for whether it is usable.
 func New(cfg config.MailConfig) *Mailer {
 	return &Mailer{cfg: cfg}
 }
@@ -28,6 +35,8 @@ func (m *Mailer) Configured() bool {
 	return m.cfg.SMTPHost != "" && m.cfg.FromAddress != ""
 }
 
+// SendVerificationEmail sends the "confirm your email" message containing
+// verifyURL, as a multipart/alternative (plain text + HTML) message.
 func (m *Mailer) SendVerificationEmail(to, recipientName, verifyURL string) error {
 	subject := "Confirm your email address"
 

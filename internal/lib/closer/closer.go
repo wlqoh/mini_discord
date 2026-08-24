@@ -1,3 +1,6 @@
+// Package closer is a process-wide, thread-safe registry of shutdown
+// callbacks (the DB pool, the token-bucket cleanup goroutine, ...), run in
+// LIFO order by CloseAll.
 package closer
 
 import (
@@ -21,10 +24,17 @@ type closer struct {
 
 var globalCloser = &closer{}
 
+// Add registers fn to run during shutdown, labeled name for logging.
+// Registered functions run in LIFO order (most recently added runs first)
+// when CloseAll is called.
 func Add(name string, fn func(ctx context.Context) error) {
 	globalCloser.add(name, fn)
 }
 
+// CloseAll runs every function registered via Add, in LIFO order, each
+// bounded by ctx (further capped to 10s internally). It runs at most once
+// per process — later calls are no-ops that return nil — and joins every
+// callback's error into the single returned error.
 func CloseAll(ctx context.Context) error {
 	return globalCloser.closeAll(ctx)
 }

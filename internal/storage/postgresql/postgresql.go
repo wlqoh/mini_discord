@@ -12,6 +12,10 @@ import (
 	"github.com/wlqoh/mini_discord.git/internal/storage/single_flight"
 )
 
+// Storage is the Postgres-backed implementation of every storage interface
+// declared in types (ServerStorage, UserStorage, NotificationStorage,
+// EmbedStorage): raw SQL via lib/pq, no ORM. cache and sf back the
+// link-preview cache tiers used by embeds.go.
 type Storage struct {
 	db    *sql.DB
 	cache cache.InterfaceCache
@@ -29,6 +33,10 @@ const (
 	membersKey        = "members:"
 )
 
+// New opens a Postgres connection pool at storagePath (a postgres:// DSN),
+// pings it to fail fast on a bad connection, and registers the pool with
+// closer for shutdown. The returned Storage owns its own in-memory cache
+// and single-flight group.
 func New(storagePath string) (*Storage, error) {
 	const op = "storage.postgresql.New"
 

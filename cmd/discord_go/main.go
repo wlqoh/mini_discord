@@ -1,3 +1,5 @@
+// Command discord_go is the backend entry point: it loads config, opens the
+// Postgres connection, and runs the API server until SIGINT/SIGTERM.
 package main
 
 import (

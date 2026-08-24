@@ -418,6 +418,7 @@ POST /api/v1/login
 | `make up`    | Применить миграции БД (goose)   |
 | `make down`  | Откатить миграции БД (goose)    |
 | `make genvapid` | Сгенерировать пару VAPID-ключей для Web Push |
+| `make doc-check` | Проверить, что у каждого экспортированного символа Go-кода есть godoc-комментарий (`scripts/doccheck.go`) |
 
 ## Окружения
 

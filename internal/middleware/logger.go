@@ -7,6 +7,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// Logger returns Fiber middleware that logs one line per request (method,
+// path, status, duration, request ID) after the handler chain completes.
 func Logger(log *slog.Logger) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		start := time.Now()

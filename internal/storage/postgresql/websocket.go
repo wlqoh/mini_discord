@@ -111,6 +111,9 @@ func (s *Storage) enrichMessages(ctx context.Context, messages []types.WsMessage
 	return nil
 }
 
+// CreateServer implements types.ServerStorage: it inserts the server and
+// adds its owner as the first member, in one transaction, and invalidates
+// the owner's GetServersByUserID cache entry.
 func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -148,6 +151,9 @@ func (s *Storage) CreateServer(ctx context.Context, server types.Server) (int64,
 	return serverID, nil
 }
 
+// DeleteChannel implements types.ServerStorage, erroring if userID does not
+// own the channel's server, and invalidates the channel's cached lookup,
+// membership and access-check entries.
 func (s *Storage) DeleteChannel(ctx context.Context, channelID int64, userID int) error {
 	var ownerID int
 	var serverID int64
@@ -182,6 +188,11 @@ func (s *Storage) DeleteChannel(ctx context.Context, channelID int64, userID int
 	return nil
 }
 
+// DeleteServer implements types.ServerStorage, erroring if userID does not
+// own the server, and invalidates every former member's GetServersByUserID
+// and IsServerMember cache entries (a cache-invalidation query failure is
+// logged and does not abort the deletion, since a stale cache entry is
+// recoverable but an undeleted server is not).
 func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) error {
 	var ownerID int
 	err := s.db.QueryRowContext(
@@ -225,6 +236,8 @@ func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) 
 	return nil
 }
 
+// CreateChannel implements types.ServerStorage; an empty channelType
+// defaults to ChannelTypeText.
 func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, channelType string) (int64, error) {
 	if channelType == "" {
 		channelType = types.ChannelTypeText
@@ -248,6 +261,8 @@ func (s *Storage) CreateChannel(ctx context.Context, serverID int64, name, chann
 	return channelID, nil
 }
 
+// IsServerMember implements types.ServerStorage, caching the result for 2
+// minutes.
 func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64) (bool, error) {
 	key := fmt.Sprintf("%s%d:%d", memberKey, userID, serverID)
 	if v, ok := s.cache.Get(key); ok {
@@ -272,6 +287,8 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 	return exists, nil
 }
 
+// CanUserAccessChannel implements types.ServerStorage, caching the result
+// for 2 minutes.
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
 	key := fmt.Sprintf("%s%d:%d", accessKey, channelID, userID)
 	if v, ok := s.cache.Get(key); ok {
@@ -297,6 +314,9 @@ func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelI
 	return exists, nil
 }
 
+// ListServerMembersUserIDs implements types.ServerStorage, caching the
+// result for 2 minutes; callers always get a defensive copy of the cached
+// slice.
 func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) ([]int, error) {
 	key := fmt.Sprintf("%s%d", membersServerKey, serverID)
 	if v, ok := s.cache.Get(key); ok {
@@ -332,6 +352,9 @@ func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) 
 	return userIDs, nil
 }
 
+// ListChannelMemberUserIDs implements types.ServerStorage, caching the
+// result for 2 minutes; callers always get a defensive copy of the cached
+// slice.
 func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
 	key := fmt.Sprintf("%s%d", membersKey, channelID)
 	if v, ok := s.cache.Get(key); ok {
@@ -368,6 +391,10 @@ func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64)
 	return userIDs, nil
 }
 
+// SaveMessage implements types.ServerStorage, filling in msg.ID and
+// msg.CreatedAt from the insert. Empty content is stored as a single space
+// (messages.content is NOT NULL and an attachment-only message has no
+// text), the same convention EditMessage follows.
 func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 	content := msg.Content
 	if content == "" {
@@ -409,6 +436,8 @@ func (s *Storage) SaveMessage(ctx context.Context, msg *types.WsMessage) error {
 	return err
 }
 
+// GetMessages implements types.ServerStorage.GetMessages: a backward page
+// of history, clamped to [1, 100] messages, returned oldest-first.
 func (s *Storage) GetMessages(ctx context.Context, channelID int64, limit int, cursor *types.WsMessageCursor, s3Host string) ([]types.WsMessage, *types.WsMessageCursor, bool, error) {
 	if limit <= 0 {
 		limit = 50
@@ -685,6 +714,10 @@ func (s *Storage) GetMessagesAround(ctx context.Context, channelID, messageID in
 	return messages, olderCursor, newerCursor, hasMoreOlder, hasMoreNewer, nil
 }
 
+// DeleteMessage implements types.ServerStorage.DeleteMessage: it errors if
+// userID does not own the message, then deletes the row and returns the S3
+// keys of its attachments (deleting the row does not delete the S3
+// objects; the caller is responsible for that).
 func (s *Storage) DeleteMessage(ctx context.Context, messageID int64, userID int) ([]string, error) {
 	var ownerID int
 	err := s.db.QueryRowContext(ctx, "SELECT author_id FROM messages WHERE id = $1", messageID).Scan(&ownerID)
@@ -797,6 +830,8 @@ func (s *Storage) EditMessage(
 	return channelID, editedAt, nil
 }
 
+// SaveMessageAttachments implements types.ServerStorage, inserting in
+// batches of 100 rows per statement inside one transaction.
 func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, attachments []types.Attachment) error {
 	if len(attachments) == 0 {
 		return nil
@@ -835,6 +870,9 @@ func (s *Storage) SaveMessageAttachments(ctx context.Context, messageID int64, a
 	return tx.Commit()
 }
 
+// GetAttachmentsByMessageIDs implements types.ServerStorage in a single
+// query for the whole batch, rebuilding each attachment's URL from its
+// stored S3 key via s3Host.
 func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []int64, s3Host string) (map[int64][]types.Attachment, error) {
 	if len(messageIDs) == 0 {
 		return nil, nil
@@ -880,6 +918,10 @@ func (s *Storage) GetAttachmentsByMessageIDs(ctx context.Context, messageIDs []i
 	return result, nil
 }
 
+// GetMessageReplyTos implements types.ServerStorage. For the given
+// messages it finds which are replies, then batch-loads the referenced
+// messages' preview info in a second query, returning a map keyed by the
+// replying message's ID (not the referenced message's ID).
 func (s *Storage) GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3Host string) (map[int64]*types.WsReplyTo, error) {
 	if len(messageIDs) == 0 {
 		return nil, nil
@@ -1015,6 +1057,9 @@ func (s *Storage) GetMessageReplyTos(ctx context.Context, messageIDs []int64, s3
 	return result, nil
 }
 
+// GetReplyPreview implements types.ServerStorage, loading a single
+// message's preview info (used when a new message's reply_to_id is known
+// but its target hasn't been batch-loaded via GetMessageReplyTos).
 func (s *Storage) GetReplyPreview(ctx context.Context, messageID int64) (*types.WsReplyTo, error) {
 	var content string
 	var channelID int64
@@ -1056,6 +1101,9 @@ func (s *Storage) GetReplyPreview(ctx context.Context, messageID int64) (*types.
 	}, nil
 }
 
+// AddMemberToServer implements types.ServerStorage, and invalidates the
+// user's server-membership caches along with their per-channel access-check
+// cache for every channel of serverID.
 func (s *Storage) AddMemberToServer(ctx context.Context, userID int, serverID int64) error {
 	query := `
 	INSERT INTO server_members (user_id, server_id)
@@ -1104,6 +1152,10 @@ func (s *Storage) getServerIdsByUserID(ctx context.Context, userID int) ([]int64
 	return serverIDs, nil
 }
 
+// GetServerChannels implements types.ServerStorage, caching the result for
+// 5 minutes; callers always get a defensive copy of the cached slice.
+// Channel.Type is normalized to ChannelTypeVoice/ChannelTypeText regardless
+// of the stored value's casing/whitespace.
 func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]types.Channel, error) {
 	key := fmt.Sprintf("%s%d", channelsServerKey, serverID)
 	if v, ok := s.cache.Get(key); ok {
@@ -1146,6 +1198,8 @@ func (s *Storage) GetServerChannels(ctx context.Context, serverID int64) ([]type
 	return channels, nil
 }
 
+// GetServersByUserID implements types.ServerStorage, caching the result for
+// 5 minutes; callers always get a defensive copy of the cached slice.
 func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.Server, error) {
 	key := fmt.Sprintf("%s%d", serversUserKey, userID)
 	if v, ok := s.cache.Get(key); ok {
@@ -1185,6 +1239,8 @@ func (s *Storage) GetServersByUserID(ctx context.Context, userID int) ([]types.S
 	return servers, nil
 }
 
+// GetChannelByID implements types.ServerStorage, caching the result for 5
+// minutes; callers always get a defensive copy of the cached value.
 func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.Channel, error) {
 	key := fmt.Sprintf("%s%d", channelKey, channelID)
 	if v, ok := s.cache.Get(key); ok {
@@ -1213,6 +1269,9 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 	return &channel, nil
 }
 
+// GetUnreadCounts implements types.ServerStorage, computing every channel
+// userID is a member of and how many messages postdate their read cursor
+// (channel_reads), in a single query.
 func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsChannelUnread, error) {
 	query := `
 		SELECT c.id, c.server_id, COUNT(m.id)
@@ -1254,6 +1313,7 @@ func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsCh
 	return result, nil
 }
 
+// MarkChannelRead implements types.ServerStorage.MarkChannelRead.
 func (s *Storage) MarkChannelRead(ctx context.Context, userID int, channelID, messageID int64) error {
 	query := `
 		INSERT INTO channel_reads (user_id, channel_id, last_read_message_id, updated_at)
@@ -1384,6 +1444,9 @@ func (s *Storage) SearchMessages(ctx context.Context, params types.MessageSearch
 	return hits, nextCursor, hasMore, nil
 }
 
+// SearchServersByName implements types.ServerStorage.SearchServersByName,
+// clamping limit to [1, 50] and excluding servers userID already belongs
+// to.
 func (s *Storage) SearchServersByName(ctx context.Context, userID int, query string, limit int) ([]types.Server, error) {
 	if limit <= 0 {
 		limit = 20

@@ -1,3 +1,6 @@
+// Package webrtc mints short-lived TURN credentials (coturn's
+// use-auth-secret scheme) for both the REST TURN-credentials endpoint and
+// the SFU's join_voice_channel ack.
 package webrtc
 
 import (
@@ -15,16 +18,19 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// Handler serves the TURN-credentials REST route.
 type Handler struct {
 	storage middleware.UserReader
 	cfg     *config.Config
 	log     *slog.Logger
 }
 
+// NewHandler builds a Handler.
 func NewHandler(storage middleware.UserReader, cfg *config.Config, log *slog.Logger) *Handler {
 	return &Handler{storage: storage, cfg: cfg, log: log}
 }
 
+// RegisterRoutes mounts the JWT-authed TURN-credentials route on router.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	auth := middleware.WithJWTAuth(h.storage, h.log, false, []byte(h.cfg.JWTSecret))
 	router.Get("/webrtc/turn-credentials", auth, h.handleTurnCredentials)

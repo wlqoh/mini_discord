@@ -1,3 +1,6 @@
+// Package middleware holds the Fiber middleware shared across route
+// groups: JWT auth, request logging, panic recovery, request ID
+// propagation, and a per-key token-bucket rate limiter.
 package middleware
 
 import (
@@ -12,10 +15,24 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// UserReader is the minimal storage dependency WithJWTAuth needs — just
+// enough to reject a token for a deleted or nonexistent user, without
+// requiring the full ServerStorage/UserStorage/NotificationStorage
+// interface from every caller.
 type UserReader interface {
+	// GetUserByID looks up a user by ID.
 	GetUserByID(ctx context.Context, id int) (*types.User, error)
 }
 
+// WithJWTAuth returns Fiber middleware that validates a JWT, looks up its
+// user via userReader, and rejects deleted or nonexistent users, storing
+// the resolved user ID in c.Locals("user_id") on success.
+//
+// isWebsocket switches where the token is read from: a plain HTTP request
+// is authenticated via the "Authorization: Bearer <token>" header, while a
+// WebSocket upgrade request (which can't set arbitrary headers from a
+// browser) is authenticated via a `jwt` cookie or a `token` query
+// parameter instead — see getTokenFromRequest.
 func WithJWTAuth(userReader UserReader, log *slog.Logger, isWebsocket bool, secret []byte) fiber.Handler {
 
 	return func(c *fiber.Ctx) error {

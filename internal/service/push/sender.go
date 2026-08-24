@@ -59,6 +59,11 @@ type Sender struct {
 	agg map[aggKey]*aggState
 }
 
+// NewSender builds a Sender and starts workerCount worker goroutines
+// draining its event queue. It is safe to construct (and Enqueue on) even
+// when cfg.Enabled is false and no VAPID keys are configured — Enqueue
+// becomes a no-op in that case; see push's package doc for the
+// public-key-404 signal this implies for the frontend.
 func NewSender(storage types.NotificationStorage, cfg config.PushConfig, log *slog.Logger) *Sender {
 	s := &Sender{
 		storage: storage,

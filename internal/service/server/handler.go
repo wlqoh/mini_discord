@@ -11,11 +11,16 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// Handler is the REST/WebSocket entry point that upgrades HTTP connections
+// to WebSocket and hands each new Client to the Hub.
 type Handler struct {
 	hub            *Hub
 	allowedOrigins map[string]struct{}
 }
 
+// NewHandler builds a Handler for h. allowedOrigins is the WS-specific
+// origin allowlist (http_server.ws_allowed_origins, distinct from the
+// general CORS origins); an empty list disables the origin check.
 func NewHandler(h *Hub, allowedOrigins []string) *Handler {
 	origins := make(map[string]struct{}, len(allowedOrigins))
 	for _, raw := range allowedOrigins {
@@ -32,6 +37,8 @@ func NewHandler(h *Hub, allowedOrigins []string) *Handler {
 	}
 }
 
+// RegisterRoutes mounts the /server/ws WebSocket endpoint (JWT-authed,
+// origin-checked) on router.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 
 	router.Use("/server", middleware.WithJWTAuth(h.hub.storage, h.hub.log, true, h.hub.jwtSecret))

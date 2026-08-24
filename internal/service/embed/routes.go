@@ -22,6 +22,9 @@ const (
 	imageCacheTTL         = 30 * time.Minute
 )
 
+// Handler serves the embed image proxy (GET /embeds/image/:token), which
+// re-fetches or serves from cache the image referenced by a previously
+// resolved link preview.
 type Handler struct {
 	storage types.EmbedStorage
 	cfg     config.LinkPreviewConfig
@@ -30,6 +33,7 @@ type Handler struct {
 	cache   *cache.Cache
 }
 
+// NewHandler builds a Handler with its own image cache and Fetcher.
 func NewHandler(storage types.EmbedStorage, cfg config.LinkPreviewConfig, log *slog.Logger) *Handler {
 	return &Handler{
 		storage: storage,
@@ -40,6 +44,8 @@ func NewHandler(storage types.EmbedStorage, cfg config.LinkPreviewConfig, log *s
 	}
 }
 
+// RegisterRoutes mounts the image proxy route on router if link previews
+// are enabled (cfg.Enabled); otherwise it is a no-op.
 func (h *Handler) RegisterRoutes(router fiber.Router) {
 	if !h.cfg.Enabled {
 		return

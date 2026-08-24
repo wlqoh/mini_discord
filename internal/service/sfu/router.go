@@ -49,6 +49,10 @@ type Router struct {
 	peers map[string]*Peer // sessionID -> Peer
 }
 
+// New builds a Router bound to sig/auth and starts its UDP mux on
+// cfg.UDPPort. It returns an error if the WebRTC API (and its UDP socket)
+// fails to construct — e.g. the port is already in use — which the caller
+// (hub.go's NewHub) treats as "voice unavailable" rather than fatal.
 func New(cfg Config, sig Signaler, auth Authorizer, log *slog.Logger) (*Router, error) {
 	api, closeUDP, err := newAPI(cfg)
 	if err != nil {
@@ -67,6 +71,10 @@ func New(cfg Config, sig Signaler, auth Authorizer, log *slog.Logger) (*Router, 
 	}, nil
 }
 
+// Close tears down every active peer connection and closes the router's UDP
+// mux. It is intended for process shutdown, but as of this writing nothing
+// in cmd/discord_go or internal/lib/closer actually calls it — the process
+// currently relies on the OS to release the UDP port on exit.
 func (r *Router) Close() error {
 	r.mu.Lock()
 	peers := make([]*Peer, 0, len(r.peers))
@@ -123,6 +131,11 @@ func (r *Router) roomFor(channelID int64) (*Room, bool) {
 	return room, ok
 }
 
+// HandleOffer queues sessionID's SDP offer (with its declared publish
+// slots) for processing on that peer's own command queue, returning an
+// error immediately if sessionID is unknown. Errors from processing the
+// offer itself are reported asynchronously via Signaler.SendError, not
+// through this return value.
 func (r *Router) HandleOffer(sessionID, sdp string, slots []SlotDecl) error {
 	peer, ok := r.peerBySession(sessionID)
 	if !ok {
@@ -132,6 +145,9 @@ func (r *Router) HandleOffer(sessionID, sdp string, slots []SlotDecl) error {
 	return nil
 }
 
+// HandleAnswer queues sessionID's SDP answer to a server-initiated offer
+// for processing on that peer's own command queue, returning an error
+// immediately if sessionID is unknown.
 func (r *Router) HandleAnswer(sessionID, sdp string) error {
 	peer, ok := r.peerBySession(sessionID)
 	if !ok {
@@ -141,6 +157,11 @@ func (r *Router) HandleAnswer(sessionID, sdp string) error {
 	return nil
 }
 
+// HandleCandidate queues an ICE candidate from sessionID for processing on
+// that peer's own command queue, returning an error immediately if
+// sessionID is unknown. A candidate that fails to apply because it lost a
+// renegotiation race is logged and otherwise ignored, not reported as an
+// error (see (*Peer).handleCandidate).
 func (r *Router) HandleCandidate(sessionID string, c CandidateInit) error {
 	peer, ok := r.peerBySession(sessionID)
 	if !ok {

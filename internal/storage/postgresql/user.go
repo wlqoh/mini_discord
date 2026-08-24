@@ -14,6 +14,8 @@ import (
 
 const userSelectColumns = "id, first_name, last_name, nickname, email, avatar_key, attachment_folder_key, password, is_deleted, deleted_at, email_verified, created_at, updated_at"
 
+// GetUserByEmail implements types.UserStorage. It only ever returns
+// non-deleted accounts.
 func (s *Storage) GetUserByEmail(ctx context.Context, email string) (*types.User, error) {
 	row := s.db.QueryRowContext(ctx, "SELECT "+userSelectColumns+" FROM users WHERE email = $1 AND is_deleted = FALSE", email)
 
@@ -66,6 +68,10 @@ func scanRowIntoUser(row *sql.Row) (*types.User, error) {
 	return u, nil
 }
 
+// GetUserByID implements types.UserStorage. Results are cached (keyed by
+// userIDKey) with single-flight collapsing of concurrent misses for the
+// same ID; callers always get a defensive copy, so mutating the returned
+// *types.User cannot corrupt the cache entry.
 func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) {
 	key := fmt.Sprintf("%s%d", userIDKey, id)
 	if v, ok := s.cache.Get(key); ok {
@@ -92,6 +98,8 @@ func (s *Storage) GetUserByID(ctx context.Context, id int) (*types.User, error) 
 	return &uCopy, nil
 }
 
+// SaveUserAvatar implements types.UserStorage and invalidates the user's
+// GetUserByID cache entry.
 func (s *Storage) SaveUserAvatar(ctx context.Context, userID int, avatarKey string) error {
 	_, err := s.db.ExecContext(
 		ctx,
@@ -108,6 +116,10 @@ func (s *Storage) SaveUserAvatar(ctx context.Context, userID int, avatarKey stri
 	return nil
 }
 
+// GetOrCreateAttachmentFolderKey implements types.UserStorage. On first
+// call for a user it generates and persists a new UUID folder key and
+// invalidates the GetUserByID cache entry; later calls return the
+// already-stored key unchanged.
 func (s *Storage) GetOrCreateAttachmentFolderKey(ctx context.Context, userID int) (string, error) {
 	var folderKey sql.NullString
 	err := s.db.QueryRowContext(ctx,
@@ -135,11 +147,14 @@ func (s *Storage) GetOrCreateAttachmentFolderKey(ctx context.Context, userID int
 	return newKey, nil
 }
 
+// CreateUser implements types.UserStorage.
 func (s *Storage) CreateUser(ctx context.Context, user types.User) error {
 	return s.db.QueryRowContext(ctx, "INSERT INTO users (first_name, last_name, nickname, email, password) VALUES ($1, $2, $3, $4, $5) RETURNING id",
 		user.FirstName, user.LastName, user.Nickname, user.Email, user.Password).Scan(&user.ID)
 }
 
+// UpdateUser implements types.UserStorage and invalidates the user's
+// GetUserByID cache entry.
 func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateUserRequest) error {
 	_, err := s.db.ExecContext(ctx, "UPDATE users SET first_name = $1, last_name = $2, nickname = $3, updated_at = NOW() WHERE id = $4",
 		user.FirstName, user.LastName, user.Nickname, userID)
@@ -151,6 +166,9 @@ func (s *Storage) UpdateUser(ctx context.Context, userID int, user types.UpdateU
 	return nil
 }
 
+// CreateEmailVerificationToken implements types.UserStorage. It first
+// deletes any of the user's outstanding unused tokens, so only the
+// newest verification link ever works.
 func (s *Storage) CreateEmailVerificationToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error {
 	// Drop any outstanding tokens for this user so only the newest link works.
 	_, err := s.db.ExecContext(ctx,
@@ -168,6 +186,10 @@ func (s *Storage) CreateEmailVerificationToken(ctx context.Context, userID int, 
 	return err
 }
 
+// VerifyEmailByToken implements types.UserStorage. It runs inside a
+// transaction that locks the token row (SELECT ... FOR UPDATE) so a token
+// cannot be consumed twice by concurrent requests, and errors if the token
+// is unknown, already used, or past its expiry.
 func (s *Storage) VerifyEmailByToken(ctx context.Context, tokenHash string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -216,6 +238,9 @@ func (s *Storage) VerifyEmailByToken(ctx context.Context, tokenHash string) erro
 	return nil
 }
 
+// DeleteUser implements types.UserStorage. It does not remove the row:
+// it scrubs personal fields (name, email, password, avatar), sets
+// IsDeleted/DeletedAt, and invalidates the GetUserByID cache entry.
 func (s *Storage) DeleteUser(ctx context.Context, userID int) error {
 	deletedEmail := fmt.Sprintf("deleted+%s@local.invalid", uuid.NewString())
 	newPassword, err := bcrypt.GenerateFromPassword([]byte(uuid.NewString()), bcrypt.DefaultCost)

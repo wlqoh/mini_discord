@@ -25,6 +25,16 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// Hub owns all real-time chat and voice state and is driven by a single
+// goroutine (see Run). Every mutation of hub state happens on that
+// goroutine — reached via the Register/Unregister/Commands channels — which
+// is why h.mu is only needed for the concurrent reads other goroutines make
+// (SFU callbacks implementing sfu.Signaler/sfu.Authorizer, embed workers,
+// push delivery). There is one Client per user in clientsByUser; a second
+// connection for the same user evicts the first. Voice membership
+// (voiceParticipants, userVoiceChannel, voiceStatusByUser,
+// sfuSessionByUser, sfuGraceTimers) is in-memory only — nothing about a
+// call is persisted.
 type Hub struct {
 	storage              types.ServerStorage
 	s3Client             types.S3ClientStorage
@@ -78,6 +88,13 @@ const maxEditWindow = 15 * time.Minute
 
 var mentionTokenRegex = regexp.MustCompile(`<@(\d+)>`)
 
+// NewHub constructs a Hub and, if webrtcConfig.SFU.Enabled, starts an SFU
+// router bound to it as both sfu.Signaler and sfu.Authorizer. A router
+// construction failure (e.g. its UDP port is already in use) is logged and
+// left as a nil sfuRouter rather than propagated: chat and every other
+// feature keep working, only join_voice_channel fails until the process is
+// restarted with the problem fixed. The returned Hub is not yet running —
+// call Run (typically `go hub.Run()`) to start its event loop.
 func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *slog.Logger, s3Host string, jwtSecret []byte, pushSender *push.Sender, embedService *embed.Service, webrtcConfig config.WebRTCConfig) *Hub {
 	h := &Hub{
 		storage:              storage,
@@ -137,17 +154,21 @@ func (h *Hub) SFURouter() *sfu.Router {
 
 // --- sfu.Authorizer ---
 
+// CanUserAccessChannel implements sfu.Authorizer by delegating to storage.
 func (h *Hub) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
 	return h.storage.CanUserAccessChannel(ctx, userID, channelID)
 }
 
 // --- sfu.Signaler ---
 //
-// Each method below fans an SFU event out over the same client WebSocket
-// used for chat and the mesh signaling it's replacing (decision #11's
-// choice of a namespace rather than a new connection). pushToUserID/
-// broadcastToChannelVoice release h.mu before calling pushEvent/pushToUsers,
-// which take it again themselves — see those functions' own locking.
+// Each method below implements sfu.Signaler and fans an SFU event out over
+// the same client WebSocket used for chat and the mesh signaling it's
+// replacing (decision #11's choice of a namespace rather than a new
+// connection). They are called from SFU goroutines (Router/Peer), never
+// from the Hub.Run loop, which is exactly why they need h.mu at all.
+// pushToUserID/broadcastToChannelVoice release h.mu before calling
+// pushEvent/pushToUsers, which take it again themselves — see those
+// functions' own locking.
 
 func (h *Hub) pushToUserID(userID int, event *types.WsEvent) {
 	h.mu.RLock()
@@ -170,6 +191,7 @@ func (h *Hub) broadcastToChannelVoice(channelID int64, event *types.WsEvent) {
 	h.pushToUsers(userIDs, event)
 }
 
+// SendOffer pushes a server-initiated SDP renegotiation offer to userID.
 func (h *Hub) SendOffer(userID int, sessionID string, sdp string) {
 	h.pushToUserID(userID, &types.WsEvent{
 		Event: types.WsEventSfuOffer,
@@ -177,6 +199,7 @@ func (h *Hub) SendOffer(userID int, sessionID string, sdp string) {
 	})
 }
 
+// SendAnswer pushes the server's SDP answer to a client-initiated offer.
 func (h *Hub) SendAnswer(userID int, sessionID string, sdp string) {
 	h.pushToUserID(userID, &types.WsEvent{
 		Event: types.WsEventSfuAnswer,
@@ -184,6 +207,7 @@ func (h *Hub) SendAnswer(userID int, sessionID string, sdp string) {
 	})
 }
 
+// SendCandidate pushes an ICE candidate gathered by the server to userID.
 func (h *Hub) SendCandidate(userID int, sessionID string, c sfu.CandidateInit) {
 	h.pushToUserID(userID, &types.WsEvent{
 		Event: types.WsEventSfuCandidate,
@@ -196,6 +220,9 @@ func (h *Hub) SendCandidate(userID int, sessionID string, c sfu.CandidateInit) {
 	})
 }
 
+// SendTrackPublished notifies every current voice participant of channelID
+// that t was published (including a publish-state resume; see
+// WsActionSfuPublishState).
 func (h *Hub) SendTrackPublished(channelID int64, t sfu.TrackInfo) {
 	h.broadcastToChannelVoice(channelID, &types.WsEvent{
 		Event: types.WsEventSfuTrackPublished,
@@ -203,6 +230,8 @@ func (h *Hub) SendTrackPublished(channelID int64, t sfu.TrackInfo) {
 	})
 }
 
+// SendTrackPublishedTo implements sfu.Signaler.SendTrackPublishedTo — see
+// its interface doc for why this differs from SendTrackPublished.
 func (h *Hub) SendTrackPublishedTo(userID int, channelID int64, t sfu.TrackInfo) {
 	h.pushToUserID(userID, &types.WsEvent{
 		Event: types.WsEventSfuTrackPublished,
@@ -210,6 +239,9 @@ func (h *Hub) SendTrackPublishedTo(userID int, channelID int64, t sfu.TrackInfo)
 	})
 }
 
+// SendTrackUnpublished notifies every current voice participant of
+// channelID that t was unpublished (including a publish-state pause; see
+// WsActionSfuPublishState).
 func (h *Hub) SendTrackUnpublished(channelID int64, t sfu.TrackInfo) {
 	h.broadcastToChannelVoice(channelID, &types.WsEvent{
 		Event: types.WsEventSfuTrackUnpublished,
@@ -217,6 +249,8 @@ func (h *Hub) SendTrackUnpublished(channelID int64, t sfu.TrackInfo) {
 	})
 }
 
+// SendActiveSpeakers notifies every current voice participant of channelID
+// of the current set of active speakers.
 func (h *Hub) SendActiveSpeakers(channelID int64, userIDs []int) {
 	h.broadcastToChannelVoice(channelID, &types.WsEvent{
 		Event: types.WsEventSfuActiveSpeakers,
@@ -224,6 +258,9 @@ func (h *Hub) SendActiveSpeakers(channelID int64, userIDs []int) {
 	})
 }
 
+// SendError pushes an sfu_error event to userID — used for errors on the
+// fire-and-forget sfu_candidate path, which has no request/ack of its own
+// to attach a plain error response to (see WsSfuErrorEvent).
 func (h *Hub) SendError(userID int, sessionID, code, message string) {
 	h.pushToUserID(userID, &types.WsEvent{
 		Event: types.WsEventSfuError,
@@ -246,6 +283,10 @@ func (h *Hub) buildSFUIceServers(userID int) []types.WsICEServer {
 	return servers
 }
 
+// StorePendingAttachment implements types.PendingAttachmentStore, assigning
+// pa a fresh ID from an atomic counter and storing it under
+// pendingAttachmentsMu until a send_message command consumes it via
+// TakePendingAttachment.
 func (h *Hub) StorePendingAttachment(pa types.PendingAttachment) int64 {
 	id := h.nextAttachmentID.Add(1)
 	pa.ID = id
@@ -255,6 +296,8 @@ func (h *Hub) StorePendingAttachment(pa types.PendingAttachment) int64 {
 	return id
 }
 
+// TakePendingAttachment implements types.PendingAttachmentStore: see that
+// interface's doc for its one-shot take semantics.
 func (h *Hub) TakePendingAttachment(id int64, userID int) (*types.PendingAttachment, bool) {
 	h.pendingAttachmentsMu.Lock()
 	pa, ok := h.pendingAttachments[id]
@@ -271,6 +314,15 @@ func (h *Hub) TakePendingAttachment(id int64, userID int) (*types.PendingAttachm
 	return pa, true
 }
 
+// Run drives the hub's single event loop, selecting over Register,
+// Unregister and Commands until the process exits.
+//
+// Every mutation of hub state happens on this goroutine, which is why the
+// hub maps need h.mu only for reads from other goroutines (SFU callbacks,
+// embed workers, push delivery). Run must never block on I/O: network work
+// is handed to a worker pool and delivered later as its own WebSocket event.
+//
+// Run blocks; call it as `go hub.Run()`.
 func (h *Hub) Run() {
 	for {
 		select {

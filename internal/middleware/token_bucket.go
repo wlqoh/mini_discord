@@ -10,6 +10,11 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// TokenBucket is a thread-safe, per-key token-bucket rate limiter: each
+// distinct key (a client IP for FiberRateLimitMiddleware, or a user ID for
+// hub actions like create_server/send_message/mark_read) gets its own
+// independent bucket that refills at tokensPerSecond up to maxTokens.
+// Idle buckets are swept periodically so the map doesn't grow unbounded.
 type TokenBucket struct {
 	mu              sync.Mutex
 	tokensPerSecond float64
@@ -26,6 +31,10 @@ type bucketState struct {
 	lastRefill time.Time
 }
 
+// NewTokenBucket builds a TokenBucket that refills at tokensPerSecond
+// tokens/second up to a burst of maxTokens, starts its background cleanup
+// goroutine (Start), and registers that goroutine's shutdown with
+// internal/lib/closer.
 func NewTokenBucket(tokensPerSecond float64, maxTokens float64) *TokenBucket {
 	tb := &TokenBucket{
 		tokensPerSecond: tokensPerSecond,
@@ -44,12 +53,20 @@ func NewTokenBucket(tokensPerSecond float64, maxTokens float64) *TokenBucket {
 	return tb
 }
 
+// Start launches the background goroutine that periodically evicts idle
+// per-key buckets. It is idempotent — only the first call has any effect —
+// since NewTokenBucket already calls it.
 func (tb *TokenBucket) Start() {
 	tb.startOnce.Do(func() {
 		go tb.cleanup()
 	})
 }
 
+// Allow reports whether clientID may proceed, consuming one token from its
+// bucket if so. An empty clientID is treated as the literal key "unknown"
+// (so a caller that failed to resolve one still gets a single shared
+// bucket rather than an unbounded number of unlimited requests). Safe for
+// concurrent use.
 func (tb *TokenBucket) Allow(clientID string) bool {
 	if clientID == "" {
 		clientID = "unknown"
@@ -82,6 +99,8 @@ func (tb *TokenBucket) Allow(clientID string) bool {
 	return false
 }
 
+// FiberRateLimitMiddleware returns Fiber middleware that rate-limits by
+// client IP (c.IP()), responding 429 when the bucket is empty.
 func (tb *TokenBucket) FiberRateLimitMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if !tb.Allow(c.IP()) {

@@ -10,6 +10,8 @@ import (
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
+// GetLinkPreview implements types.EmbedStorage. A missing row is not an
+// error: it returns (nil, nil).
 func (s *Storage) GetLinkPreview(ctx context.Context, urlHash string) (*types.LinkPreviewRecord, error) {
 	const query = `
 		SELECT url_hash, url, status, title, description, site_name, image_url, image_token, fetched_at
@@ -38,6 +40,8 @@ func (s *Storage) GetLinkPreview(ctx context.Context, urlHash string) (*types.Li
 	return &record, nil
 }
 
+// GetLinkPreviewByImageToken implements types.EmbedStorage. An empty token
+// or a missing row both return (nil, nil) rather than an error.
 func (s *Storage) GetLinkPreviewByImageToken(ctx context.Context, imageToken string) (*types.LinkPreviewRecord, error) {
 	if imageToken == "" {
 		return nil, nil
@@ -70,9 +74,10 @@ func (s *Storage) GetLinkPreviewByImageToken(ctx context.Context, imageToken str
 	return &record, nil
 }
 
-// UpsertLinkPreview обновляет запись на месте и возвращает действующий
-// image_token. Токен перевыпускается только если его ещё не было: иначе
-// ссылки на картинку, уже разосланные клиентам, начали бы отдавать 404.
+// UpsertLinkPreview implements types.EmbedStorage, updating the row in
+// place and returning the image_token now in effect. The token is only
+// reissued if none existed yet; otherwise image links already sent to
+// clients would start 404ing.
 func (s *Storage) UpsertLinkPreview(ctx context.Context, record types.LinkPreviewRecord) (string, error) {
 	const query = `
 		INSERT INTO link_previews (url_hash, url, status, title, description, site_name, image_url, image_token, fetched_at)
@@ -109,6 +114,7 @@ func (s *Storage) UpsertLinkPreview(ctx context.Context, record types.LinkPrevie
 	return effectiveToken, err
 }
 
+// LinkMessageEmbed implements types.EmbedStorage.
 func (s *Storage) LinkMessageEmbed(ctx context.Context, messageID int64, position int, urlHash string) error {
 	const query = `
 		INSERT INTO message_embeds (message_id, position, url_hash)
@@ -119,10 +125,11 @@ func (s *Storage) LinkMessageEmbed(ctx context.Context, messageID int64, positio
 	return err
 }
 
-// GetMessageEmbeds догружает превью пачкой — по образцу
-// GetAttachmentsByMessageIDs. Фильтр по status держит выдачу чистой: неудачные
-// фетчи к сообщениям не привязываются, но условие защищает от случая, когда
-// запись деградировала до failed при обновлении по TTL.
+// GetMessageEmbeds implements types.EmbedStorage, batch-loading previews
+// the same way GetAttachmentsByMessageIDs does. The status = 'ok' filter
+// keeps the result clean: a failed fetch is never linked to a message in
+// the first place, but the filter also guards against a previously-ok
+// record degrading to failed on a later TTL refresh.
 func (s *Storage) GetMessageEmbeds(ctx context.Context, messageIDs []int64) (map[int64][]types.WsLinkPreview, error) {
 	if len(messageIDs) == 0 {
 		return nil, nil

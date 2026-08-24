@@ -26,16 +26,26 @@ const (
 
 var errNotFetchable = errors.New("resource is not fetchable")
 
+// FetchedImage is an image proxied through FetchImage, loaded fully into
+// memory (see FetchImage for why).
 type FetchedImage struct {
 	ContentType string
 	Body        []byte
 }
 
+// Fetcher performs the outbound HTTP requests that back link previews: the
+// page fetch for metadata (Fetch) and the image proxy (FetchImage). Its
+// client is hardened against SSRF via a safe dialer (see safedial.go).
 type Fetcher struct {
 	cfg    config.LinkPreviewConfig
 	client *http.Client
 }
 
+// NewFetcher builds a Fetcher whose http.Client dials through a safe dialer
+// (safedial.go) that re-validates every redirect target, caps redirects at
+// cfg.MaxRedirects, disables keep-alives (connections to arbitrary sites
+// aren't worth pooling), and pins TLS to max version 1.2 to work around
+// TLS 1.3 interception by some local antivirus/firewall software.
 func NewFetcher(cfg config.LinkPreviewConfig) *Fetcher {
 	dialer := newSafeDialer(cfg.Timeout)
 
@@ -76,9 +86,10 @@ func NewFetcher(cfg config.LinkPreviewConfig) *Fetcher {
 	return &Fetcher{cfg: cfg, client: client}
 }
 
-// Fetch забирает страницу и вытаскивает из неё метаданные. Ошибку возвращает
-// только при сетевой неудаче; страница без OG-тегов — это валидный результат
-// со статусом empty.
+// Fetch downloads the page at normalizedURL and extracts its preview
+// metadata. It only returns an error on network failure; a page with no
+// OG/Twitter meta tags is a valid result with Status ==
+// LinkPreviewStatusEmpty, not an error.
 func (f *Fetcher) Fetch(ctx context.Context, normalizedURL string) (types.LinkPreviewRecord, error) {
 	pageURL, err := url.Parse(normalizedURL)
 	if err != nil {
@@ -116,9 +127,12 @@ func (f *Fetcher) Fetch(ctx context.Context, normalizedURL string) (types.LinkPr
 	return record, nil
 }
 
-// FetchImage используется прокси-эндпоинтом. Тело читается в память целиком:
-// Fiber отдаёт ответ уже после возврата из хендлера, поэтому передать ему
-// незакрытый resp.Body нельзя — он закроется раньше, чем начнётся запись.
+// FetchImage downloads imageURL for the embed image-proxy endpoint,
+// rejecting non-image content and SVG (an executable format, and this is
+// served from our own origin). The body is read fully into memory rather
+// than streamed: Fiber writes the response only after the handler
+// returns, so an unclosed resp.Body can't be handed to it — it would close
+// before the write starts.
 func (f *Fetcher) FetchImage(ctx context.Context, imageURL string) (FetchedImage, error) {
 	ctx, cancel := context.WithTimeout(ctx, imageFetchTimeout)
 	defer cancel()
