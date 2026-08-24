@@ -1,17 +1,3 @@
-// Package sfu implements the SFU (Selective Forwarding Unit) voice/video
-// transport described in sfu-migration-plan.md. It is embedded in the same
-// process as internal/service/server (decision #2 in that plan: a monolith,
-// not a separate service) but MUST NOT import that package — all
-// interaction happens through the Signaler/Authorizer interfaces below,
-// which internal/service/server.Hub implements. This keeps the media code
-// isolated: a panic inside an RTP-reading goroutine is recovered locally
-// (see sfu-migration-plan.md §8 pitfall #5) instead of being able to import
-// and directly corrupt hub state, and the package can be lifted into a
-// separate binary later (§10 of the plan) by adding a transport, not by
-// untangling imports.
-//
-// Phase 0 only establishes this boundary; Router is unimplemented until
-// migration phase 1.
 package sfu
 
 import "context"
@@ -19,23 +5,37 @@ import "context"
 // Signaler is how the Router reaches a client. Implemented by the hub,
 // which forwards these onto the right WebSocket connection.
 type Signaler interface {
+	// SendOffer delivers a server-initiated SDP renegotiation offer to userID.
 	SendOffer(userID int, sessionID string, sdp string)
+	// SendAnswer delivers the server's SDP answer to a client-initiated offer.
 	SendAnswer(userID int, sessionID string, sdp string)
+	// SendCandidate delivers a server-gathered ICE candidate to userID.
 	SendCandidate(userID int, sessionID string, c CandidateInit)
+	// SendTrackPublished notifies every participant of channelID that t was
+	// published.
 	SendTrackPublished(channelID int64, t TrackInfo)
 	// SendTrackPublishedTo delivers a track_published event to a single
 	// user — the snapshot of already-published tracks handed to a peer that
 	// just joined (see Peer.sendTrackSnapshot). channelID is needed because
 	// the client filters events by it (see handleTrackPublished).
 	SendTrackPublishedTo(userID int, channelID int64, t TrackInfo)
+	// SendTrackUnpublished notifies every participant of channelID that t
+	// was unpublished.
 	SendTrackUnpublished(channelID int64, t TrackInfo)
+	// SendActiveSpeakers notifies every participant of channelID of the
+	// current set of active speakers.
 	SendActiveSpeakers(channelID int64, userIDs []int)
+	// SendError delivers an out-of-band error to userID, for signaling paths
+	// (like sfu_candidate) that have no request/ack of their own to attach
+	// an error response to.
 	SendError(userID int, sessionID, code, message string)
 }
 
 // Authorizer checks channel access. Implemented by the hub on top of
 // types.ServerStorage.CanUserAccessChannel.
 type Authorizer interface {
+	// CanUserAccessChannel reports whether userID may join the voice
+	// channel channelID.
 	CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error)
 }
 
@@ -52,6 +52,9 @@ type CandidateInit struct {
 // see sfu-migration-plan.md §4.3.
 type Source string
 
+// Source* enumerates the four fixed publish slots (PublishSlots in
+// router.go): one mic, one camera, one screen, and one screen-audio track
+// per peer.
 const (
 	SourceMic         Source = "mic"
 	SourceCamera      Source = "camera"
@@ -60,11 +63,11 @@ const (
 )
 
 // Quality is the subscription level a client can request for a video
-// source — see sfu-migration-plan.md §8 (decision #8). Only Off is
-// meaningful until simulcast lands in migration phase 6; Low and High are
-// reserved so the wire protocol doesn't change when it does.
+// source — see sfu-migration-plan.md §8 (decision #8). Low and High select
+// a simulcast layer (see simulcast.go); Off unsubscribes.
 type Quality string
 
+// Quality* enumerates the values of Quality.
 const (
 	QualityOff  Quality = "off"
 	QualityLow  Quality = "low"

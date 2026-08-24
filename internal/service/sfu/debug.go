@@ -11,11 +11,14 @@ type SnapshotDTO struct {
 	Rooms []RoomSnapshot `json:"rooms"`
 }
 
+// RoomSnapshot is one voice channel's current state, as returned in
+// SnapshotDTO.Rooms.
 type RoomSnapshot struct {
 	ChannelID int64          `json:"channel_id"`
 	Peers     []PeerSnapshot `json:"peers"`
 }
 
+// PeerSnapshot is one session's current WebRTC and publish/subscribe state.
 type PeerSnapshot struct {
 	SessionID          string                 `json:"session_id"`
 	UserID             int                    `json:"user_id"`
@@ -26,6 +29,7 @@ type PeerSnapshot struct {
 	Subscriptions      []SubscriptionSnapshot `json:"subscriptions"`
 }
 
+// TrackSnapshot is one of a peer's currently published tracks.
 type TrackSnapshot struct {
 	Source Source `json:"source"`
 	Kind   string `json:"kind"`
@@ -34,6 +38,7 @@ type TrackSnapshot struct {
 	Layers []string `json:"layers,omitempty"`
 }
 
+// SubscriptionSnapshot is one of a peer's currently subscribed remote tracks.
 type SubscriptionSnapshot struct {
 	PublisherUserID int    `json:"publisher_user_id"`
 	Source          Source `json:"source"`
@@ -44,6 +49,11 @@ type SubscriptionSnapshot struct {
 	PendingLayer string `json:"pending_layer,omitempty"`
 }
 
+// Snapshot returns the router's current state for the admin debug endpoint
+// (GET /api/v1/admin/sfu/rooms). It round-trips through each Peer's own
+// command queue to read run()-only state safely, bounded by a per-peer
+// timeout (see (*Peer).snapshot) so one stuck peer cannot hang the whole
+// response.
 func (r *Router) Snapshot() SnapshotDTO {
 	r.mu.RLock()
 	rooms := make([]*Room, 0, len(r.rooms))
