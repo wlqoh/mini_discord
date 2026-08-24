@@ -884,6 +884,23 @@ export default function ChatPage() {
                                     </button>
                                 )}
                             </div>
+                            {isInVoiceCall && voice.callStatus !== "connected" && (
+                                <div className={`voice-call-status-banner${voice.callStatus === "lost" ? " voice-call-status-banner-lost" : ""}`}>
+                                    <span className="voice-call-status-banner-text">
+                                        {voice.callStatus === "reconnecting"
+                                            ? "Reconnecting to the call…"
+                                            : "Connection to the call was lost."}
+                                    </span>
+                                    {voice.callStatus === "lost" && (
+                                        <button
+                                            className="message-send-btn"
+                                            onClick={() => void voice.handleJoinVoice(voice.voiceChannelId)}
+                                        >
+                                            Reconnect
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                             {isInVoiceCall && (
                             <div className="video-grid">
                                 {(voice.localScreenStream || voice.localStream) && (

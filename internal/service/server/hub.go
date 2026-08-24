@@ -25,6 +25,25 @@ import (
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
+// voiceRouter is the subset of *sfu.Router the hub drives — narrow enough
+// that tests can substitute a fake router and inject synthetic
+// sfu.LiveSession state for the reconciliation sweep (ghost-participants-
+// plan.md §5) without a real WebRTC handshake. The dependency direction is
+// unchanged from decision #3: server still depends on sfu, never the other
+// way — *sfu.Router satisfies this trivially, it's just a type name.
+type voiceRouter interface {
+	Join(userID int, channelID int64) (sessionID string, err error)
+	HandleOffer(sessionID, sdp string, slots []sfu.SlotDecl) error
+	HandleAnswer(sessionID, sdp string) error
+	HandleCandidate(sessionID string, c sfu.CandidateInit) error
+	SubscribeVideo(sessionID string, targetUserID int, source sfu.Source, quality sfu.Quality) error
+	SetPublishState(sessionID string, source sfu.Source, active bool) error
+	Leave(sessionID string)
+	Detach(sessionID string)
+	Resume(ctx context.Context, sessionID string, userID int) error
+	LiveSessions() []sfu.LiveSession
+}
+
 // Hub owns all real-time chat and voice state and is driven by a single
 // goroutine (see Run). Every mutation of hub state happens on that
 // goroutine — reached via the Register/Unregister/Commands channels — which
@@ -52,9 +71,25 @@ type Hub struct {
 	voiceStatusByUser    map[int]voiceStatus
 	typingChannelByUser  map[int]int64
 	webrtcConfig         config.WebRTCConfig
-	sfuRouter            *sfu.Router         // nil when SFU is disabled or failed to start
+	sfuRouter            voiceRouter         // nil when SFU is disabled or failed to start
 	sfuSessionByUser     map[int]string      // userID -> SFU session ID, guarded by mu
 	sfuGraceTimers       map[int]*time.Timer // userID -> pending expireVoiceSession timer, guarded by mu
+	// voiceJoinedAt tracks when each user's current voice membership
+	// started, guarded by mu. Read by the reconciliation sweep (§5) so it
+	// never acts on a join still in flight between the hub's maps and the
+	// router's — only records older than one ReconcileInterval are ever
+	// touched.
+	voiceJoinedAt map[int]time.Time
+
+	// voiceCloseCounters tallies why a voice session ended, one atomic
+	// counter per fixed reason (see types.VoiceDiagnostics), populated once
+	// in NewHub and never mutated afterwards — safe to read the map itself
+	// without mu. Exposed via VoiceDiagnostics for the admin debug endpoint:
+	// a successful ghost cleanup looks like nothing happened, so without
+	// this there's no way to tell "working" apart from "never triggered".
+	voiceCloseCounters   map[string]*atomic.Int64
+	lastReconcileAt      atomic.Int64 // unix ms of the most recently completed sweep tick
+	lastReconcileRemoved atomic.Int64 // ghost/orphan sessions acted on in that tick
 
 	jwtSecret []byte
 
@@ -67,6 +102,13 @@ type Hub struct {
 	Register   chan *Client
 	Unregister chan *Client
 	Commands   chan wsCommandRequest
+}
+
+// voiceCloseReasons is the fixed set of keys voiceCloseCounters supports —
+// see types.VoiceDiagnostics.CloseCounts for what each one means.
+var voiceCloseReasons = []string{
+	"ws_closed", "grace_expired", "pc_failed", "pc_closed",
+	"reconcile_hub", "reconcile_hub_dead_pc", "reconcile_router", "evicted",
 }
 
 type wsCommandRequest struct {
@@ -115,11 +157,16 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 		webrtcConfig:         webrtcConfig,
 		sfuSessionByUser:     make(map[int]string),
 		sfuGraceTimers:       make(map[int]*time.Timer),
+		voiceJoinedAt:        make(map[int]time.Time),
+		voiceCloseCounters:   make(map[string]*atomic.Int64, len(voiceCloseReasons)),
 		pendingAttachments:   make(map[int64]*types.PendingAttachment),
 		log:                  log,
 		Register:             make(chan *Client),
 		Unregister:           make(chan *Client),
 		Commands:             make(chan wsCommandRequest, 64),
+	}
+	for _, reason := range voiceCloseReasons {
+		h.voiceCloseCounters[reason] = &atomic.Int64{}
 	}
 
 	if webrtcConfig.SFU.Enabled {
@@ -139,6 +186,7 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 			log.Error("sfu: failed to start router, voice will be unavailable", "err", err)
 		} else {
 			h.sfuRouter = router
+			router.SetSessionObserver(h)
 		}
 	}
 
@@ -147,9 +195,37 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 
 // SFURouter exposes the SFU router for the admin debug endpoint
 // (GET /api/v1/admin/sfu/rooms — sfu-migration-plan.md §7 phase 1, decision
-// #12). Returns nil when SFU is disabled or failed to start.
+// #12). Returns nil when SFU is disabled or failed to start, and also nil
+// for the voiceRouter fakes tests substitute (the type assertion fails) —
+// harmless, since only the real admin endpoint calls this.
 func (h *Hub) SFURouter() *sfu.Router {
-	return h.sfuRouter
+	router, _ := h.sfuRouter.(*sfu.Router)
+	return router
+}
+
+// countVoiceClose increments the tally for reason if it's one of
+// voiceCloseReasons — an unrecognized reason (there shouldn't be one; every
+// call site passes a literal from that list) is silently dropped rather
+// than panicking, since this only ever runs on the success path of
+// tearing a session down and must never be what breaks that.
+func (h *Hub) countVoiceClose(reason string) {
+	if c, ok := h.voiceCloseCounters[reason]; ok {
+		c.Add(1)
+	}
+}
+
+// VoiceDiagnostics reports the counters and sweep state backing the "voice"
+// section of GET /api/v1/admin/sfu/rooms.
+func (h *Hub) VoiceDiagnostics() types.VoiceDiagnostics {
+	counts := make(map[string]int64, len(h.voiceCloseCounters))
+	for reason, c := range h.voiceCloseCounters {
+		counts[reason] = c.Load()
+	}
+	return types.VoiceDiagnostics{
+		CloseCounts:          counts,
+		LastReconcileAt:      h.lastReconcileAt.Load(),
+		LastReconcileRemoved: h.lastReconcileRemoved.Load(),
+	}
 }
 
 // --- sfu.Authorizer ---
@@ -268,6 +344,52 @@ func (h *Hub) SendError(userID int, sessionID, code, message string) {
 	})
 }
 
+// pushSfuSessionClosed tells userID the server tore down their own SFU
+// session (ghost-participants-plan.md §6): leaveVoiceChannelInternal only
+// broadcasts voice_user_left to everyone ELSE (see its own doc comment), so
+// without this the departing user never learns their call ended anywhere
+// but locally. A no-op if they have no live connection right now — the
+// common case for grace_expired/reconcile_*, whose whole premise is that
+// the WebSocket is already gone.
+func (h *Hub) pushSfuSessionClosed(userID int, sessionID, reason string) {
+	h.pushToUserID(userID, &types.WsEvent{
+		Event: types.WsEventSfuSessionClosed,
+		Data:  types.WsSfuSessionClosedEvent{SessionID: sessionID, Reason: reason},
+	})
+}
+
+// --- sfu.SessionObserver ---
+
+// OnSessionClosed implements sfu.SessionObserver: the SFU noticed userID's
+// session died on its own (PeerConnectionState failed/closed) without a
+// matching leave_voice_channel. Called from a goroutine the Router spawns
+// for this purpose (never from Run's own goroutine), so it may block on
+// storage the same way leaveVoiceChannelInternal always has.
+//
+// PeerConnectionState=failed is terminal for that specific PeerConnection —
+// sfu_resume would just hand the client back the same dead peer — so unlike
+// a dropped WebSocket this gets no grace period, it's an immediate teardown
+// (ghost-participants-plan.md §3 decision #4).
+func (h *Hub) OnSessionClosed(userID int, sessionID string, channelID int64, reason sfu.CloseReason) {
+	h.mu.RLock()
+	current, ok := h.sfuSessionByUser[userID]
+	h.mu.RUnlock()
+	if !ok || current != sessionID {
+		// The user already left explicitly, resumed into a fresh session,
+		// or this is a second notification for the same death (failed then
+		// closed) that lost the race — nothing left for us to tear down.
+		return
+	}
+
+	h.log.Warn("voice: closing session after media failure",
+		"user_id", userID, "session_id", sessionID, "channel_id", channelID, "reason", string(reason))
+
+	if ch := h.leaveVoiceChannelInternal(userID); ch != 0 {
+		h.countVoiceClose(string(reason))
+		h.pushSfuSessionClosed(userID, sessionID, string(reason))
+	}
+}
+
 // buildSFUIceServers hands an SFU client the same STUN default and coturn
 // TURN credentials the mesh path uses (see turnApi.ts / MintTurnCredentials)
 // — an SFU client behind a symmetric NAT/CGNAT still needs a relay to reach
@@ -324,6 +446,10 @@ func (h *Hub) TakePendingAttachment(id int64, userID int) (*types.PendingAttachm
 //
 // Run blocks; call it as `go hub.Run()`.
 func (h *Hub) Run() {
+	if h.sfuRouter != nil && h.webrtcConfig.SFU.ReconcileInterval > 0 {
+		go h.reconcileLoop()
+	}
+
 	for {
 		select {
 		case cl := <-h.Register:
@@ -339,12 +465,36 @@ func (h *Hub) Run() {
 
 func (h *Hub) registerClient(cl *Client) {
 	h.mu.Lock()
-	if old, ok := h.clientsByUser[cl.UserID]; ok && old != cl {
+	old, evicted := h.clientsByUser[cl.UserID]
+	if evicted && old != cl {
 		_ = old.Conn.Close()
 		close(old.Outbound)
+	} else {
+		evicted = false
 	}
 	h.clientsByUser[cl.UserID] = cl
 	h.mu.Unlock()
+
+	if evicted {
+		// The evicted client's own readMessage/unregisterClient never runs
+		// handleVoiceDisconnect for it: by the time unregisterClient sees
+		// it, cl.UserID already maps to the new connection, so its
+		// current==old check fails and removed stays false. Without this,
+		// an evicted client's SFU session (if any) would never Detach or
+		// start a grace timer and would leak forever. Treated as an abrupt
+		// disconnect, not a graceful one — the new tab may still sfu_resume
+		// it, and if not, the grace timer cleans it up in bounded time
+		// instead of never (decision #8). Backgrounded: handleVoiceDisconnect
+		// can fall through to leaveVoiceChannelInternal, which hits storage,
+		// and Run() must never block on I/O.
+		//
+		// Counted here, unconditionally, rather than wherever the session
+		// eventually stops: a resumed session never calls
+		// leaveVoiceChannelInternal at all, but the eviction still happened
+		// and is exactly what "evicted" exists to surface.
+		h.countVoiceClose("evicted")
+		go h.handleVoiceDisconnect(cl.UserID, false)
+	}
 
 	h.pushEvent(cl, &types.WsEvent{Event: types.WsEventConnected})
 }
@@ -361,26 +511,44 @@ func (h *Hub) unregisterClient(cl *Client) {
 	h.mu.Unlock()
 
 	if removed {
-		h.handleVoiceDisconnect(cl.UserID)
+		h.handleVoiceDisconnect(cl.UserID, cl.gracefulClose.Load())
 		h.stopTypingOnDisconnect(cl)
 	}
 }
 
-// handleVoiceDisconnect decides how a dropped WebSocket affects voice
-// membership. An SFU session gets a grace period (decision #10,
+// handleVoiceDisconnect decides how a lost WebSocket affects voice
+// membership. graceful distinguishes a clean close (tab closed, navigation,
+// F5 — see Client.gracefulClose) from everything else (network drop, proxy
+// idle-kill, a killed browser process): a clean close means the
+// RTCPeerConnection died with the document, so there's nothing to resume
+// and a grace period would only guarantee a ghost for its full duration
+// (decision #5) — that case leaves immediately, same as the no-SFU-session
+// path below always has.
+//
+// Otherwise an SFU session gets a grace period (decision #10,
 // sfu-migration-plan.md §7 phase 3): the media transport to the SFU doesn't
 // depend on the WebSocket, so a brief signaling blip (Wi-Fi↔LTE, a backend
 // restart, a sleeping laptop) no longer has to drop the call. Mesh has no
 // such mechanism — every peer link there IS the signaling connection — so
-// it keeps leaving immediately, same as before this phase.
-func (h *Hub) handleVoiceDisconnect(userID int) {
+// it keeps leaving immediately regardless of graceful, same as before this
+// phase.
+func (h *Hub) handleVoiceDisconnect(userID int, graceful bool) {
+	if graceful {
+		if ch := h.leaveVoiceChannelInternal(userID); ch != 0 {
+			h.countVoiceClose("ws_closed")
+		}
+		return
+	}
+
 	h.mu.RLock()
 	sessionID, hasSFUSession := h.sfuSessionByUser[userID]
 	channelID, inVoice := h.userVoiceChannel[userID]
 	h.mu.RUnlock()
 
 	if !hasSFUSession || !inVoice || h.sfuRouter == nil {
-		h.leaveVoiceChannelInternal(userID)
+		if ch := h.leaveVoiceChannelInternal(userID); ch != 0 {
+			h.countVoiceClose("ws_closed")
+		}
 		return
 	}
 
@@ -404,6 +572,13 @@ func (h *Hub) handleVoiceDisconnect(userID int) {
 		h.expireVoiceSession(userID, sessionID)
 	})
 	h.mu.Lock()
+	if old, ok := h.sfuGraceTimers[userID]; ok {
+		// A second grace timer for the same user (e.g. Detach fired twice
+		// before the first one expired) must not leave the earlier one
+		// running silently alongside this one — expireVoiceSession is
+		// idempotent, but two live timers is still a leak.
+		old.Stop()
+	}
 	h.sfuGraceTimers[userID] = timer
 	h.mu.Unlock()
 }
@@ -423,7 +598,135 @@ func (h *Hub) expireVoiceSession(userID int, sessionID string) {
 		return
 	}
 
-	h.leaveVoiceChannelInternal(userID)
+	if ch := h.leaveVoiceChannelInternal(userID); ch != 0 {
+		h.countVoiceClose("grace_expired")
+		h.pushSfuSessionClosed(userID, sessionID, "grace_expired")
+	}
+}
+
+// reconcileLoop periodically cross-checks hub voice membership against the
+// router's live sessions and repairs whichever side is stale relative to
+// the other (ghost-participants-plan.md §5) — the self-healing backstop
+// for any bug or missed callback the targeted paths above don't catch.
+// Runs on its own goroutine, like the grace timers: a tick can call
+// leaveVoiceChannelInternal, which hits storage, and Run() must never
+// block on I/O.
+func (h *Hub) reconcileLoop() {
+	interval := h.webrtcConfig.SFU.ReconcileInterval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		h.reconcileTick(interval)
+	}
+}
+
+// reconcileTick runs one sweep pass. minAge guards the one real hazard here
+// (decision #6/risk table): the hub's voice maps and the router's peer map
+// are written by two different goroutines with no shared transaction, so a
+// join still in flight between them would look exactly like a ghost or an
+// orphan. Any record younger than minAge is left alone; everything else
+// gets cross-checked and, if stale, torn down the same way an explicit
+// leave or a PC failure would be.
+func (h *Hub) reconcileTick(minAge time.Duration) {
+	if h.sfuRouter == nil {
+		return
+	}
+
+	live := h.sfuRouter.LiveSessions()
+	liveBySession := make(map[string]sfu.LiveSession, len(live))
+	for _, ls := range live {
+		liveBySession[ls.SessionID] = ls
+	}
+
+	type hubVoiceEntry struct {
+		userID        int
+		channelID     int64
+		sessionID     string
+		hasSession    bool
+		inParticipant bool
+		joinedAt      time.Time
+	}
+
+	h.mu.RLock()
+	entries := make([]hubVoiceEntry, 0, len(h.userVoiceChannel))
+	for userID, channelID := range h.userVoiceChannel {
+		sessionID, hasSession := h.sfuSessionByUser[userID]
+		_, inParticipant := h.voiceParticipants[channelID][userID]
+		entries = append(entries, hubVoiceEntry{
+			userID:        userID,
+			channelID:     channelID,
+			sessionID:     sessionID,
+			hasSession:    hasSession,
+			inParticipant: inParticipant,
+			joinedAt:      h.voiceJoinedAt[userID],
+		})
+	}
+	currentSessions := make(map[string]int, len(h.sfuSessionByUser))
+	for userID, sessionID := range h.sfuSessionByUser {
+		currentSessions[sessionID] = userID
+	}
+	h.mu.RUnlock()
+
+	var removed int64
+
+	// hub -> router: a hub voice record with nothing real backing it.
+	for _, e := range entries {
+		if time.Since(e.joinedAt) < minAge {
+			continue
+		}
+
+		ls, sessionLive := liveBySession[e.sessionID]
+		switch {
+		case !e.hasSession || !sessionLive || !e.inParticipant:
+			// No SFU session recorded, the router doesn't have the session
+			// it's supposed to, or the two hub maps that are always
+			// supposed to move together (voiceParticipants/
+			// userVoiceChannel) disagree — a ghost the targeted paths
+			// missed, for whatever reason. A detached user mid-grace-period
+			// doesn't hit this: Detach never removes the session from the
+			// router (see Router.Detach), so sessionLive stays true for
+			// them.
+			if ch := h.leaveVoiceChannelInternal(e.userID); ch != 0 {
+				h.log.Warn("voice: reconcile removed hub ghost",
+					"user_id", e.userID, "channel_id", e.channelID, "session_id", e.sessionID)
+				h.countVoiceClose("reconcile_hub")
+				h.pushSfuSessionClosed(e.userID, e.sessionID, "reconcile_hub")
+				removed++
+			}
+		case ls.ConnectionState == "failed" || ls.ConnectionState == "closed":
+			// The router still has the session, but its PeerConnection
+			// already died — a missed OnConnectionStateChange notification
+			// (decision #2/#4), caught here instead.
+			if ch := h.leaveVoiceChannelInternal(e.userID); ch != 0 {
+				h.log.Warn("voice: reconcile removed session with dead pc",
+					"user_id", e.userID, "channel_id", e.channelID, "session_id", e.sessionID, "state", ls.ConnectionState)
+				h.countVoiceClose("reconcile_hub_dead_pc")
+				h.pushSfuSessionClosed(e.userID, e.sessionID, "reconcile_hub_dead_pc")
+				removed++
+			}
+		}
+	}
+
+	// router -> hub: a session the router still holds that no longer
+	// belongs to any hub voice membership — a leaked peer forwarding media
+	// to nobody and holding a Room slot for nobody.
+	for _, ls := range live {
+		if ls.Age < minAge {
+			continue
+		}
+		if owner, ok := currentSessions[ls.SessionID]; ok && owner == ls.UserID {
+			continue
+		}
+		h.sfuRouter.Leave(ls.SessionID)
+		h.log.Warn("voice: reconcile closed orphan router session",
+			"user_id", ls.UserID, "channel_id", ls.ChannelID, "session_id", ls.SessionID)
+		h.pushSfuSessionClosed(ls.UserID, ls.SessionID, "reconcile_router")
+		h.countVoiceClose("reconcile_router")
+		removed++
+	}
+
+	h.lastReconcileAt.Store(time.Now().UnixMilli())
+	h.lastReconcileRemoved.Store(removed)
 }
 
 func (h *Hub) stopTypingOnDisconnect(cl *Client) {
@@ -1731,6 +2034,7 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 	h.userVoiceChannel[req.client.UserID] = payload.ChannelID
 	h.voiceStatusByUser[req.client.UserID] = voiceStatus{micEnabled: true, deafened: false}
 	h.sfuSessionByUser[req.client.UserID] = sessionID
+	h.voiceJoinedAt[req.client.UserID] = time.Now()
 
 	otherUserIDs := make([]int, 0, len(participants))
 	for userID := range participants {
@@ -2023,6 +2327,7 @@ func (h *Hub) leaveVoiceChannelInternal(userID int) int64 {
 
 	delete(h.userVoiceChannel, userID)
 	delete(h.voiceStatusByUser, userID)
+	delete(h.voiceJoinedAt, userID)
 	sfuSessionID, hadSFUSession := h.sfuSessionByUser[userID]
 	delete(h.sfuSessionByUser, userID)
 	if timer, ok := h.sfuGraceTimers[userID]; ok {
@@ -2079,9 +2384,15 @@ func (h *Hub) resolveVoiceParticipant(ctx context.Context, userID int) types.WsV
 		userVoiceStatus.micEnabled = status.micEnabled
 		userVoiceStatus.deafened = status.deafened
 	}
+	_, detached := h.sfuGraceTimers[userID]
 	h.mu.RUnlock()
 
-	participant := types.WsVoiceParticipant{UserID: userID, MicEnabled: userVoiceStatus.micEnabled, Deafened: userVoiceStatus.deafened}
+	participant := types.WsVoiceParticipant{
+		UserID:     userID,
+		MicEnabled: userVoiceStatus.micEnabled,
+		Deafened:   userVoiceStatus.deafened,
+		Detached:   detached,
+	}
 	user, err := h.storage.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
 		return participant

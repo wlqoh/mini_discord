@@ -47,6 +47,7 @@ type Router struct {
 	mu    sync.RWMutex
 	rooms map[int64]*Room  // channelID -> Room
 	peers map[string]*Peer // sessionID -> Peer
+	obs   SessionObserver  // nil until SetSessionObserver is called
 }
 
 // New builds a Router bound to sig/auth and starts its UDP mux on
@@ -115,6 +116,31 @@ func (r *Router) Join(userID int, channelID int64) (sessionID string, err error)
 	room.add(peer)
 
 	return sessionID, nil
+}
+
+// SetSessionObserver registers the observer notified when the SFU tears
+// down a session on its own, rather than via an explicit Leave (decision
+// #3). Safe to call at any time; passing nil stops notifications.
+func (r *Router) SetSessionObserver(o SessionObserver) {
+	r.mu.Lock()
+	r.obs = o
+	r.mu.Unlock()
+}
+
+// notifySessionClosed reports that p's session died to the registered
+// observer, if any. Always dispatched on a fresh goroutine: this is called
+// from Peer's OnConnectionStateChange callback, which runs on a goroutine
+// internal to Pion, and the observer (the hub) does its own locking plus
+// storage calls — running that inline here risks deadlocking against
+// whatever triggered the state change in the first place.
+func (r *Router) notifySessionClosed(p *Peer, reason CloseReason) {
+	r.mu.RLock()
+	obs := r.obs
+	r.mu.RUnlock()
+	if obs == nil {
+		return
+	}
+	go obs.OnSessionClosed(p.userID, p.sessionID, p.channelID, reason)
 }
 
 func (r *Router) peerBySession(sessionID string) (*Peer, bool) {
@@ -308,4 +334,36 @@ func (r *Router) Resume(ctx context.Context, sessionID string, userID int) error
 
 	peer.enqueue(func() { peer.clearDetached() })
 	return nil
+}
+
+// LiveSession is one session as seen by the router, cheap enough to poll on
+// a timer (ghost-participants-plan.md §5): unlike Snapshot, it never
+// round-trips a Peer's own command queue, so a stuck peer can't stall a
+// reconciliation tick.
+type LiveSession struct {
+	SessionID       string
+	UserID          int
+	ChannelID       int64
+	ConnectionState string        // pc.ConnectionState().String()
+	Age             time.Duration // time since Join
+}
+
+// LiveSessions snapshots every session currently held by the router, for
+// the hub's reconciliation sweep to cross-check against its own voice
+// membership state.
+func (r *Router) LiveSessions() []LiveSession {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]LiveSession, 0, len(r.peers))
+	for sessionID, p := range r.peers {
+		out = append(out, LiveSession{
+			SessionID:       sessionID,
+			UserID:          p.userID,
+			ChannelID:       p.channelID,
+			ConnectionState: p.pc.ConnectionState().String(),
+			Age:             time.Since(p.joinedAt),
+		})
+	}
+	return out
 }

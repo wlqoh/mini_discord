@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -31,6 +32,10 @@ type Peer struct {
 	sessionID string
 	userID    int
 	channelID int64
+	// joinedAt is used by the hub's reconciliation sweep (ghost-participants-
+	// plan.md §5) to avoid tearing down a session that is mid-Join — it's set
+	// once here and never mutated, so it needs no synchronization.
+	joinedAt time.Time
 
 	router *Router
 	room   *Room
@@ -61,6 +66,11 @@ type Peer struct {
 	// clears it once the client reconnects.
 	detached atomic.Bool
 
+	// closeNotified dedupes SessionObserver.OnSessionClosed: PeerConnection
+	// state failed -> closed fires the change handler twice in a row for
+	// the same death (decision #2/#3).
+	closeNotified atomic.Bool
+
 	commands  chan func()
 	stopped   atomic.Bool
 	closeOnce sync.Once
@@ -82,6 +92,7 @@ func newPeer(sessionID string, userID int, channelID int64, pc *webrtc.PeerConne
 		sessionID:    sessionID,
 		userID:       userID,
 		channelID:    channelID,
+		joinedAt:     time.Now(),
 		router:       router,
 		room:         room,
 		pc:           pc,
@@ -150,13 +161,46 @@ func (p *Peer) wire() {
 
 	p.pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
 		p.log.Debug("sfu: ice state", "state", state.String())
-		// failed/disconnected handling (grace period, resume) lands in
-		// migration phase 3 (sfu-migration-plan.md §7); Phase 1 only logs.
+		// Deliberately log-only: ICE state flaps on its own (a brief
+		// disconnected -> connected blip is normal) and isn't a reliable
+		// "this session is dead" signal by itself. The teardown decision is
+		// made on PeerConnectionState below instead, which aggregates
+		// ICE+DTLS and is terminal (ghost-participants-plan.md §3 decision
+		// #2).
 	})
+
+	p.pc.OnConnectionStateChange(p.handleConnectionStateChange)
 
 	p.pc.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		p.enqueue(func() { p.handleOnTrack(remote, receiver) })
 	})
+}
+
+// handleConnectionStateChange is p.pc's OnConnectionStateChange callback,
+// extracted to a named method so tests can drive it directly instead of
+// waiting out a real ICE/DTLS failure. It deliberately does not go through
+// enqueue (see the type doc's concurrency invariant): stopped and
+// closeNotified are atomics precisely so this can run safely from whatever
+// goroutine Pion calls it on.
+func (p *Peer) handleConnectionStateChange(state webrtc.PeerConnectionState) {
+	p.log.Debug("sfu: pc state", "state", state.String())
+	switch state {
+	case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+		if p.stopped.Load() {
+			// Our own teardown (Router.Leave/Close -> doClose -> pc.Close)
+			// also lands here — don't report a normal exit as a session the
+			// SFU had to kill.
+			return
+		}
+		if !p.closeNotified.CompareAndSwap(false, true) {
+			return
+		}
+		reason := CloseReasonPCFailed
+		if state == webrtc.PeerConnectionStateClosed {
+			reason = CloseReasonPCClosed
+		}
+		p.router.notifySessionClosed(p, reason)
+	}
 }
 
 // handleOffer processes the client's one and only client-initiated offer
@@ -532,6 +576,15 @@ func (p *Peer) close() {
 }
 
 func (p *Peer) doClose() {
+	// Set before pc.Close(): Pion dispatches OnConnectionStateChange via
+	// `go handler(cs)` (pion/webrtc's onConnectionStateChange), so the
+	// handler can run concurrently with the rest of this function on
+	// another goroutine — setting stopped afterwards would leave a window
+	// where handleConnectionStateChange's stopped check could still see
+	// false and misreport this normal teardown as a session the SFU had to
+	// kill.
+	p.stopped.Store(true)
+
 	for key, sub := range p.subs {
 		sub.pub.removeSubscriber(p.userID)
 		delete(p.subs, key)
@@ -559,5 +612,4 @@ func (p *Peer) doClose() {
 	}
 
 	_ = p.pc.Close()
-	p.stopped.Store(true)
 }

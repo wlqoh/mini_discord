@@ -1106,6 +1106,32 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* Voice call status banner (ghost-participants-plan.md §6): shown while the
+   local call is auto-rejoining after a server-initiated teardown (a dead
+   PeerConnection, the reconciliation sweep), and again if that gives up. */
+.voice-call-status-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--glass-border-hi);
+    background: rgba(9, 10, 13, 0.85);
+    color: var(--text-1);
+    font-size: 13px;
+}
+
+.voice-call-status-banner-lost {
+    color: #B80606;
+    border-color: rgba(184, 6, 6, 0.4);
+}
+
+.voice-call-status-banner-text {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Video grid */
 .video-grid {
     display: grid;

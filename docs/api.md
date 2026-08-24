@@ -156,6 +156,7 @@ upgrade request). Origin is checked separately from REST CORS, against
 | `sfu_track_published` / `sfu_track_unpublished` | track info | see [`voice.md`](voice.md) |
 | `sfu_active_speakers` | user ID list | see [`voice.md`](voice.md) |
 | `sfu_error` | error message | an `sfu_candidate` (fire-and-forget) failed |
+| `sfu_session_closed` | `WsSfuSessionClosedEvent` | sent only to the affected user — the server tore down *their own* SFU session; see [`voice.md`](voice.md) — ghost-session cleanup |
 
 ### Flows that don't show up in the type table
 

@@ -7,6 +7,12 @@ export type LocalStreamListener = (stream: MediaStream | null) => void;
 export type LocalScreenStreamListener = (stream: MediaStream | null) => void;
 export type ErrorListener = (message: string) => void;
 export type QualityListener = (quality: Record<number, PeerQuality>) => void;
+// "connected" — normal. "reconnecting" — the local session was torn down
+// by the server (a dead PeerConnection, the reconciliation sweep) and an
+// automatic rejoin is in progress. "lost" — rejoin attempts were exhausted;
+// the call is over and needs a manual retry (ghost-participants-plan.md §6).
+export type CallStatus = "connected" | "reconnecting" | "lost";
+export type CallStatusListener = (status: CallStatus) => void;
 
 /**
  * Transport-agnostic surface a voice transport implementation exposes (see
