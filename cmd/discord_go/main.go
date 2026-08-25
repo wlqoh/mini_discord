@@ -26,7 +26,7 @@ func main() {
 	log.Info("starting mini discord server", slog.String("env", cfg.Env))
 	log.Info("debug messages are enabled")
 
-	storage, err := postgresql.New(cfg.StoragePath)
+	storage, err := postgresql.New(cfg.StoragePath, log)
 	if err != nil {
 		log.Error("failed to init storage", sl.Err(err))
 		os.Exit(1)

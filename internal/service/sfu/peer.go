@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 )
 
 // Peer is one client's connection to the SFU: a single PeerConnection with
@@ -308,7 +309,7 @@ func (p *Peer) handleCandidate(c CandidateInit) {
 		// Non-fatal: candidates that lose a renegotiation race (e.g. arriving
 		// for a description the client already superseded) are expected to
 		// fail occasionally. Log only.
-		p.log.Debug("sfu: add ice candidate failed", "err", err)
+		p.log.Debug("sfu: add ice candidate failed", sl.Err(err))
 	}
 }
 
@@ -465,13 +466,13 @@ func (p *Peer) doSubscribe(publisherUserID int, pub *publishedTrack, quality Qua
 
 	local, targetRID, err := pub.newSubscriber(p.userID, quality)
 	if err != nil {
-		p.log.Error("sfu: create local track failed", "err", err)
+		p.log.Error("sfu: create local track failed", sl.Err(err))
 		return
 	}
 
 	sender, err := p.pc.AddTrack(local)
 	if err != nil {
-		p.log.Error("sfu: add track failed", "err", err)
+		p.log.Error("sfu: add track failed", sl.Err(err))
 		pub.removeSubscriber(p.userID)
 		return
 	}
@@ -500,7 +501,7 @@ func (p *Peer) doUnsubscribe(publisherUserID int, source Source) {
 	sub.pub.removeSubscriber(p.userID)
 
 	if err := p.pc.RemoveTrack(sub.sender); err != nil {
-		p.log.Warn("sfu: remove track failed", "err", err)
+		p.log.Warn("sfu: remove track failed", sl.Err(err))
 	}
 	p.scheduleNegotiate()
 }
@@ -516,7 +517,7 @@ func (p *Peer) publishedTrack(source Source) (*publishedTrack, bool) {
 }
 
 func (p *Peer) fail(code string, err error) {
-	p.log.Error("sfu: "+code, "err", err)
+	p.log.Error("sfu: "+code, sl.Err(err))
 	p.router.sig.SendError(p.userID, p.sessionID, code, err.Error())
 }
 

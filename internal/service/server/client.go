@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
@@ -89,7 +90,7 @@ func (c *Client) readMessage(hub *Hub) {
 		err := c.Conn.ReadJSON(&cmd)
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				hub.log.Error("read error", "error", err)
+				hub.log.Error("read error", sl.Err(err))
 			}
 			break
 		}

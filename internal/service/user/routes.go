@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/auth"
 	"github.com/wlqoh/mini_discord.git/internal/service/mailer"
@@ -103,12 +104,12 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 
 	src, err := file.Open()
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to open avatar")
 	}
 	defer func() {
 		if closeErr := src.Close(); closeErr != nil {
-			h.log.Error(op, "error", closeErr.Error())
+			h.log.Error(op, sl.Err(closeErr))
 		}
 	}()
 
@@ -116,7 +117,7 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 
 	raw, err := io.ReadAll(io.LimitReader(src, maxAvatarSizeBytes+1))
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to read avatar")
 	}
 
@@ -133,7 +134,7 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 
 	user, err := h.storage.GetUserByID(c.Context(), clientID)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusUnauthorized, "can't get user")
 	}
 
@@ -142,18 +143,18 @@ func (h *Handler) handleSetImage(c *fiber.Ctx) error {
 		avatarKey = uuid.NewString()
 		url, err = h.s3Client.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
 		if err != nil {
-			h.log.Error(op, "error", err.Error())
+			h.log.Error(op, sl.Err(err))
 			return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
 		}
 		err = h.storage.SaveUserAvatar(c.Context(), clientID, avatarKey)
 		if err != nil {
-			h.log.Error(op, "error", err.Error())
+			h.log.Error(op, sl.Err(err))
 			return utils.WriteError(c, fiber.StatusBadRequest, err.Error())
 		}
 	} else {
 		url, err = h.s3Client.PutAvatar(c.Context(), avatarKey, raw, file.Filename)
 		if err != nil {
-			h.log.Error(op, "error", err.Error())
+			h.log.Error(op, sl.Err(err))
 			return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload avatar")
 		}
 	}
@@ -175,7 +176,7 @@ func (h *Handler) handleGetImage(c *fiber.Ctx) error {
 
 	user, err := h.storage.GetUserByID(c.Context(), clientID)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "can't get user")
 	}
 
@@ -194,18 +195,18 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 	var payload types.LoginUserRequest
 	err := c.BodyParser(&payload)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusUnauthorized, "invalid email or password")
 	}
 
@@ -224,7 +225,7 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 		time.Minute*time.Duration(h.cfg.JWTAccessExpirationInMinutes),
 	)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "auth error")
 	}
 
@@ -234,7 +235,7 @@ func (h *Handler) handleLogin(c *fiber.Ctx) error {
 		time.Minute*time.Duration(h.cfg.JWTRefreshExpirationInMinutes),
 	)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "auth error")
 	}
 
@@ -267,18 +268,18 @@ func (h *Handler) handleDeleteUser(c *fiber.Ctx) error {
 
 	var payload types.DeleteAccountRequest
 	if err := c.BodyParser(&payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
 	u, err := h.storage.GetUserByID(c.Context(), clientID)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete user")
 	}
 
@@ -288,7 +289,7 @@ func (h *Handler) handleDeleteUser(c *fiber.Ctx) error {
 
 	err = h.storage.DeleteUser(c.Context(), clientID)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete user")
 	}
 
@@ -309,12 +310,12 @@ func (h *Handler) handleUpdateUser(c *fiber.Ctx) error {
 
 	err := c.BodyParser(&payload)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
@@ -325,7 +326,7 @@ func (h *Handler) handleUpdateUser(c *fiber.Ctx) error {
 	})
 
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to update user")
 	}
 
@@ -341,13 +342,13 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 
 	err := c.BodyParser(&payload)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
 		errors := err.(validator.ValidationErrors)
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, fmt.Sprintf("invalid payload: %v", errors))
 	}
 
@@ -371,18 +372,18 @@ func (h *Handler) handleRegister(c *fiber.Ctx) error {
 			Password:  hashedPassword,
 		})
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "failed to create user")
 	}
 
 	u, err := h.storage.GetUserByEmail(c.Context(), payload.Email)
 	if err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "registration failed")
 	}
 
 	if err := h.sendVerificationEmail(c.Context(), u); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
@@ -414,18 +415,18 @@ func (h *Handler) handleVerifyEmail(c *fiber.Ctx) error {
 
 	var payload types.VerifyEmailRequest
 	if err := c.BodyParser(&payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
 	tokenHash := auth.HashVerificationToken(payload.Token)
 	if err := h.storage.VerifyEmailByToken(c.Context(), tokenHash); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid or expired verification link")
 	}
 
@@ -439,12 +440,12 @@ func (h *Handler) handleResendVerification(c *fiber.Ctx) error {
 
 	var payload types.ResendVerificationRequest
 	if err := c.BodyParser(&payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid request body")
 	}
 
 	if err := utils.Validate.Struct(payload); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadRequest, "invalid payload")
 	}
 
@@ -460,7 +461,7 @@ func (h *Handler) handleResendVerification(c *fiber.Ctx) error {
 	}
 
 	if err := h.sendVerificationEmail(c.Context(), u); err != nil {
-		h.log.Error(op, "error", err.Error())
+		h.log.Error(op, sl.Err(err))
 	}
 
 	return c.Status(fiber.StatusOK).JSON(genericResponse)
@@ -547,14 +548,14 @@ func (h *Handler) handleUpload(c *fiber.Ctx) error {
 
 	src, err := file.Open()
 	if err != nil {
-		h.log.Error("upload: failed to open file", "error", err.Error())
+		h.log.Error("upload: failed to open file", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to open file")
 	}
 	defer func() { _ = src.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(src, maxUploadSizeBytes+1))
 	if err != nil {
-		h.log.Error("upload: failed to read file", "error", err.Error())
+		h.log.Error("upload: failed to read file", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to read file")
 	}
 
@@ -569,14 +570,14 @@ func (h *Handler) handleUpload(c *fiber.Ctx) error {
 
 	folderKey, err := h.storage.GetOrCreateAttachmentFolderKey(c.Context(), clientID)
 	if err != nil {
-		h.log.Error("upload: failed to get user folder key", "error", err.Error())
+		h.log.Error("upload: failed to get user folder key", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to get user folder")
 	}
 
 	fileSuffix := uuid.NewString()[:8]
 	url, err := h.s3Client.PutAttachment(c.Context(), folderKey, raw, file.Filename, contentType, fileSuffix)
 	if err != nil {
-		h.log.Error("upload: failed to upload to s3", "error", err.Error())
+		h.log.Error("upload: failed to upload to s3", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to upload file")
 	}
 

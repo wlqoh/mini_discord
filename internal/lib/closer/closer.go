@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 )
 
 type closeFn struct {
@@ -35,11 +37,11 @@ func Add(name string, fn func(ctx context.Context) error) {
 // bounded by ctx (further capped to 10s internally). It runs at most once
 // per process — later calls are no-ops that return nil — and joins every
 // callback's error into the single returned error.
-func CloseAll(ctx context.Context) error {
-	return globalCloser.closeAll(ctx)
+func CloseAll(log *slog.Logger, ctx context.Context) error {
+	return globalCloser.closeAll(log, ctx)
 }
 
-func (c *closer) closeAll(ctx context.Context) error {
+func (c *closer) closeAll(log *slog.Logger, ctx context.Context) error {
 	var result error
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -53,7 +55,7 @@ func (c *closer) closeAll(ctx context.Context) error {
 			return
 		}
 
-		slog.Info("closing functions", "count", len(funcs))
+		log.Info("closing functions", slog.Int("count", len(funcs)))
 
 		var errs []error
 
@@ -61,18 +63,18 @@ func (c *closer) closeAll(ctx context.Context) error {
 			f := funcs[i]
 
 			start := time.Now()
-			slog.Info("closing function", "name", f.name)
+			log.Info("closing function", slog.String("name", f.name))
 
 			if err := f.fn(ctx); err != nil {
-				slog.Error("error closing function", "name", f.name, "error", err, "duration", time.Since(start))
+				log.Error("error closing function", slog.String("name", f.name), sl.Err(err), slog.Duration("duration", time.Since(start)))
 
 				errs = append(errs, err)
 			} else {
-				slog.Info("successfully closed function", "name", f.name, "duration", time.Since(start))
+				log.Info("successfully closed function", slog.String("name", f.name), slog.Duration("duration", time.Since(start)))
 			}
 		}
 
-		slog.Info("all functions closed")
+		log.Info("all functions closed")
 
 		result = errors.Join(errs...)
 	})

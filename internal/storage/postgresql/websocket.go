@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
@@ -213,12 +213,12 @@ func (s *Storage) DeleteServer(ctx context.Context, serverID int64, userID int) 
 
 	rows, err := s.db.QueryContext(ctx, "SELECT user_id FROM server_members WHERE server_id = $1", serverID)
 	if err != nil {
-		slog.Error("failed to query server members for cache invalidation", "server_id", serverID, "error", err)
+		s.log.Error("failed to query server members for cache invalidation", "server_id", serverID, sl.Err(err))
 	} else {
 		for rows.Next() {
 			var memberID int
 			if err := rows.Scan(&memberID); err != nil {
-				slog.Error("failed to scan member id for cache invalidation", "error", err)
+				s.log.Error("failed to scan member id for cache invalidation", sl.Err(err))
 				continue
 			}
 			s.cache.Delete(fmt.Sprintf("%s%d", serversUserKey, memberID))

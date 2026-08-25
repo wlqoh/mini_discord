@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/utils"
 )
 
@@ -45,7 +46,7 @@ func NewS3Client(cfg *config.Config, log *slog.Logger) *S3Client {
 		),
 	)
 	if err != nil {
-		log.Error("failed to load AWS configuration", "error", err.Error())
+		log.Error("failed to load AWS configuration", sl.Err(err))
 		return nil
 	}
 

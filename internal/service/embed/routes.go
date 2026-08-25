@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/storage/cache"
 	"github.com/wlqoh/mini_discord.git/types"
@@ -73,7 +74,7 @@ func (h *Handler) handleImage(c *fiber.Ctx) error {
 
 	record, err := h.storage.GetLinkPreviewByImageToken(c.Context(), token)
 	if err != nil {
-		h.log.Error("failed to resolve preview image", "error", err.Error())
+		h.log.Error("failed to resolve preview image", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to resolve preview image")
 	}
 	if record == nil || record.Status != types.LinkPreviewStatusOK || record.ImageURL == "" {
@@ -82,7 +83,7 @@ func (h *Handler) handleImage(c *fiber.Ctx) error {
 
 	image, err := h.fetcher.FetchImage(c.Context(), record.ImageURL)
 	if err != nil {
-		h.log.Debug("failed to fetch preview image", "url", record.ImageURL, "error", err.Error())
+		h.log.Debug("failed to fetch preview image", "url", record.ImageURL, sl.Err(err))
 		return utils.WriteError(c, fiber.StatusBadGateway, "failed to fetch preview image")
 	}
 

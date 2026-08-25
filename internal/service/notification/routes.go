@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/types"
 	"github.com/wlqoh/mini_discord.git/utils"
@@ -78,7 +79,7 @@ func (h *Handler) handlePushSubscribe(c *fiber.Ctx) error {
 	}
 
 	if err := h.storage.UpsertPushSubscription(c.Context(), sub); err != nil {
-		h.log.Error("failed to save push subscription", "error", err.Error())
+		h.log.Error("failed to save push subscription", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to save push subscription")
 	}
 
@@ -99,7 +100,7 @@ func (h *Handler) handlePushUnsubscribe(c *fiber.Ctx) error {
 	}
 
 	if err := h.storage.DeletePushSubscriptionByEndpoint(c.Context(), payload.Endpoint); err != nil {
-		h.log.Error("failed to delete push subscription", "error", err.Error())
+		h.log.Error("failed to delete push subscription", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to delete push subscription")
 	}
 
@@ -120,7 +121,7 @@ func (h *Handler) handleGetSettings(c *fiber.Ctx) error {
 
 	settings, err := h.storage.GetNotificationSettings(c.Context(), userID)
 	if err != nil {
-		h.log.Error("failed to load notification settings", "error", err.Error())
+		h.log.Error("failed to load notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to load notification settings")
 	}
 
@@ -144,7 +145,7 @@ func (h *Handler) handlePatchGlobalSettings(c *fiber.Ctx) error {
 
 	current, err := h.storage.GetNotificationSettings(c.Context(), userID)
 	if err != nil {
-		h.log.Error("failed to load notification settings", "error", err.Error())
+		h.log.Error("failed to load notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to load notification settings")
 	}
 
@@ -178,13 +179,13 @@ func (h *Handler) handlePatchGlobalSettings(c *fiber.Ctx) error {
 	}
 
 	if err := h.storage.UpsertGlobalNotificationSettings(c.Context(), userID, defaultLevel, hidePreview, dndUntil); err != nil {
-		h.log.Error("failed to update notification settings", "error", err.Error())
+		h.log.Error("failed to update notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to update notification settings")
 	}
 
 	updated, err := h.storage.GetNotificationSettings(c.Context(), userID)
 	if err != nil {
-		h.log.Error("failed to reload notification settings", "error", err.Error())
+		h.log.Error("failed to reload notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to reload notification settings")
 	}
 
@@ -204,7 +205,7 @@ func (h *Handler) handlePutServerSetting(c *fiber.Ctx) error {
 
 	isMember, err := h.storage.IsServerMember(c.Context(), userID, serverID)
 	if err != nil {
-		h.log.Error("failed to check server membership", "error", err.Error())
+		h.log.Error("failed to check server membership", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to check server membership")
 	}
 	if !isMember {
@@ -220,13 +221,13 @@ func (h *Handler) handlePutServerSetting(c *fiber.Ctx) error {
 	}
 
 	if err := h.storage.UpsertServerNotificationSetting(c.Context(), userID, serverID, payload.Level, payload.MutedUntil); err != nil {
-		h.log.Error("failed to update server notification setting", "error", err.Error())
+		h.log.Error("failed to update server notification setting", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to update server notification setting")
 	}
 
 	updated, err := h.storage.GetNotificationSettings(c.Context(), userID)
 	if err != nil {
-		h.log.Error("failed to reload notification settings", "error", err.Error())
+		h.log.Error("failed to reload notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to reload notification settings")
 	}
 
@@ -246,7 +247,7 @@ func (h *Handler) handlePutChannelSetting(c *fiber.Ctx) error {
 
 	canAccess, err := h.storage.CanUserAccessChannel(c.Context(), userID, channelID)
 	if err != nil {
-		h.log.Error("failed to check channel access", "error", err.Error())
+		h.log.Error("failed to check channel access", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to check channel access")
 	}
 	if !canAccess {
@@ -262,13 +263,13 @@ func (h *Handler) handlePutChannelSetting(c *fiber.Ctx) error {
 	}
 
 	if err := h.storage.UpsertChannelNotificationSetting(c.Context(), userID, channelID, payload.Level, payload.MutedUntil); err != nil {
-		h.log.Error("failed to update channel notification setting", "error", err.Error())
+		h.log.Error("failed to update channel notification setting", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to update channel notification setting")
 	}
 
 	updated, err := h.storage.GetNotificationSettings(c.Context(), userID)
 	if err != nil {
-		h.log.Error("failed to reload notification settings", "error", err.Error())
+		h.log.Error("failed to reload notification settings", sl.Err(err))
 		return utils.WriteError(c, fiber.StatusInternalServerError, "failed to reload notification settings")
 	}
 

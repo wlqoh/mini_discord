@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/wlqoh/mini_discord.git/internal/config"
 	"github.com/wlqoh/mini_discord.git/internal/lib/closer"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/embed"
 	"github.com/wlqoh/mini_discord.git/internal/service/notification"
@@ -121,7 +122,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	go hub.Run()
 	go func() {
 		if err := app.Listen(cfg.Address); err != nil {
-			log.Error("failed to start API server", "error", err.Error())
+			log.Error("failed to start API server", sl.Err(err))
 		}
 	}()
 
@@ -134,7 +135,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	defer shutdownCancel()
 
 	if err := app.ShutdownWithContext(shutdownCtx); err != nil {
-		log.Error("failed to gracefully shutdown API server", "error", err.Error())
+		log.Error("failed to gracefully shutdown API server", sl.Err(err))
 	}
 
 	log.Info("API server shutdown complete")
@@ -142,7 +143,7 @@ func (s *APIServer) Run(log *slog.Logger, cfg *config.Config) {
 	closerCtx, closerCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer closerCancel()
 
-	if err := closer.CloseAll(closerCtx); err != nil {
-		log.Error("failed to close resources", "error", err)
+	if err := closer.CloseAll(log, closerCtx); err != nil {
+		log.Error("failed to close resources", sl.Err(err))
 	}
 }

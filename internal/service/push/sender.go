@@ -10,6 +10,7 @@ import (
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/types"
 )
 
@@ -106,7 +107,7 @@ func (s *Sender) processEvent(event Event) {
 
 	targets, err := s.storage.ResolveNotificationTargets(ctx, event.ChannelID, event.RecipientIDs)
 	if err != nil {
-		s.log.Error("failed to resolve notification targets", "error", err.Error())
+		s.log.Error("failed to resolve notification targets", sl.Err(err))
 		return
 	}
 
@@ -185,7 +186,7 @@ func (s *Sender) deliver(userID int, payload Payload, urgency webpush.Urgency) {
 
 	subs, err := s.storage.ListPushSubscriptions(ctx, []int{userID})
 	if err != nil {
-		s.log.Error("failed to list push subscriptions", "user_id", userID, "error", err.Error())
+		s.log.Error("failed to list push subscriptions", "user_id", userID, sl.Err(err))
 		return
 	}
 	if len(subs) == 0 {
@@ -194,7 +195,7 @@ func (s *Sender) deliver(userID int, payload Payload, urgency webpush.Urgency) {
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		s.log.Error("failed to marshal push payload", "error", err.Error())
+		s.log.Error("failed to marshal push payload", sl.Err(err))
 		return
 	}
 
@@ -215,14 +216,14 @@ func (s *Sender) deliver(userID int, payload Payload, urgency webpush.Urgency) {
 
 		resp, err := webpush.SendNotificationWithContext(ctx, body, webpushSub, options)
 		if err != nil {
-			s.log.Error("failed to send push notification", "endpoint", sub.Endpoint, "error", err.Error())
+			s.log.Error("failed to send push notification", "endpoint", sub.Endpoint, sl.Err(err))
 			continue
 		}
 		_ = resp.Body.Close()
 
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			if err := s.storage.DeletePushSubscriptionByEndpoint(ctx, sub.Endpoint); err != nil {
-				s.log.Error("failed to delete dead push subscription", "endpoint", sub.Endpoint, "error", err.Error())
+				s.log.Error("failed to delete dead push subscription", "endpoint", sub.Endpoint, sl.Err(err))
 			}
 			continue
 		}

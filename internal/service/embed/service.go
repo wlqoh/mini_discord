@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/storage/cache"
 	"github.com/wlqoh/mini_discord.git/internal/storage/single_flight"
@@ -164,7 +165,7 @@ func (s *Service) process(job Job) {
 	if err := s.storage.LinkMessageEmbed(ctx, job.MessageID, 0, resolved.hash); err != nil {
 		// Обычная причина — сообщение удалили, пока мы ходили в сеть:
 		// FK на messages(id) не даст привязать превью к несуществующей строке.
-		s.log.Debug("failed to link message embed", "message_id", job.MessageID, "error", err.Error())
+		s.log.Debug("failed to link message embed", "message_id", job.MessageID, sl.Err(err))
 		return
 	}
 
@@ -212,7 +213,7 @@ func (s *Service) resolve(ctx context.Context, normalizedURL string) (cachedPrev
 	}
 
 	if record, err := s.storage.GetLinkPreview(ctx, hash); err != nil {
-		s.log.Error("failed to read link preview", "error", err.Error())
+		s.log.Error("failed to read link preview", sl.Err(err))
 	} else if record != nil && s.isFresh(record) {
 		entry := s.toCached(record)
 		s.cache.Set(cacheKey(hash), entry, 0)
@@ -238,7 +239,7 @@ func (s *Service) fetchAndStore(ctx context.Context, hash, normalizedURL string)
 	record, err := s.fetcher.Fetch(ctx, normalizedURL)
 	if err != nil {
 		record = types.LinkPreviewRecord{URL: normalizedURL, Status: types.LinkPreviewStatusFailed}
-		s.log.Debug("link preview fetch failed", "url", normalizedURL, "error", err.Error())
+		s.log.Debug("link preview fetch failed", "url", normalizedURL, sl.Err(err))
 	}
 
 	record.URLHash = hash
@@ -251,7 +252,7 @@ func (s *Service) fetchAndStore(ctx context.Context, hash, normalizedURL string)
 	// закреплён прежний токен, и разосланные ранее ссылки на картинку живы.
 	effectiveToken, err := s.storage.UpsertLinkPreview(ctx, record)
 	if err != nil {
-		s.log.Error("failed to store link preview", "error", err.Error())
+		s.log.Error("failed to store link preview", sl.Err(err))
 		return cachedPreview{}
 	}
 	record.ImageToken = effectiveToken

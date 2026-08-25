@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/wlqoh/mini_discord.git/internal/config"
+	"github.com/wlqoh/mini_discord.git/internal/lib/logger/sl"
 	"github.com/wlqoh/mini_discord.git/internal/middleware"
 	"github.com/wlqoh/mini_discord.git/internal/service/embed"
 	"github.com/wlqoh/mini_discord.git/internal/service/push"
@@ -136,7 +137,7 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 			// every other feature keep working; only join_voice_channel fails
 			// (h.sfuRouter stays nil, see its nil check there) until this is
 			// fixed and the backend restarted.
-			log.Error("sfu: failed to start router, voice will be unavailable", "err", err)
+			log.Error("sfu: failed to start router, voice will be unavailable", sl.Err(err))
 		} else {
 			h.sfuRouter = router
 		}
@@ -671,7 +672,7 @@ func (h *Hub) markRead(req wsCommandRequest, ctx context.Context) {
 	}
 
 	if err := h.storage.MarkChannelRead(ctx, req.client.UserID, payload.ChannelID, payload.MessageID); err != nil {
-		h.log.Warn("failed to mark channel read", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
+		h.log.Warn("failed to mark channel read", "user_id", req.client.UserID, "channel_id", payload.ChannelID, sl.Err(err))
 	}
 }
 
@@ -1230,7 +1231,7 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 
 	if len(mentionedUserIDs) > 0 {
 		if err := h.storage.SaveMessageMentions(ctx, msg.ID, mentionedUserIDs); err != nil {
-			h.log.Error("failed to save message mentions", "message_id", msg.ID, "error", err.Error())
+			h.log.Error("failed to save message mentions", "message_id", msg.ID, sl.Err(err))
 		}
 	}
 
@@ -1246,9 +1247,9 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 			})
 		}
 		if err := h.storage.SaveMessageAttachments(ctx, msg.ID, attachments); err != nil {
-			h.log.Error("failed to save attachments, deleting message", "message_id", msg.ID, "error", err.Error())
+			h.log.Error("failed to save attachments, deleting message", "message_id", msg.ID, sl.Err(err))
 			if _, delErr := h.storage.DeleteMessage(ctx, msg.ID, user.ID); delErr != nil {
-				h.log.Error("failed to delete message after attachment save failure", "message_id", msg.ID, "error", delErr.Error())
+				h.log.Error("failed to delete message after attachment save failure", "message_id", msg.ID, sl.Err(delErr))
 			}
 			h.pushError(req.client, "failed to save attachments")
 			return
@@ -1415,7 +1416,7 @@ func (h *Hub) editMessage(req wsCommandRequest, ctx context.Context) {
 			h.pushError(req.client, err.Error())
 		default:
 			h.log.Error("failed to edit message",
-				"message_id", payload.MessageID, "error", err.Error())
+				"message_id", payload.MessageID, sl.Err(err))
 			h.pushError(req.client, "failed to edit message")
 		}
 		return
@@ -1426,7 +1427,7 @@ func (h *Hub) editMessage(req wsCommandRequest, ctx context.Context) {
 		// Текст уже сохранён — откатывать нечего. Подтверждаем автору и
 		// молчим для остальных: они увидят правку при следующей загрузке.
 		h.log.Error("failed to resolve channel members for edit",
-			"channel_id", channelID, "error", err.Error())
+			"channel_id", channelID, sl.Err(err))
 		h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
 		return
 	}
@@ -1716,7 +1717,7 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 
 	sessionID, err := h.sfuRouter.Join(req.client.UserID, payload.ChannelID)
 	if err != nil {
-		h.log.Error("sfu: join failed", "user_id", req.client.UserID, "channel_id", payload.ChannelID, "err", err)
+		h.log.Error("sfu: join failed", "user_id", req.client.UserID, "channel_id", payload.ChannelID, sl.Err(err))
 		h.pushError(req.client, "failed to start voice session")
 		return
 	}
@@ -1767,7 +1768,7 @@ func (h *Hub) joinVoiceChannel(req wsCommandRequest, ctx context.Context) {
 
 	serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, req.client.UserID)
 	if err != nil {
-		h.log.Warn("failed to resolve online users for voice join broadcast", "server_id", channel.ServerID, "err", err)
+		h.log.Warn("failed to resolve online users for voice join broadcast", "server_id", channel.ServerID, sl.Err(err))
 		serverOnlineUserIDs = otherUserIDs
 	}
 
@@ -1934,7 +1935,7 @@ func (h *Hub) handleSfuPublishState(req wsCommandRequest) {
 
 	if h.sfuRouter != nil {
 		if err := h.sfuRouter.SetPublishState(payload.SessionID, source, payload.Active); err != nil {
-			h.log.Debug("sfu: set publish state failed", "err", err)
+			h.log.Debug("sfu: set publish state failed", sl.Err(err))
 		}
 	}
 
@@ -2050,11 +2051,11 @@ func (h *Hub) leaveVoiceChannelInternal(userID int) int64 {
 	ctx := context.Background()
 	channel, err := h.storage.GetChannelByID(ctx, channelID)
 	if err != nil {
-		h.log.Warn("failed to resolve channel for voice leave broadcast", "channel_id", channelID, "err", err)
+		h.log.Warn("failed to resolve channel for voice leave broadcast", "channel_id", channelID, sl.Err(err))
 	} else if channel != nil {
 		serverOnlineUserIDs, err := h.listOnlineServerUserIDs(ctx, channel.ServerID, userID)
 		if err != nil {
-			h.log.Warn("failed to resolve online users for voice leave broadcast", "server_id", channel.ServerID, "err", err)
+			h.log.Warn("failed to resolve online users for voice leave broadcast", "server_id", channel.ServerID, sl.Err(err))
 		} else {
 			notifyUsers = serverOnlineUserIDs
 		}

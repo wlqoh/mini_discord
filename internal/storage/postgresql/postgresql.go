@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -20,6 +21,7 @@ type Storage struct {
 	db    *sql.DB
 	cache cache.InterfaceCache
 	sf    *single_flight.SingleFlight
+	log   *slog.Logger
 }
 
 const (
@@ -37,7 +39,7 @@ const (
 // pings it to fail fast on a bad connection, and registers the pool with
 // closer for shutdown. The returned Storage owns its own in-memory cache
 // and single-flight group.
-func New(storagePath string) (*Storage, error) {
+func New(storagePath string, log *slog.Logger) (*Storage, error) {
 	const op = "storage.postgresql.New"
 
 	db, err := sql.Open("postgres", storagePath)
@@ -55,5 +57,5 @@ func New(storagePath string) (*Storage, error) {
 	cacheStore := cache.NewCache(5*time.Minute, 10*time.Minute)
 	sf := single_flight.NewSingleFlight()
 
-	return &Storage{db: db, cache: cacheStore, sf: sf}, nil
+	return &Storage{db: db, cache: cacheStore, sf: sf, log: log}, nil
 }
