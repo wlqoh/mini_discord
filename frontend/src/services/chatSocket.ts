@@ -12,6 +12,7 @@ import type {
   SfuErrorEvent,
   SfuOfferEvent,
   SfuResumeResponse,
+  SfuSessionClosedEvent,
   SfuSlotDecl,
   SfuTrackEvent,
   VoiceChannelParticipants,
@@ -168,6 +169,7 @@ type SfuCandidateListener = (event: SfuCandidatePayload) => void;
 type SfuTrackListener = (event: SfuTrackEvent) => void;
 type SfuActiveSpeakersListener = (event: SfuActiveSpeakersEvent) => void;
 type SfuErrorListener = (event: SfuErrorEvent) => void;
+type SfuSessionClosedListener = (event: SfuSessionClosedEvent) => void;
 type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
 type ReconnectPhase = "lost" | "restored";
 type ReconnectListener = (phase: ReconnectPhase) => void;
@@ -447,6 +449,7 @@ export class ChatSocket {
   private readonly sfuTrackUnpublishedListeners = new Set<SfuTrackListener>();
   private readonly sfuActiveSpeakersListeners = new Set<SfuActiveSpeakersListener>();
   private readonly sfuErrorListeners = new Set<SfuErrorListener>();
+  private readonly sfuSessionClosedListeners = new Set<SfuSessionClosedListener>();
 
   private readonly typingListeners = new Set<TypingListener>();
 
@@ -786,6 +789,17 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "sfu_session_closed") {
+          // Sent only to us, the affected user: the server tore down our
+          // own SFU session (ghost-participants-plan.md §6). There's no
+          // voice_user_left for ourselves to catch this from otherwise.
+          const payload = parsed.data as SfuSessionClosedEvent;
+          if (payload && typeof payload.session_id === "string") {
+            this.sfuSessionClosedListeners.forEach((listener) => listener(payload));
+          }
+          return;
+        }
+
         if (parsed.event === "error") {
           const text = parsed.error || "Chat error";
           this.handleSocketError(text, parsed.request_id);
@@ -813,6 +827,15 @@ export class ChatSocket {
     });
 
     return this.connectionPromise;
+  }
+
+  // Used by SfuCallClient's session-lost handling (ghost-participants-
+  // plan.md §6 decision #7): an auto-rejoin is only worth attempting while
+  // the WebSocket itself is up — if it's down, the socket's own reconnect
+  // flow will call rejoin()/sfu_resume once it's back, and a second retry
+  // racing that would just double up the recovery attempt.
+  isOpen(): boolean {
+    return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
   }
 
   close(): void {
@@ -910,6 +933,11 @@ export class ChatSocket {
   onSfuError(listener: SfuErrorListener): () => void {
     this.sfuErrorListeners.add(listener);
     return () => this.sfuErrorListeners.delete(listener);
+  }
+
+  onSfuSessionClosed(listener: SfuSessionClosedListener): () => void {
+    this.sfuSessionClosedListeners.add(listener);
+    return () => this.sfuSessionClosedListeners.delete(listener);
   }
 
   onTyping(listener: TypingListener): () => void {

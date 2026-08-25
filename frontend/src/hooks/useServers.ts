@@ -13,6 +13,7 @@ import type {
     VoiceParticipantsByChannel,
 } from "../types/chat.ts";
 import type { PeerQuality } from "../services/connectionQuality.ts";
+import type { CallStatus } from "../services/voiceClient.ts";
 
 const CHAT_SERVERS_KEY = "chat_servers";
 const CHAT_CHANNELS_BY_SERVER_KEY = "chat_channels_by_server";
@@ -37,6 +38,7 @@ type Params = {
         onLocalScreenStream: (stream: MediaStream | null) => void;
         onError: (message: string) => void;
         onQualityChange: (quality: Record<number, PeerQuality>) => void;
+        onCallStatusChange: (status: CallStatus) => void;
     };
     voiceSocketHandlers: {
         onVoiceUserJoined: (event: { channel_id: number; user: VoiceParticipant }) => void;
@@ -192,6 +194,7 @@ export function useServers({
                 callClientCallbacks.onLocalScreenStream,
                 callClientCallbacks.onError,
                 callClientCallbacks.onQualityChange,
+                callClientCallbacks.onCallStatusChange,
             );
         }
 

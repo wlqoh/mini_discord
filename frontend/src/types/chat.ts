@@ -74,7 +74,12 @@ export interface VoiceParticipant {
     nickname?: string;
     avatar_url?: string;
     mic_enabled?: boolean;
-    deafened?: boolean
+    deafened?: boolean;
+    // Mid grace-period on the server (WS dropped, media may still be
+    // flowing) — render like a voice_user_detached tile from the start
+    // instead of only finding out from an event this client wasn't
+    // connected yet to receive.
+    detached?: boolean;
 }
 
 export interface VoiceChannelParticipants {
@@ -170,6 +175,17 @@ export interface SfuErrorEvent {
 export interface SfuResumeResponse {
     ok: boolean;
     participants: VoiceParticipant[];
+}
+
+// Sent only to the affected user: the server tore down *their own* SFU
+// session (ghost-participants-plan.md §6) — a PC failure, a grace-period
+// expiry, or the reconciliation sweep. There's no voice_user_left for
+// yourself (the hub's broadcast deliberately excludes whoever just left),
+// so without this event a client whose WebSocket stayed connected through
+// the teardown would otherwise sit in a call the server has already ended.
+export interface SfuSessionClosedEvent {
+    session_id: string;
+    reason: "pc_failed" | "pc_closed" | "reconcile_hub" | "reconcile_hub_dead_pc" | "reconcile_router" | "grace_expired";
 }
 
 export interface TypingEvent {

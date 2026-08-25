@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import type { VoiceClient } from "../services/voiceClient.ts";
+import type { CallStatus, VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import { playJoinSound, playLeaveSound } from "../services/sounds.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
@@ -39,7 +39,11 @@ export function useVoice({
     // SFU grace-period reconnect (sfu-migration-plan.md §7 phase 3) — who's
     // mid-reconnect right now. Media keeps flowing the whole time; this is
     // purely a "their connection is having trouble" UI affordance.
-    const [detachedUserIds, setDetachedUserIds] = useState<Set<number>>(new Set());
+    const [detachedUserIdsFromEvents, setDetachedUserIdsFromEvents] = useState<Set<number>>(new Set());
+    // Auto-rejoin progress after the server tears down our own SFU session
+    // (ghost-participants-plan.md §6) — distinct from detachedUserIds,
+    // which is about OTHER participants' connections, not ours.
+    const [callStatus, setCallStatus] = useState<CallStatus>("connected");
     // Active speaker (decision #9).
     const [activeSpeakerUserIds, setActiveSpeakerUserIds] = useState<Set<number>>(new Set());
     const [voiceVolumeByUserId, setVoiceVolumeByUserId] = useState<Record<number, number>>(() => {
@@ -179,6 +183,10 @@ export function useVoice({
         setQualityByUserId(quality);
     }, []);
 
+    const onCallStatusChange = useCallback((status: CallStatus) => {
+        setCallStatus(status);
+    }, []);
+
     const callClientCallbacks = useMemo(() => ({
         onParticipantStream,
         onParticipantLeft,
@@ -186,7 +194,8 @@ export function useVoice({
         onLocalScreenStream,
         onError,
         onQualityChange,
-    }), [onParticipantStream, onParticipantLeft, onLocalStream, onLocalScreenStream, onError, onQualityChange]);
+        onCallStatusChange,
+    }), [onParticipantStream, onParticipantLeft, onLocalStream, onLocalScreenStream, onError, onQualityChange, onCallStatusChange]);
 
     const onVoiceUserJoined = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
         setVoiceParticipantsByChannel((prev) => {
@@ -228,7 +237,7 @@ export function useVoice({
         // normal voice_user_left, not voice_user_resumed — clear any
         // leftover detached/speaking state for them so it can't stick to a
         // stale tile or a later participant that reuses the same user_id.
-        setDetachedUserIds((prev) => {
+        setDetachedUserIdsFromEvents((prev) => {
             if (!prev.has(event.user.user_id)) return prev;
             const next = new Set(prev);
             next.delete(event.user.user_id);
@@ -271,7 +280,7 @@ export function useVoice({
         if (event.channel_id !== voiceChannelIdRef.current) {
             return;
         }
-        setDetachedUserIds((prev) => {
+        setDetachedUserIdsFromEvents((prev) => {
             if (prev.has(event.user.user_id)) return prev;
             const next = new Set(prev);
             next.add(event.user.user_id);
@@ -283,7 +292,7 @@ export function useVoice({
         if (event.channel_id !== voiceChannelIdRef.current) {
             return;
         }
-        setDetachedUserIds((prev) => {
+        setDetachedUserIdsFromEvents((prev) => {
             if (!prev.has(event.user.user_id)) return prev;
             const next = new Set(prev);
             next.delete(event.user.user_id);
@@ -325,8 +334,9 @@ export function useVoice({
             setIsSwitchingCamera(false);
             setIsScreenSharing(false);
             setIsTogglingScreenShare(false);
-            setDetachedUserIds(new Set());
+            setDetachedUserIdsFromEvents(new Set());
             setActiveSpeakerUserIds(new Set());
+            setCallStatus("connected");
             setError("");
 
             playJoinSound();
@@ -381,8 +391,9 @@ export function useVoice({
             setVoiceChannelId(0);
             setRemoteStreams([]);
             setQualityByUserId({});
-            setDetachedUserIds(new Set());
+            setDetachedUserIdsFromEvents(new Set());
             setActiveSpeakerUserIds(new Set());
+            setCallStatus("connected");
             setIsMicEnabled(true);
             setIsDeafened(false);
             setIsCameraEnabled(false);
@@ -539,6 +550,23 @@ export function useVoice({
         [voiceParticipantsByChannel, voiceChannelId],
     );
 
+    // Merges the event-driven set (voice_user_detached/resumed, which this
+    // client may not have been connected to receive) with the `detached`
+    // flag on whatever participant snapshot we currently have (get_server_
+    // channels, a join/resume ack) — otherwise a client that (re)connects
+    // mid someone-else's-grace-period renders them as fully healthy until
+    // the next event about them happens to arrive (ghost-participants-
+    // plan.md §6).
+    const detachedUserIds = useMemo(() => {
+        const fromSnapshot = voiceParticipantsInChannel.filter((p) => p.detached).map((p) => p.user_id);
+        if (fromSnapshot.length === 0) {
+            return detachedUserIdsFromEvents;
+        }
+        const merged = new Set(detachedUserIdsFromEvents);
+        fromSnapshot.forEach((id) => merged.add(id));
+        return merged;
+    }, [detachedUserIdsFromEvents, voiceParticipantsInChannel]);
+
     // Агрегат «ваше соединение»: худший из линков. null, когда пиров нет —
     // в одиночку в канале измерять нечего, индикатор не рендерится.
     const connectionQuality = useMemo(
@@ -555,6 +583,7 @@ export function useVoice({
         setVoiceParticipantsByChannel,
         qualityByUserId,
         detachedUserIds,
+        callStatus,
         activeSpeakerUserIds,
         connectionQuality,
         voiceVolumeByUserId,

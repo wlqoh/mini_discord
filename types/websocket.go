@@ -210,6 +210,15 @@ const (
 	// a plain WsEventError without misattributing them to an unrelated
 	// in-flight command.
 	WsEventSfuError = "sfu_error"
+	// WsEventSfuSessionClosed tells a user that the server tore down their
+	// own SFU session (ghost-participants-plan.md §6): a PC failure the
+	// hub caught via sfu.SessionObserver, or the reconciliation sweep.
+	// Unlike everyone else's WsEventVoiceUserLeft, the departing user gets
+	// no voice_user_left about themselves (leaveVoiceChannelInternal
+	// broadcasts to everyone except them) — without this event the client
+	// would sit in a call that no longer exists anywhere else on the
+	// server.
+	WsEventSfuSessionClosed = "sfu_session_closed"
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
@@ -455,6 +464,16 @@ type WsVoiceParticipant struct {
 	MicEnabled bool   `json:"mic_enabled"`
 	Deafened   bool   `json:"deafened"`
 	AvatarURL  string `json:"avatar_url,omitempty"`
+	// Detached reports whether this participant has lost their signaling
+	// connection and is currently inside the grace period started by
+	// Hub.handleVoiceDisconnect (ghost-participants-plan.md §6): their
+	// media may still be flowing, but the tile should read as
+	// "reconnecting" rather than fully present. Filled in wherever a
+	// WsVoiceParticipant is built from live hub state (resolveVoiceParticipant)
+	// so a client that (re)connects mid-grace-period doesn't see a ghost as
+	// healthy — until now this was only ever learned from the
+	// voice_user_detached/resumed events themselves.
+	Detached bool `json:"detached,omitempty"`
 }
 
 // TransportModeSFU is the only value WsJoinVoiceChannelResponse.TransportMode
@@ -606,6 +625,18 @@ type WsSfuErrorEvent struct {
 	SessionID string `json:"session_id"`
 	Code      string `json:"code"`
 	Message   string `json:"message"`
+}
+
+// WsSfuSessionClosedEvent is the payload of WsEventSfuSessionClosed, sent
+// only to the user whose session the server tore down.
+type WsSfuSessionClosedEvent struct {
+	SessionID string `json:"session_id"`
+	// Reason is one of the voice close-reason strings the hub tracks in
+	// Hub.VoiceDiagnostics: pc_failed, pc_closed, reconcile_hub,
+	// reconcile_hub_dead_pc, reconcile_router, or grace_expired. Never
+	// ws_closed or evicted — those mean the user's own connection is what
+	// ended, so there's nothing left to deliver this event over.
+	Reason string `json:"reason"`
 }
 
 // WsMessageCursor is an opaque pagination position (a specific message's

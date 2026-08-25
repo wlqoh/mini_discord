@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
@@ -28,6 +29,13 @@ type Client struct {
 	Conn     *websocket.Conn
 	Outbound chan *types.WsEvent
 	UserID   int `json:"user_id"`
+
+	// gracefulClose is set by readMessage when the connection closed with a
+	// normal-closure/going-away code (tab closed, navigation, F5): the
+	// RTCPeerConnection died with the document in that case, so a voice
+	// grace period would just guarantee a ghost for its full duration with
+	// nothing to resume (ghost-participants-plan.md §3 decision #5).
+	gracefulClose atomic.Bool
 }
 
 func (c *Client) writeMessage() {
@@ -91,6 +99,9 @@ func (c *Client) readMessage(hub *Hub) {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				hub.log.Error("read error", sl.Err(err))
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				c.gracefulClose.Store(true)
 			}
 			break
 		}
