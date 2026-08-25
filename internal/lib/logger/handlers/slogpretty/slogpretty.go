@@ -21,7 +21,6 @@ type PrettyHandlerOptions struct {
 // PrettyHandler is a slog.Handler that renders records as colored,
 // human-readable lines instead of JSON.
 type PrettyHandler struct {
-	opts PrettyHandlerOptions
 	slog.Handler
 	l     *stdLog.Logger
 	attrs []slog.Attr
