@@ -41,10 +41,18 @@ The 16 hooks, one line each:
   interface declared in `voiceClient.ts`. Call sites (`useVoice`,
   `ChatPage`) depend only on that interface, never on the concrete class —
   useful if a mesh or alternate transport is ever reintroduced.
-- **`localCapture.ts`** — `getUserMedia` plus RNNoise-based noise
-  suppression (`@sapphi-red/web-noise-suppressor`). Media is always
-  acquired **before** `join_voice_channel` is sent, so the join ack and
-  local capture aren't racing each other.
+- **`localCapture.ts`** — `getUserMedia` plus a user-selectable noise
+  suppression mode: `off` (echo cancellation only), `browser` (the browser's
+  built-in WebRTC noise suppression/AGC), or `rnnoise` (RNNoise via
+  `@sapphi-red/web-noise-suppressor`, run through a `DynamicsCompressorNode`
+  + makeup-gain chain since the rnnoise constraints profile disables the
+  browser's own AGC). The desired mode is persisted device-locally
+  (`voiceSettings.ts`, `localStorage` key `voice_noise_suppression`) and can
+  differ from the *effective* mode reported back to the UI, e.g. when RNNoise
+  isn't supported or a watchdog falls back after the RNNoise `AudioContext`
+  gets stuck suspended — see `docs/voice.md`'s noise suppression section.
+  Media is always acquired **before** `join_voice_channel` is sent, so the
+  join ack and local capture aren't racing each other.
 - **`notifications/`**:
   - `rules.ts` — the should-notify decision (level, mute, DND, mentions)
   - `leader.ts` — `BroadcastChannel`-based leader election, so exactly one

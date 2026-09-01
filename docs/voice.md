@@ -171,6 +171,42 @@ use — the error is logged and `sfuRouter` stays `nil`. The rest of the app
 is unaffected: chat, REST, everything else keeps working. Only
 `join_voice_channel` fails for every user, since there's no router to join.
 
+## Noise suppression
+
+Client-side only (`frontend/src/services/localCapture.ts`); nothing here
+touches the backend. Three modes, picked per device (persisted in
+`localStorage`, not the account):
+
+| Mode | `echoCancellation` | `noiseSuppression` | `autoGainControl` | Web Audio graph |
+|---|---|---|---|---|
+| `off` | `true` | `false` | `true` | none |
+| `browser` | `true` | `true` | `true` | none |
+| `rnnoise` | `true` | `false` | `false` | RNNoise → compressor → makeup-gain |
+
+Echo cancellation is always requested — it runs against the speaker
+reference signal at the audio-engine level, which nothing client-side can
+reproduce, so it's never worth trading away. `noiseSuppression`/
+`autoGainControl` are mutually exclusive with the RNNoise graph: the
+browser's own noise suppression is already a nonlinear filter, and stacking
+RNNoise on top of it feeds RNNoise an input it was never trained on. With
+`autoGainControl` off, RNNoise mode instead runs the processed track through
+a `DynamicsCompressorNode` plus a makeup-gain node so a quiet mic doesn't end
+up noticeably quieter than in `browser` mode.
+
+The *desired* mode (what the user picked) and the *effective* mode (what's
+actually running) are tracked separately: RNNoise can be unavailable
+(non-secure context, no `AudioWorkletNode`), its graph construction can
+throw, or a watchdog can fall back mid-call — none of these change the
+desired mode, only what the UI reports as effective, so the original choice
+still applies next time RNNoise is available (a different device, a page
+reload). The watchdog: `LocalCapture.checkWatchdogFallback()`, polled from
+`SfuCallClient`'s existing quality-sample timer (every
+`QUALITY_SAMPLE_INTERVAL_MS`), detects the RNNoise `AudioContext` stuck in
+`"suspended"` (autoplay policy, background-tab throttling, a device change)
+for more than 3 seconds — a state that otherwise leaves the outgoing track
+silent while the UI still shows the mic as live — and swaps the outgoing
+track back to the raw, unprocessed one.
+
 ## `SFU_PUBLIC_IP`
 
 This must be the server's real, publicly reachable IP. If it's wrong or

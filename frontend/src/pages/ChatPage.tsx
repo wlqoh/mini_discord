@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2, AudioLines} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
@@ -34,6 +34,7 @@ import { useNotifications } from "../hooks/useNotifications.ts";
 import { useServerMembers } from "../hooks/useServerMembers.ts";
 import { useNotificationSettings } from "../hooks/useNotificationSettings.ts";
 import NotificationSettingsModal from "../components/NotificationSettingsModal.tsx";
+import VoiceSettingsModal from "../components/VoiceSettingsModal.tsx";
 import NotificationPermissionBanner from "../components/NotificationPermissionBanner.tsx";
 import { useDocumentBadge } from "../hooks/useDocumentBadge.ts";
 import {
@@ -93,6 +94,7 @@ export default function ChatPage() {
     const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
     const [notificationPermission, setNotificationPermission] = useState<PermissionState>(() => getPermissionState());
     const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false);
+    const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
     const [showPermissionBanner, setShowPermissionBanner] = useState(false);
     const isMobileDevice = useMediaQuery("(max-width: 1024px) and (pointer: coarse)");
     const isPhone = useMediaQuery("(max-width: 768px)");
@@ -865,6 +867,18 @@ export default function ChatPage() {
                                             {voice.isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
                                                 <Volume2 size={18} aria-hidden="true"/>}
                                         </button>
+                                        <button
+                                            className="micam-btn"
+                                            onClick={voice.toggleNoiseSuppression}
+                                            title={`Noise suppression: ${voice.noiseSuppressionMode}`}
+                                            aria-label={`Noise suppression: ${voice.noiseSuppressionMode}`}
+                                        >
+                                            <AudioLines
+                                                size={18}
+                                                aria-hidden="true"
+                                                color={voice.noiseSuppressionMode === "off" ? "#B80606" : voice.noiseSuppressionMode === "browser" ? "#8a8f98" : undefined}
+                                            />
+                                        </button>
                                         {voice.connectionQuality ? (
                                             <ConnectionQualityIcon
                                                 quality={voice.connectionQuality}
@@ -1127,6 +1141,18 @@ export default function ChatPage() {
                                             </button>
                                         </div>
                                     ) : null}
+                                    {profile.isSelfProfile ? (
+                                        <div className="profile-modal-row">
+                                            <span className="profile-modal-label">Voice</span>
+                                            <button
+                                                className="modal-btn modal-btn-secondary"
+                                                type="button"
+                                                onClick={() => setIsVoiceSettingsOpen(true)}
+                                            >
+                                                <AudioLines size={16} aria-hidden="true" /> Settings
+                                            </button>
+                                        </div>
+                                    ) : null}
                                 </>
                             )}
                         </div>
@@ -1356,6 +1382,14 @@ export default function ChatPage() {
                     channelsByServer={servers.channelsByServer}
                     permission={notificationPermission}
                     onRequestPermission={() => void handleEnableNotifications()}
+                />
+            )}
+
+            {isVoiceSettingsOpen && (
+                <VoiceSettingsModal
+                    onClose={() => setIsVoiceSettingsOpen(false)}
+                    effectiveMode={voice.noiseSuppressionMode}
+                    onSetMode={voice.setNoiseSuppression}
                 />
             )}
 
