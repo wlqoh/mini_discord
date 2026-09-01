@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import type { CallStatus, VoiceClient } from "../services/voiceClient.ts";
+import type { CallStatus, NoiseSuppressionMode, VoiceClient } from "../services/voiceClient.ts";
 import { ChatSocket } from "../services/chatSocket.ts";
 import { playJoinSound, playLeaveSound } from "../services/sounds.ts";
 import type { CurrentUserProfile } from "../services/authToken.ts";
 import type { VoiceParticipant, VoiceParticipantsByChannel } from "../types/chat.ts";
 import { aggregateQuality, type PeerQuality } from "../services/connectionQuality.ts";
+import { loadNoiseSuppressionMode } from "../services/voiceSettings.ts";
 
 const VOICE_VOLUME_KEY = "voice_volume_by_user";
 
@@ -73,6 +74,9 @@ export function useVoice({
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
     const [isTogglingScreenShare, setIsTogglingScreenShare] = useState(false);
+    // Effective mode (tmp/noise-suppression-plan.md §5.3) — what's actually
+    // running, not necessarily what's stored as the desired mode.
+    const [noiseSuppressionMode, setNoiseSuppressionModeState] = useState<NoiseSuppressionMode>(() => loadNoiseSuppressionMode());
 
     const micBeforeDeafenRef = useRef(true);
     const voiceChannelIdRef = useRef(0);
@@ -187,6 +191,10 @@ export function useVoice({
         setCallStatus(status);
     }, []);
 
+    const onNoiseSuppressionModeChange = useCallback((mode: NoiseSuppressionMode) => {
+        setNoiseSuppressionModeState(mode);
+    }, []);
+
     const callClientCallbacks = useMemo(() => ({
         onParticipantStream,
         onParticipantLeft,
@@ -195,7 +203,8 @@ export function useVoice({
         onError,
         onQualityChange,
         onCallStatusChange,
-    }), [onParticipantStream, onParticipantLeft, onLocalStream, onLocalScreenStream, onError, onQualityChange, onCallStatusChange]);
+        onNoiseSuppressionModeChange,
+    }), [onParticipantStream, onParticipantLeft, onLocalStream, onLocalScreenStream, onError, onQualityChange, onCallStatusChange, onNoiseSuppressionModeChange]);
 
     const onVoiceUserJoined = useCallback((event: { channel_id: number; user: VoiceParticipant }) => {
         setVoiceParticipantsByChannel((prev) => {
@@ -545,6 +554,23 @@ export function useVoice({
         }
     }, [isDeafened, isMicEnabled, callClientRef, currentUserId, voiceChannelId, socketRef]);
 
+    const setNoiseSuppression = useCallback((mode: NoiseSuppressionMode): void => {
+        // Outside a call there's no call client to report the effective mode
+        // back, so reflect the desired mode locally right away; it'll be
+        // confirmed (or corrected, if it degrades) on the next join.
+        setNoiseSuppressionModeState(mode);
+        void callClientRef.current?.setNoiseSuppressionMode(mode).catch((err) => {
+            const message = err instanceof Error ? err.message : "Failed to change noise suppression";
+            setError(message);
+        });
+    }, [callClientRef, setError]);
+
+    const toggleNoiseSuppression = useCallback((): void => {
+        // The panel button only flips between the two "in-call" modes — off
+        // is picked from the settings modal, not this toggle.
+        setNoiseSuppression(noiseSuppressionMode === "rnnoise" ? "browser" : "rnnoise");
+    }, [noiseSuppressionMode, setNoiseSuppression]);
+
     const voiceParticipantsInChannel = useMemo(
         () => voiceParticipantsByChannel[voiceChannelId] ?? [],
         [voiceParticipantsByChannel, voiceChannelId],
@@ -597,6 +623,7 @@ export function useVoice({
         isScreenSharing,
         isSwitchingCamera,
         isTogglingScreenShare,
+        noiseSuppressionMode,
         handleJoinVoice,
         handleLeaveVoice,
         toggleMicrophone,
@@ -604,6 +631,8 @@ export function useVoice({
         switchCameraFacingMode,
         toggleScreenShare,
         toggleDeafen,
+        setNoiseSuppression,
+        toggleNoiseSuppression,
         voiceParticipantsInChannel,
         callClientCallbacks,
         voiceSocketHandlers,

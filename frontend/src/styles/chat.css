@@ -4027,6 +4027,36 @@ body,
     color: var(--text-3);
 }
 
+.voice-settings-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.voice-settings-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.voice-settings-option input {
+    margin-top: 3px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.voice-settings-option span {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.voice-settings-option small {
+    color: var(--text-3);
+    font-size: 12px;
+}
+
 .notification-settings-overrides {
     list-style: none;
     margin: 4px 0 0;

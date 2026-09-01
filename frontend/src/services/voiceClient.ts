@@ -14,6 +14,12 @@ export type QualityListener = (quality: Record<number, PeerQuality>) => void;
 export type CallStatus = "connected" | "reconnecting" | "lost";
 export type CallStatusListener = (status: CallStatus) => void;
 
+// "off" — echo cancellation only. "browser" — the browser's built-in WebRTC
+// noise suppression. "rnnoise" — the RNNoise WASM graph in localCapture.ts.
+// See tmp/noise-suppression-plan.md.
+export type NoiseSuppressionMode = "off" | "browser" | "rnnoise";
+export type NoiseSuppressionModeListener = (mode: NoiseSuppressionMode) => void;
+
 /**
  * Transport-agnostic surface a voice transport implementation exposes (see
  * sfu-migration-plan.md §3 decision #6 — this originally decoupled call
@@ -35,6 +41,9 @@ export interface VoiceClient {
   toggleScreenShare(): Promise<boolean>;
   startScreenShare(): Promise<void>;
   stopScreenShare(): Promise<void>;
+
+  setNoiseSuppressionMode(mode: NoiseSuppressionMode): Promise<void>;
+  getEffectiveNoiseSuppressionMode(): NoiseSuppressionMode;
 
   syncParticipants(channelID: number, participants: VoiceParticipant[]): void;
 }

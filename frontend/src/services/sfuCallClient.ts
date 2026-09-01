@@ -21,8 +21,11 @@ import type {
   ErrorListener,
   QualityListener,
   CallStatusListener,
+  NoiseSuppressionMode,
+  NoiseSuppressionModeListener,
 } from "./voiceClient";
 import { LocalCapture } from "./localCapture";
+import { loadNoiseSuppressionMode, saveNoiseSuppressionMode } from "./voiceSettings";
 import {
   debugLog,
   buildIceTransportPolicy,
@@ -91,6 +94,9 @@ export class SfuCallClient implements VoiceClient {
   // ghost-participants-plan.md §6: reports auto-rejoin progress after the
   // server tears down our own session out from under us.
   private readonly onCallStatusChange: CallStatusListener;
+  // Reports the effective noise-suppression mode (tmp/noise-suppression-
+  // plan.md), which can differ from what the user picked after degradation.
+  private readonly onNoiseSuppressionModeChange: NoiseSuppressionModeListener;
 
   private readonly unsubscribers: Array<() => void> = [];
   private readonly participants = new Map<number, VoiceParticipant>();
@@ -120,6 +126,10 @@ export class SfuCallClient implements VoiceClient {
   private screenStream: MediaStream | null = null;
   private screenSharePromise: Promise<boolean> | null = null;
   private switchCameraPromise: Promise<void> | null = null;
+  // Read once at construction — the initial mode for every LocalCapture this
+  // client creates (join()). Kept up to date by setNoiseSuppressionMode.
+  private noiseSuppressionMode: NoiseSuppressionMode = loadNoiseSuppressionMode();
+  private noiseSuppressionSwitchPromise: Promise<void> | null = null;
   // Single source of truth for whether the camera is on (lazy-capture
   // design): a track's presence in localStream can't be trusted for this —
   // after a reconnect the slot is recreated empty, and the server treats an
@@ -176,6 +186,7 @@ export class SfuCallClient implements VoiceClient {
     onError: ErrorListener,
     onQualityChange: QualityListener,
     onCallStatusChange: CallStatusListener,
+    onNoiseSuppressionModeChange: NoiseSuppressionModeListener,
   ) {
     this.socket = socket;
     this.selfUserID = selfUserID;
@@ -186,6 +197,7 @@ export class SfuCallClient implements VoiceClient {
     this.onError = onError;
     this.onQualityChange = onQualityChange;
     this.onCallStatusChange = onCallStatusChange;
+    this.onNoiseSuppressionModeChange = onNoiseSuppressionModeChange;
 
     this.unsubscribers.push(this.socket.onVoiceUserJoined((event) => this.handleVoiceUserJoined(event)));
     this.unsubscribers.push(this.socket.onVoiceUserLeft((event) => this.handleVoiceUserLeft(event)));
@@ -222,9 +234,10 @@ export class SfuCallClient implements VoiceClient {
 
     await this.leave();
 
-    const capture = new LocalCapture(this.onError);
+    const capture = new LocalCapture(this.onError, this.noiseSuppressionMode);
     try {
       await capture.acquire();
+      this.onNoiseSuppressionModeChange(capture.effectiveMode);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to access microphone/camera";
       debugLog("sfu:join-local-stream-failed", { message });
@@ -826,6 +839,8 @@ export class SfuCallClient implements VoiceClient {
       return;
     }
 
+    this.applyCaptureWatchdog();
+
     const quality = await this.sampleConnection(readForcedLevel());
 
     // getStats() is async — leave()/teardown may have run while awaiting it.
@@ -1004,6 +1019,93 @@ export class SfuCallClient implements VoiceClient {
     this.localStream?.getAudioTracks().forEach((track) => {
       track.enabled = enabled;
     });
+  }
+
+  /** Swaps the mic sender to a new audio track — shared by
+   * setNoiseSuppressionMode and the rnnoise watchdog so the five steps
+   * (mute-state carry-over, replaceTrack, rebuild localStream, stop the old
+   * track) aren't duplicated. Never stops the raw mic track: it may still be
+   * feeding the rnnoise graph as its source, or be needed as the fallback
+   * track for a future mode switch (see LocalCapture.rawTrack). */
+  private swapMicTrack(nextTrack: MediaStreamTrack): void {
+    const previousTrack = this.localStream?.getAudioTracks()[0];
+    nextTrack.enabled = previousTrack?.enabled ?? true;
+
+    void this.senderBySource.get("mic")?.replaceTrack(nextTrack).catch((err) => {
+      debugLog("sfu:mic-track-swap-failed", err);
+    });
+
+    const videoTracks = this.localStream?.getVideoTracks() ?? [];
+    const nextStream = new MediaStream([nextTrack, ...videoTracks]);
+    this.capture?.setStream(nextStream);
+    this.localStream = nextStream;
+    this.onLocalStream(nextStream);
+
+    if (previousTrack && previousTrack !== nextTrack && previousTrack !== this.capture?.rawTrack) {
+      previousTrack.stop();
+    }
+  }
+
+  /**
+   * Changes the desired noise-suppression mode. Persists it (even outside a
+   * call, so it applies on the next join()) and, if a call is active, swaps
+   * the live mic track over — instantly via applyConstraints when possible,
+   * falling back to a full re-acquire (LocalCapture.setMode).
+   */
+  async setNoiseSuppressionMode(mode: NoiseSuppressionMode): Promise<void> {
+    this.noiseSuppressionMode = mode;
+    saveNoiseSuppressionMode(mode);
+
+    if (!this.capture) {
+      return;
+    }
+
+    if (this.noiseSuppressionSwitchPromise) {
+      await this.noiseSuppressionSwitchPromise;
+    }
+
+    this.noiseSuppressionSwitchPromise = (async () => {
+      const capture = this.capture;
+      if (!capture) {
+        return;
+      }
+      try {
+        const track = await capture.setMode(mode);
+        if (track) {
+          this.swapMicTrack(track);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to switch noise suppression";
+        this.onError(message);
+      } finally {
+        this.onNoiseSuppressionModeChange(capture.effectiveMode);
+      }
+    })().finally(() => {
+      this.noiseSuppressionSwitchPromise = null;
+    });
+
+    return this.noiseSuppressionSwitchPromise;
+  }
+
+  getEffectiveNoiseSuppressionMode(): NoiseSuppressionMode {
+    return this.capture?.effectiveMode ?? this.noiseSuppressionMode;
+  }
+
+  /** Polled from sampleQuality (fires every QUALITY_SAMPLE_INTERVAL_MS,
+   * decision #7): recovers outgoing audio if the rnnoise AudioContext got
+   * stuck "suspended" for too long (see LocalCapture.checkWatchdogFallback).
+   * Must never throw — sampleQuality's timer callback doesn't guard it. */
+  private applyCaptureWatchdog(): void {
+    try {
+      const rawTrack = this.capture?.checkWatchdogFallback();
+      if (!rawTrack) {
+        return;
+      }
+      this.swapMicTrack(rawTrack);
+      this.onNoiseSuppressionModeChange("browser");
+    } catch (err) {
+      debugLog("sfu:capture-watchdog-failed", err);
+    }
   }
 
   /**
