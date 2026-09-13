@@ -12,6 +12,11 @@ type Params = {
     setChannelsByServer: React.Dispatch<React.SetStateAction<ChannelsByServer>>;
     messagesByChannel: MessagesByChannel;
     setMessagesByChannel: React.Dispatch<React.SetStateAction<MessagesByChannel>>;
+    // See the identical guard in useServers.ts for why this is needed —
+    // both hooks independently synthesize a placeholder channel entry when
+    // a message arrives for a channel not yet in channelsByServer, and both
+    // must skip that for DM channels (docs/dm-plan.md invariant #1).
+    dmChannelIdsRef: React.MutableRefObject<Set<number>>;
 };
 
 export function useMessages({
@@ -23,6 +28,7 @@ export function useMessages({
     setChannelsByServer,
     messagesByChannel,
     setMessagesByChannel,
+    dmChannelIdsRef,
 }: Params) {
     const [loadedChannels, setLoadedChannels] = useState<Record<number, boolean>>({});
     const [paginationByChannel, setPaginationByChannel] = useState<PaginationByChannel>({});
@@ -62,7 +68,7 @@ export function useMessages({
             // Keep UI in sync if server sends message from a channel not present in local cache.
             setChannelsByServer((prev) => {
                 const hasChannel = Object.values(prev).some((list) => list.some((channel) => channel.id === incoming.channel_id));
-                if (hasChannel || selectedServerIdRef.current <= 0) {
+                if (hasChannel || selectedServerIdRef.current <= 0 || dmChannelIdsRef.current.has(incoming.channel_id)) {
                     return prev;
                 }
 
@@ -136,7 +142,7 @@ export function useMessages({
             unsubscribeEmbeds();
             unsubscribeEdited();
         };
-    }, [isConnected, socketRef, selectedServerIdRef, setChannelsByServer, setMessagesByChannel]);
+    }, [isConnected, socketRef, selectedServerIdRef, setChannelsByServer, setMessagesByChannel, dmChannelIdsRef]);
 
     // Load messages for selected channel (once, lazy load)
     useEffect(() => {

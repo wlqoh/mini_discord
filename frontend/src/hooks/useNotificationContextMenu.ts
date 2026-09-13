@@ -66,11 +66,15 @@ export function useNotificationContextMenu(
     );
 
     const openChannelMenu = useCallback(
-        (e: React.MouseEvent, channelId: number) => {
+        (e: React.MouseEvent, channelId: number, extraItems?: ContextMenuItem[]) => {
             e.preventDefault();
             const override = settings?.channels.find((c) => c.channel_id === channelId);
             const items = buildLevelItems(override, (patch) => void updateChannel(channelId, patch));
-            setMenu({ x: e.clientX, y: e.clientY, items });
+            setMenu({
+                x: e.clientX,
+                y: e.clientY,
+                items: extraItems && extraItems.length > 0 ? [...extraItems, { type: "separator" }, ...items] : items,
+            });
         },
         [settings, updateChannel],
     );

@@ -34,12 +34,25 @@ function isTimeInFuture(iso: string | null, now: number): boolean {
     return Number.isFinite(t) && t > now;
 }
 
-/** Resolves the effective level via channel → server → global inheritance (NOTIFICATIONS_PLAN.md §2 decision 4). */
+/**
+ * Resolves the effective level via channel → server → global inheritance
+ * (NOTIFICATIONS_PLAN.md §2 decision 4). A DM channel (serverId === 0 — see
+ * Channel.server_id's doc comment in types/chat.ts) has no
+ * server_notification_settings row to fall back to, and the global
+ * default_level must not apply either — otherwise a global 'mentions'
+ * default would silence every DM. This mirrors the CASE WHEN ch.server_id
+ * IS NULL branch in ResolveNotificationTargets
+ * (internal/storage/postgresql/notifications.go); the two must never
+ * diverge, or a background tab and a push notification would disagree
+ * about whether to notify (docs/dm-plan.md decision #7).
+ */
 export function resolveLevel(settings: NotificationSettings | null, serverId: number, channelId: number): NotificationLevel {
     if (!settings) return "all";
 
     const channelOverride = settings.channels.find((c) => c.channel_id === channelId);
     if (channelOverride?.level) return channelOverride.level;
+
+    if (serverId <= 0) return "all";
 
     const serverOverride = settings.servers.find((s) => s.server_id === serverId);
     if (serverOverride?.level) return serverOverride.level;

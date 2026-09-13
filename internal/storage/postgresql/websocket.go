@@ -288,7 +288,9 @@ func (s *Storage) IsServerMember(ctx context.Context, userID int, serverID int64
 }
 
 // CanUserAccessChannel implements types.ServerStorage, caching the result
-// for 2 minutes.
+// for 2 minutes. The second branch covers DM channels (server_id IS NULL, no
+// server_members row to join against) — access there means being one of the
+// two dm_channels participants instead.
 func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelID int64) (bool, error) {
 	key := fmt.Sprintf("%s%d:%d", accessKey, channelID, userID)
 	if v, ok := s.cache.Get(key); ok {
@@ -301,6 +303,10 @@ func (s *Storage) CanUserAccessChannel(ctx context.Context, userID int, channelI
 			FROM channels c
 			JOIN server_members sm ON sm.server_id = c.server_id
 			WHERE c.id = $1 AND sm.user_id = $2
+			UNION ALL
+			SELECT 1
+			FROM dm_channels d
+			WHERE d.channel_id = $1 AND $2 IN (d.user_a, d.user_b)
 		)`,
 		channelID,
 		userID,
@@ -354,7 +360,10 @@ func (s *Storage) ListServerMembersUserIDs(ctx context.Context, serverID int64) 
 
 // ListChannelMemberUserIDs implements types.ServerStorage, caching the
 // result for 2 minutes; callers always get a defensive copy of the cached
-// slice.
+// slice. The UNION ALL branch is what makes DM channels get real-time
+// delivery, typing, edits and everything else that's addressed by this
+// function's output — a DM channel has no server_members row, so its two
+// participants come from dm_channels instead.
 func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64) ([]int, error) {
 	key := fmt.Sprintf("%s%d", membersKey, channelID)
 	if v, ok := s.cache.Get(key); ok {
@@ -368,6 +377,10 @@ func (s *Storage) ListChannelMemberUserIDs(ctx context.Context, channelID int64)
 		FROM channels c
 		JOIN server_members sm ON sm.server_id = c.server_id
 		WHERE c.id = $1
+		UNION ALL
+		SELECT user_a FROM dm_channels WHERE channel_id = $1
+		UNION ALL
+		SELECT user_b FROM dm_channels WHERE channel_id = $1
 	`, channelID)
 	if err != nil {
 		return nil, err
@@ -1229,14 +1242,18 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 	`
 
 	var channel types.Channel
+	var serverID sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, query, channelID).Scan(
 		&channel.ID,
-		&channel.ServerID,
+		&serverID,
 		&channel.Name,
 		&channel.Type,
 		&channel.CreatedAt,
 	); err != nil {
 		return nil, err
+	}
+	if serverID.Valid {
+		channel.ServerID = serverID.Int64
 	}
 
 	s.cache.Set(key, &channel, 5*time.Minute)
@@ -1245,7 +1262,11 @@ func (s *Storage) GetChannelByID(ctx context.Context, channelID int64) (*types.C
 
 // GetUnreadCounts implements types.ServerStorage, computing every channel
 // userID is a member of and how many messages postdate their read cursor
-// (channel_reads), in a single query.
+// (channel_reads), in a single query. The second branch covers DM channels,
+// whose baseline (in place of server_members.joined_at, which doesn't exist
+// there) is dm_channels.created_at; their ServerID is reported as 0 so the
+// client can tell a DM unread badge from a server one (see
+// WsChannelUnread.ServerID).
 func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsChannelUnread, error) {
 	query := `
 		SELECT c.id, c.server_id, COUNT(m.id)
@@ -1263,6 +1284,24 @@ func (s *Storage) GetUnreadCounts(ctx context.Context, userID int) ([]types.WsCh
 		      END)
 		WHERE c.type = $2
 		GROUP BY c.id, c.server_id
+		HAVING COUNT(m.id) > 0
+
+		UNION ALL
+
+		SELECT c.id, 0::bigint, COUNT(m.id)
+		FROM channels c
+		JOIN dm_channels dc ON dc.channel_id = c.id
+		LEFT JOIN channel_reads cr
+		  ON cr.user_id = $1 AND cr.channel_id = c.id
+		LEFT JOIN messages m
+		  ON m.channel_id = c.id
+		 AND m.author_id <> $1
+		 AND (CASE
+		        WHEN cr.last_read_message_id IS NOT NULL THEN m.id > cr.last_read_message_id
+		        ELSE m.created_at > dc.created_at
+		      END)
+		WHERE $1 IN (dc.user_a, dc.user_b)
+		GROUP BY c.id
 		HAVING COUNT(m.id) > 0
 	`
 

@@ -375,9 +375,14 @@ func (s *Storage) ResolveNotificationTargets(ctx context.Context, channelID int6
 		placeholders[i] = fmt.Sprintf("$%d", i+2)
 	}
 
+	// DM channels (ch.server_id IS NULL) have no server_notification_settings
+	// row to fall back to, so without the CASE branch below the cascade would
+	// skip straight to uns.default_level — meaning a global 'mentions'
+	// setting would silence DMs entirely. A DM's cascade is channel override
+	// then 'all', never the global default (see docs/dm-plan.md decision #7).
 	query := fmt.Sprintf(`
 		SELECT u.id,
-		       COALESCE(cns.level, sns.level, uns.default_level, 'all') AS level,
+		       COALESCE(cns.level, CASE WHEN ch.server_id IS NULL THEN 'all' END, sns.level, uns.default_level, 'all') AS level,
 		       GREATEST(cns.muted_until, sns.muted_until) AS muted_until,
 		       uns.dnd_until,
 		       COALESCE(uns.hide_message_preview, FALSE) AS hide_preview

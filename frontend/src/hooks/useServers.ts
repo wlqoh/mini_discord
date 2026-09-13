@@ -51,6 +51,13 @@ type Params = {
     };
     onSocketReconnectRestored: () => void;
     currentUserId: number | null;
+    // Channel ids known to be DM channels (kept in sync from useDMs by
+    // ChatPage) — without this guard, a message arriving on a DM channel
+    // would fall through the "channel not in any server's list yet" branch
+    // below and get synthesized as a fake text channel under whichever
+    // server happens to be selected, leaking the DM into that server's
+    // channel list (docs/dm-plan.md invariant #1).
+    dmChannelIdsRef: React.MutableRefObject<Set<number>>;
 };
 
 export function useServers({
@@ -68,6 +75,7 @@ export function useServers({
     voiceSocketHandlers,
     onSocketReconnectRestored,
     currentUserId,
+    dmChannelIdsRef,
 }: Params) {
     const [servers, setServers] = useState<Server[]>([]);
     const [channelsByServer, setChannelsByServer] = useState<ChannelsByServer>({});
@@ -156,7 +164,13 @@ export function useServers({
             setVoiceParticipantsByChannel(nextVoiceParticipantsByChannel);
             setSelectedServerId(activeServerId);
             setSelectedChannelId((prev) => {
-                if (activeChannels.some((channel) => channel.id === prev)) {
+                // A DM channel never appears in any server's activeChannels
+                // (it has no server — see Channel.server_id's doc comment),
+                // so without this guard every periodic/reconnect re-sync
+                // here would silently clobber a selected DM back to whatever
+                // server channel comes first, a few seconds after the user
+                // opened it (docs/dm-plan.md invariant #1).
+                if (activeChannels.some((channel) => channel.id === prev) || dmChannelIdsRef.current.has(prev)) {
                     return prev;
                 }
                 return activeChannels[0]?.id ?? 0;
@@ -177,7 +191,7 @@ export function useServers({
             localStorage.setItem(CHAT_CHANNELS_BY_SERVER_KEY, JSON.stringify(remoteChannelsByServer));
             localStorage.setItem(CHAT_SELECTED_SERVER_KEY, String(activeServerId));
         },
-        [socketRef, setVoiceParticipantsByChannel, setMessagesByChannel],
+        [socketRef, setVoiceParticipantsByChannel, setMessagesByChannel, dmChannelIdsRef],
     );
 
     // Big socket init effect
@@ -204,7 +218,7 @@ export function useServers({
             // useMessages subscribes separately; we only handle channelsByServer sync here
             setChannelsByServer((prev) => {
                 const hasChannel = Object.values(prev).some((list) => list.some((channel) => channel.id === incoming.channel_id));
-                if (hasChannel || selectedServerIdRef.current <= 0) {
+                if (hasChannel || selectedServerIdRef.current <= 0 || dmChannelIdsRef.current.has(incoming.channel_id)) {
                     return prev;
                 }
 
@@ -295,7 +309,7 @@ export function useServers({
             setIsConnected(false);
             setIsConnectedLocal(false);
         };
-    }, [handleAuthFailure, syncServersAndChannels, currentUserId, callClientCallbacks, voiceSocketHandlers, onSocketReconnectRestored, socketRef, callClientRef, setIsConnected, setError]);
+    }, [handleAuthFailure, syncServersAndChannels, currentUserId, callClientCallbacks, voiceSocketHandlers, onSocketReconnectRestored, socketRef, callClientRef, setIsConnected, setError, dmChannelIdsRef]);
 
     // Periodic sync effect
     useEffect(() => {

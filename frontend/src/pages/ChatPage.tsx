@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
+import type React from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2, AudioLines} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2, AudioLines, MessageCircle} from "lucide-react";
 import {useMediaQuery} from "../hooks/useMediaQuery";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
@@ -11,12 +12,15 @@ import VideoTile from "../components/VideoTile.tsx";
 import ConnectionQualityIcon from "../components/ConnectionQualityIcon.tsx";
 import JumpToLatestButton from "../components/JumpToLatestButton.tsx";
 import SearchPanel from "../components/SearchPanel.tsx";
+import DMList from "../components/DMList.tsx";
+import UserSearchModal from "../components/UserSearchModal.tsx";
 import {ChatSocket} from "../services/chatSocket.ts";
 import type {VoiceClient} from "../services/voiceClient.ts";
 import {getCurrentUserId, getCurrentUserProfile, clearAuthStorage} from "../services/authToken.ts";
 import type {CurrentUserProfile} from "../services/authToken.ts";
 import type {
     MessagesByChannel,
+    UserSearchHit,
     VoiceParticipant,
 } from "../types/chat.ts";
 import {getMyAvatarUrl} from "../services/avatarApi.ts";
@@ -28,6 +32,7 @@ import { useProfile } from "../hooks/useProfile.ts";
 import { useTypingEmitter } from "../hooks/useTypingEmitter.ts";
 import { useTypingIndicator } from "../hooks/useTypingIndicator.ts";
 import { useUnread } from "../hooks/useUnread.ts";
+import { useDMs } from "../hooks/useDMs.ts";
 import { useJumpToLatest } from "../hooks/useJumpToLatest.ts";
 import { useMessageSearch } from "../hooks/useMessageSearch.ts";
 import { useNotifications } from "../hooks/useNotifications.ts";
@@ -92,6 +97,12 @@ export default function ChatPage() {
     const [imageViewer, setImageViewer] = useState<ImageViewerState | null>(null);
     const [isChannelsSidebarHidden, setIsChannelsSidebarHidden] = useState(false);
     const [isChannelsDrawerOpen, setIsChannelsDrawerOpen] = useState(false);
+    const [activeView, setActiveView] = useState<"server" | "dm">("server");
+    const [isUserSearchModalOpen, setIsUserSearchModalOpen] = useState(false);
+    // Populated from dms.dmChannels below (useDMs is instantiated after
+    // useServers/useMessages, which both need this ref) — see its doc
+    // comment in useServers.ts for why it exists.
+    const dmChannelIdsRef = useRef<Set<number>>(new Set());
     const [notificationPermission, setNotificationPermission] = useState<PermissionState>(() => getPermissionState());
     const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false);
     const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
@@ -237,6 +248,7 @@ export default function ChatPage() {
         voiceSocketHandlers: voice.voiceSocketHandlers,
         onSocketReconnectRestored: voice.onReconnectRestored,
         currentUserId,
+        dmChannelIdsRef,
     });
 
     const messages = useMessages({
@@ -248,7 +260,16 @@ export default function ChatPage() {
         setChannelsByServer: servers.setChannelsByServer,
         messagesByChannel,
         setMessagesByChannel,
+        dmChannelIdsRef,
     });
+
+    const dms = useDMs({ socketRef, isConnected });
+
+    // Keep the ref useServers/useMessages read from in sync — see
+    // dmChannelIdsRef's doc comment above.
+    useEffect(() => {
+        dmChannelIdsRef.current = new Set(dms.dmChannels.map((dm) => dm.channel_id));
+    }, [dms.dmChannels]);
 
     const profile = useProfile({
         socketRef,
@@ -292,6 +313,7 @@ export default function ChatPage() {
         currentUserId,
         selectedChannelId: servers.selectedChannelId,
         channelsByServer: servers.channelsByServer,
+        dmChannels: dms.dmChannels,
         settings: notificationSettings.settings,
         onMissedPermission: () => setShowPermissionBanner(true),
     });
@@ -351,6 +373,48 @@ export default function ChatPage() {
         [servers, scrollToMessage],
     );
 
+    // Shared "message this user" entry point (decision requires it reachable
+    // from both the server member list and a message author's context —
+    // both already funnel into the same profile modal via onOpenProfile, so
+    // wiring it there covers both at once).
+    async function handleMessageUser(peerUserId: number): Promise<void> {
+        if (!peerUserId || peerUserId <= 0) {
+            return;
+        }
+        try {
+            const dm = await dms.openDM(peerUserId);
+            setActiveView("dm");
+            servers.setSelectedChannelId(dm.channel_id);
+            profile.setIsProfileModalOpen(false);
+            setError("");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Failed to open conversation";
+            setError(message === "no_shared_server" ? "You don't share a server with this user" : message);
+        }
+    }
+
+    function handleSelectUserFromSearch(user: UserSearchHit): void {
+        setIsUserSearchModalOpen(false);
+        void handleMessageUser(user.user_id);
+    }
+
+    function openDMContextMenu(e: React.MouseEvent, dm: { channel_id: number }): void {
+        notificationMenu.openChannelMenu(e, dm.channel_id, [
+            {
+                label: "Close conversation",
+                danger: true,
+                onClick: () => {
+                    void dms.closeDM(dm.channel_id).then(() => {
+                        if (servers.selectedChannelId === dm.channel_id) {
+                            const next = dms.dmChannels.find((c) => c.channel_id !== dm.channel_id);
+                            servers.setSelectedChannelId(next?.channel_id ?? 0);
+                        }
+                    });
+                },
+            },
+        ]);
+    }
+
     useEffect(() => {
         if (!("serviceWorker" in navigator)) return;
         const handler = (event: MessageEvent) => {
@@ -391,6 +455,15 @@ export default function ChatPage() {
     const isInVoiceCall = voice.voiceChannelId > 0;
     const isInSelectedVoiceChannel = isVoiceChannel && voice.voiceChannelId === servers.selectedChannelId;
     const shouldHideMessageInput = isVoiceChannel;
+
+    const currentDMPeer = dms.dmChannels.find((dm) => dm.channel_id === servers.selectedChannelId);
+    const dmUnreadTotal = dms.dmChannels.reduce((sum, dm) => sum + (unread.unreadByChannel[dm.channel_id] ?? 0), 0);
+    // Best-effort presence for the DM list — see DMList's onlineUserIds doc
+    // comment: this is whatever get_users_online already returned for the
+    // last-selected server, not a dedicated DM presence query.
+    const dmOnlineUserIds = new Set(
+        servers.onlineUsers.map((u) => u.user_id).filter((id): id is number => typeof id === "number"),
+    );
     const activeMessages = servers.selectedChannelId > 0 ? messagesByChannel[servers.selectedChannelId] ?? [] : [];
     const isMessagesLoading = servers.selectedChannelId > 0 && messagesByChannel[servers.selectedChannelId] === undefined;
     const activePagination = messages.paginationByChannel[servers.selectedChannelId];
@@ -546,14 +619,38 @@ export default function ChatPage() {
                 >
                     <Search size={18} aria-hidden="true"/>
                 </button>
+                <div className="server-item dm-rail-item">
+                    <button
+                        className={`server-dot ${activeView === "dm" ? "active" : ""}`}
+                        onClick={() => {
+                            setActiveView("dm");
+                            if (isPhone) setIsChannelsDrawerOpen(true);
+                        }}
+                        aria-label="Direct messages"
+                        title="Direct messages"
+                        type="button"
+                    >
+                        <MessageCircle size={20} aria-hidden="true"/>
+                    </button>
+                    {dmUnreadTotal > 0 ? (
+                        <span
+                            className="server-unread-badge"
+                            title={`${dmUnreadTotal} unread`}
+                            aria-label={`${dmUnreadTotal} unread messages`}
+                        >
+                            {formatUnreadCount(dmUnreadTotal)}
+                        </span>
+                    ) : null}
+                </div>
+                <div className="server-divider" />
                 <ul className="servers-list">
                     {servers.servers.map((server) => {
                         const serverUnread = unread.unreadByServer[server.id] ?? 0;
                         return (
                             <li key={server.id} className="server-item">
                                 <button
-                                    className={`server-dot ${servers.selectedServerId === server.id ? "active" : ""}`}
-                                    onClick={() => void servers.handleSelectServer(server.id)}
+                                    className={`server-dot ${activeView === "server" && servers.selectedServerId === server.id ? "active" : ""}`}
+                                    onClick={() => { setActiveView("server"); void servers.handleSelectServer(server.id); }}
                                     onContextMenu={(e) => notificationMenu.openServerMenu(e, server.id)}
                                     title={`Server ${server.name} (ID ${server.id})`}
                                     aria-label={`Server ${server.name}`}
@@ -595,7 +692,7 @@ export default function ChatPage() {
             />
             <aside className={`channels-sidebar ${isChannelsSidebarHidden ? "hidden" : ""} ${isChannelsDrawerOpen ? "drawer-open" : ""}`} onClick={(e) => e.stopPropagation()}>
                 <div className="channels-header">
-                    <span>Server {currentServer?.name ?? "-"}</span>
+                    <span>{activeView === "dm" ? "Direct Messages" : `Server ${currentServer?.name ?? "-"}`}</span>
                     <div className="actions">
                         <button
                             className="channels-add-btn"
@@ -606,30 +703,59 @@ export default function ChatPage() {
                         >
                             {isChannelsSidebarHidden ? <PanelLeftOpen size={16} aria-hidden="true"/> : <PanelLeftClose size={16} aria-hidden="true"/>}
                         </button>
-                        {isCurrentServerOwner ? (
+                        {activeView === "dm" ? (
                             <button
                                 className="channels-add-btn"
-                                onClick={() => void servers.handleDeleteServer()}
-                                disabled={!isConnected || servers.selectedServerId <= 0}
-                                aria-label="Delete server"
-                                title="Delete server"
+                                onClick={() => setIsUserSearchModalOpen(true)}
+                                disabled={!isConnected}
+                                aria-label="New message"
+                                title="New message"
                                 type="button"
                             >
-                                <Trash2 size={14} aria-hidden="true"/>
+                                +
                             </button>
-                        ) : null}
-                        <button
-                            className="channels-add-btn"
-                            onClick={servers.openCreateChannelModal}
-                            disabled={!isConnected || servers.selectedServerId <= 0 || servers.isCreatingChannel}
-                            aria-label="Create channel"
-                            title="Create channel"
-                            type="button"
-                        >
-                            +
-                        </button>
+                        ) : (
+                            <>
+                                {isCurrentServerOwner ? (
+                                    <button
+                                        className="channels-add-btn"
+                                        onClick={() => void servers.handleDeleteServer()}
+                                        disabled={!isConnected || servers.selectedServerId <= 0}
+                                        aria-label="Delete server"
+                                        title="Delete server"
+                                        type="button"
+                                    >
+                                        <Trash2 size={14} aria-hidden="true"/>
+                                    </button>
+                                ) : null}
+                                <button
+                                    className="channels-add-btn"
+                                    onClick={servers.openCreateChannelModal}
+                                    disabled={!isConnected || servers.selectedServerId <= 0 || servers.isCreatingChannel}
+                                    aria-label="Create channel"
+                                    title="Create channel"
+                                    type="button"
+                                >
+                                    +
+                                </button>
+                            </>
+                        )}
                     </div>
                 </div>
+                {activeView === "dm" ? (
+                    <DMList
+                        channels={dms.dmChannels}
+                        selectedChannelId={servers.selectedChannelId}
+                        onSelect={(channelId) => {
+                            servers.setSelectedChannelId(channelId);
+                            if (isPhone) setIsChannelsDrawerOpen(false);
+                        }}
+                        onContextMenu={openDMContextMenu}
+                        onlineUserIds={dmOnlineUserIds}
+                        unreadByChannel={unread.unreadByChannel}
+                        isLoading={dms.isLoadingDMs}
+                    />
+                ) : (
                 <ul className="channels-list">
                     {activeChannels.map((channel) => {
                         const channelUnread = channel.type === "text" ? unread.unreadByChannel[channel.id] ?? 0 : 0;
@@ -765,6 +891,7 @@ export default function ChatPage() {
                         );
                     })}
                 </ul>
+                )}
             </aside>
 
             <section className="chat-main">
@@ -781,7 +908,13 @@ export default function ChatPage() {
                                 >
                                     <Menu size={20} aria-hidden="true" />
                                 </button>
-                                <span className="chat-header">{currentServer ? `Сервер ${currentServer.name}` : "Server"}</span>
+                                <span className="chat-header">
+                                    {activeView === "dm"
+                                        ? currentDMPeer?.peer_nickname || "Direct Messages"
+                                        : currentServer
+                                            ? `Сервер ${currentServer.name}`
+                                            : "Server"}
+                                </span>
                             </div>
                             <div className="chat-header-actions">
                                 <button
@@ -815,7 +948,11 @@ export default function ChatPage() {
                             </div>
                         </div>
                         <div className="chat-subheader">
-                            {currentChannel ? `# ${currentChannel.name}` : "Channel not selected"}
+                            {currentChannel
+                                ? `# ${currentChannel.name}`
+                                : activeView === "dm"
+                                    ? (currentDMPeer ? "Direct message" : "No conversation selected")
+                                    : "Channel not selected"}
                         </div>
                     </div>
                     {(isInVoiceCall || isVoiceChannel) && (
@@ -1115,6 +1252,17 @@ export default function ChatPage() {
                                         <span className="profile-modal-label">Name</span>
                                         <span className="profile-modal-value">{profile.profileDisplayName || "-"}</span>
                                     </div>
+                                    {!profile.isSelfProfile ? (
+                                        <div className="profile-modal-row">
+                                            <button
+                                                className="modal-btn modal-btn-primary"
+                                                type="button"
+                                                onClick={() => void handleMessageUser(profile.selectedProfileUserId ?? 0)}
+                                            >
+                                                <MessageCircle size={16} aria-hidden="true" /> Message
+                                            </button>
+                                        </div>
+                                    ) : null}
                                     {profile.isSelfProfile ? (
                                         <div className="profile-modal-row">
                                             <span className="profile-modal-label">Theme</span>
@@ -1324,6 +1472,20 @@ export default function ChatPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {isUserSearchModalOpen && (
+                <UserSearchModal
+                    onClose={() => setIsUserSearchModalOpen(false)}
+                    searchUsers={(query, limit) => {
+                        const socket = socketRef.current;
+                        if (!socket) {
+                            return Promise.reject(new Error("No connection to chat"));
+                        }
+                        return socket.searchUsers(query, limit);
+                    }}
+                    onSelectUser={handleSelectUserFromSearch}
+                />
             )}
 
             {servers.isCreateChannelModalOpen && (

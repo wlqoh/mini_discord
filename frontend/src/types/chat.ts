@@ -2,7 +2,24 @@ export interface Channel {
     id: number;
     server_id: number;
     name: string;
-    type: "text" | "voice";
+    type: "text" | "voice" | "dm";
+}
+
+// One conversation in the direct-messages list. Name/avatar come from the
+// peer, not from the underlying channel (a DM channel has no name of its
+// own — see docs/dm-plan.md §4.1).
+export interface DMChannel {
+    channel_id: number;
+    peer_user_id: number;
+    peer_nickname: string;
+    peer_avatar_url?: string;
+    last_message_at?: string;
+}
+
+export interface UserSearchHit {
+    user_id: number;
+    nickname: string;
+    avatar_url?: string;
 }
 
 export interface Server {

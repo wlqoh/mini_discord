@@ -137,6 +137,10 @@ upgrade request). Origin is checked separately from REST CORS, against
 | `sfu_subscribe_video` | see [`voice.md`](voice.md) | — | — | — |
 | `sfu_resume` | see [`voice.md`](voice.md) | see [`voice.md`](voice.md) | `voice_user_resumed` | — |
 | `sfu_publish_state` | see [`voice.md`](voice.md) | — | `sfu_track_published`/`unpublished` | — |
+| `open_dm` | `WsOpenDMRequest` | `dm_opened` | — | — |
+| `close_dm` | `WsCloseDMRequest` | `dm_closed` | — | — |
+| `list_dms` | — | `dm_list` | — | — |
+| `search_users` | `WsSearchUsersRequest` | `user_search` | — | 3/s, burst 10 |
 
 ### Events
 
@@ -157,6 +161,10 @@ upgrade request). Origin is checked separately from REST CORS, against
 | `sfu_active_speakers` | user ID list | see [`voice.md`](voice.md) |
 | `sfu_error` | error message | an `sfu_candidate` (fire-and-forget) failed |
 | `sfu_session_closed` | `WsSfuSessionClosedEvent` | sent only to the affected user — the server tore down *their own* SFU session; see [`voice.md`](voice.md) — ghost-session cleanup |
+| `dm_opened` | `types.DMChannel` | reply to `open_dm`, **and** an unsolicited broadcast to both participants whenever a message is saved into a DM channel — see note 7 below |
+| `dm_list` | `WsListDMsResponse` | reply to `list_dms` |
+| `dm_closed` | `WsCloseDMResponse` | reply to `close_dm` |
+| `user_search` | `WsSearchUsersResponse` | reply to `search_users` |
 
 ### Flows that don't show up in the type table
 
@@ -189,3 +197,21 @@ upgrade request). Origin is checked separately from REST CORS, against
    action/event are only listed above; the full signaling flow, the
    publish-slot model, and reconnect semantics are in
    [`voice.md`](voice.md).
+7. **Direct messages.** A DM is an ordinary `channels` row with `server_id
+   NULL` and `type = 'dm'` (see `docs/dm-plan.md`), paired with a
+   `dm_channels` row that names its two participants. Every existing
+   channel-scoped action — `send_message`, `get_messages`/`_around`/`_after`,
+   `edit_message`, `delete_message`, `mark_read`, `typing_start`/`_stop`,
+   `search_messages` — accepts a DM `channel_id` completely unchanged; the
+   only new surface is discovering and managing the conversation itself:
+   `open_dm` returns (creating if needed) the DM channel for a peer user ID,
+   erroring `no_shared_server` if the two users share no server and no DM
+   already exists between them; `list_dms` returns the caller's visible
+   conversations; `close_dm` hides one for the caller only (the peer's
+   incoming messages bring it back). `open_dm` notifies only its caller —
+   the peer only learns of a new conversation when the first message
+   actually arrives, delivered as a `dm_opened` broadcast to both sides (and
+   again on every subsequent message, which is also how a closed
+   conversation reopens and how the DM list's last-message time/ordering
+   stays live). `search_users` is restricted to users who share at least one
+   server with the caller.
