@@ -65,10 +65,25 @@ func buildPayload(event Event, kind string, count int, hidePreview bool) Payload
 		URL:       fmt.Sprintf("/?channel=%d&message=%d", event.ChannelID, event.Message.ID),
 	}
 
+	// A DM channel (ServerID <= 0 — see Channel.ServerID's doc comment in
+	// types/websocket.go) has no name of its own (channels.name is '' for
+	// DM rows), so titles fall back to the author's name alone instead of
+	// "author — #" with a blank channel. This mirrors the frontend's
+	// dmChannel branch in useNotifications.ts; the two must agree, or a
+	// background tab and a push notification would show different titles
+	// for the same message (docs/dm-plan.md §5.6).
+	isDM := event.ServerID <= 0
+
 	if hidePreview {
 		body := fmt.Sprintf("New message in #%s", event.ChannelName)
 		if count > 1 {
 			body = fmt.Sprintf("#%s: %d new messages", event.ChannelName, count)
+		}
+		if isDM {
+			body = "New message"
+			if count > 1 {
+				body = fmt.Sprintf("%d new messages", count)
+			}
 		}
 		return Payload{
 			Type: kind, Title: "MuArAb", Body: body, Badge: badgeIcon, Tag: tag, Renotify: true, Data: data,
@@ -76,9 +91,13 @@ func buildPayload(event Event, kind string, count int, hidePreview bool) Payload
 	}
 
 	if count > 1 {
+		title := fmt.Sprintf("#%s", event.ChannelName)
+		if isDM {
+			title = resolveAuthorName(event.Message)
+		}
 		return Payload{
 			Type:     "aggregate",
-			Title:    fmt.Sprintf("#%s", event.ChannelName),
+			Title:    title,
 			Body:     fmt.Sprintf("%d new messages", count),
 			Badge:    badgeIcon,
 			Tag:      tag,
@@ -91,6 +110,12 @@ func buildPayload(event Event, kind string, count int, hidePreview bool) Payload
 	title := fmt.Sprintf("%s — #%s", authorName, event.ChannelName)
 	if kind == "mention" {
 		title = fmt.Sprintf("%s mentioned you in #%s", authorName, event.ChannelName)
+	}
+	if isDM {
+		title = authorName
+		if kind == "mention" {
+			title = fmt.Sprintf("%s mentioned you", authorName)
+		}
 	}
 
 	return Payload{

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import type React from "react";
 import { ChatSocket } from "../services/chatSocket.ts";
-import type { ChannelsByServer, Message } from "../types/chat.ts";
+import type { ChannelsByServer, DMChannel, Message } from "../types/chat.ts";
 import type { NotificationSettings } from "../types/notifications.ts";
 import { notify, shouldShowSoftPrompt } from "../services/notifications";
 
@@ -12,6 +12,11 @@ type Params = {
     currentUserId: number | null;
     selectedChannelId: number;
     channelsByServer: ChannelsByServer;
+    // DM channels never appear in channelsByServer (they have no server —
+    // see Channel.server_id's doc comment), so a DM message needs this to
+    // build a "peer nickname, no #channel" title instead of falling through
+    // to resolveChannelName's "channel not found" fallback.
+    dmChannels: DMChannel[];
     settings: NotificationSettings | null;
     onMissedPermission?: () => void;
 };
@@ -52,6 +57,7 @@ export function useNotifications({
     currentUserId,
     selectedChannelId,
     channelsByServer,
+    dmChannels,
     settings,
     onMissedPermission,
 }: Params): void {
@@ -70,6 +76,11 @@ export function useNotifications({
         channelsByServerRef.current = channelsByServer;
     }, [channelsByServer]);
 
+    const dmChannelsRef = useRef(dmChannels);
+    useEffect(() => {
+        dmChannelsRef.current = dmChannels;
+    }, [dmChannels]);
+
     const settingsRef = useRef(settings);
     useEffect(() => {
         settingsRef.current = settings;
@@ -85,12 +96,19 @@ export function useNotifications({
         const socket = socketRef.current;
 
         const unsubscribe = socket.onMessage((incoming) => {
-            const channelName = resolveChannelName(incoming.channel_id, channelsByServerRef.current);
-            const serverId = resolveServerId(incoming.channel_id, channelsByServerRef.current);
+            const dmChannel = dmChannelsRef.current.find((dm) => dm.channel_id === incoming.channel_id);
+            const channelName = dmChannel ? "" : resolveChannelName(incoming.channel_id, channelsByServerRef.current);
+            const serverId = dmChannel ? 0 : resolveServerId(incoming.channel_id, channelsByServerRef.current);
             const hidePreview = settingsRef.current?.hide_message_preview ?? false;
 
-            const title = hidePreview ? "MuArAb" : `${resolveAuthorName(incoming)} — #${channelName}`;
-            const body = hidePreview ? `New message in #${channelName}` : resolveBody(incoming);
+            const title = hidePreview
+                ? "MuArAb"
+                : dmChannel
+                    ? resolveAuthorName(incoming)
+                    : `${resolveAuthorName(incoming)} — #${channelName}`;
+            const body = hidePreview
+                ? (dmChannel ? "New message" : `New message in #${channelName}`)
+                : resolveBody(incoming);
 
             void notify({
                 message: incoming,

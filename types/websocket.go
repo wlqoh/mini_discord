@@ -120,6 +120,34 @@ type ServerStorage interface {
 	// GetMessageMentions returns the mentioned user IDs for each of
 	// messageIDs, keyed by message ID; messages with none are omitted.
 	GetMessageMentions(ctx context.Context, messageIDs []int64) (map[int64][]int, error)
+
+	// OpenDMChannel returns the DM channel of the pair (userID, peerID),
+	// creating it on first contact. The pair is normalized via
+	// least/greatest, so a simultaneous call from both sides never creates
+	// two channels (UNIQUE + ON CONFLICT). Returns ErrNoSharedServer if the
+	// users share no server and the channel does not already exist. created
+	// reports whether the channel was just created by this call.
+	OpenDMChannel(ctx context.Context, userID, peerID int) (channelID int64, created bool, err error)
+	// ListDMChannels returns userID's visible DM channels: those with at
+	// least one message, or where userID is the initiator, and where
+	// hidden_at is not set. Ordered by last message time, then channel
+	// creation time, descending.
+	ListDMChannels(ctx context.Context, userID int, s3Host string) ([]DMChannel, error)
+	// HideDMChannel sets hidden_at for (channelID, userID). History is not
+	// deleted; an incoming message reveals the channel again (see
+	// RevealDMChannel).
+	HideDMChannel(ctx context.Context, userID int, channelID int64) error
+	// RevealDMChannel makes channelID visible to both participants: it
+	// creates the visibility row for the non-initiating side if missing and
+	// clears hidden_at for both. Called after every message saved into a DM
+	// channel.
+	RevealDMChannel(ctx context.Context, channelID int64) error
+	// SearchUsers finds up to limit users by nickname among those who share
+	// at least one server with userID. Never returns userID itself or
+	// soft-deleted users.
+	SearchUsers(ctx context.Context, userID int, query string, limit int, s3Host string) ([]UserSearchHit, error)
+	// IsDMChannel reports whether channelID is a DM channel.
+	IsDMChannel(ctx context.Context, channelID int64) (bool, error)
 }
 
 // WsAction* names every command a client can send in WsCommand.Action.
@@ -154,6 +182,10 @@ const (
 	WsActionGetMessagesAround = "get_messages_around"
 	WsActionGetMessagesAfter  = "get_messages_after"
 	WsActionSearchMessages    = "search_messages"
+	WsActionOpenDM            = "open_dm"
+	WsActionCloseDM           = "close_dm"
+	WsActionListDMs           = "list_dms"
+	WsActionSearchUsers       = "search_users"
 
 	// sfu_* actions address the server directly (unlike mesh's removed
 	// rtc_signal, whose to_user_id addressed a peer) — see
@@ -199,6 +231,11 @@ const (
 	WsEventTypingStart       = "typing_start"
 	WsEventTypingStop        = "typing_stop"
 
+	WsEventDMOpened   = "dm_opened"
+	WsEventDMList     = "dm_list"
+	WsEventDMClosed   = "dm_closed"
+	WsEventUserSearch = "user_search"
+
 	WsEventSfuOffer            = "sfu_offer"
 	WsEventSfuAnswer           = "sfu_answer"
 	WsEventSfuCandidate        = "sfu_candidate"
@@ -222,6 +259,10 @@ const (
 
 	ChannelTypeText  = "text"
 	ChannelTypeVoice = "voice"
+	// ChannelTypeDM is a 1-on-1 direct-message channel: an ordinary channels
+	// row with server_id NULL, paired with a dm_channels row. See
+	// docs/dm-plan.md.
+	ChannelTypeDM = "dm"
 )
 
 // Err* are the storage errors the hub forwards to the client verbatim; any
@@ -232,6 +273,11 @@ var (
 	ErrNotMessageOwner   = errors.New("user is not message owner")
 	ErrEditWindowExpired = errors.New("edit window expired")
 	ErrEmptyContent      = errors.New("content is required")
+	// ErrNoSharedServer is returned by OpenDMChannel when the two users
+	// share no server and no DM channel between them already exists (see
+	// decision #9 in docs/dm-plan.md: the shared-server check only gates
+	// creation, not access to an existing DM).
+	ErrNoSharedServer = errors.New("no shared server")
 )
 
 // WsCommand is the envelope for every client-to-server WebSocket message;
@@ -802,12 +848,68 @@ type Server struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Channel is a text or voice channel row; Type is ChannelTypeText or
-// ChannelTypeVoice.
+// Channel is a text, voice or DM channel row; Type is ChannelTypeText,
+// ChannelTypeVoice or ChannelTypeDM. ServerID is 0 for a DM channel (the
+// underlying column is nullable — see sql/schema/024_direct_messages.sql —
+// but 0 is used on this side of the wire/storage boundary instead of a
+// pointer to keep existing server-channel handlers unchanged; GetChannelByID
+// scans the nullable column via sql.NullInt64 and maps NULL to 0).
 type Channel struct {
 	ID        int64     `json:"id"`
 	ServerID  int64     `json:"server_id"`
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// DMChannel is one conversation in a user's direct-message list. Name and
+// avatar come from the peer, not from the underlying channels row (which has
+// no name — see ChannelTypeDM).
+type DMChannel struct {
+	ChannelID     int64      `json:"channel_id"`
+	PeerUserID    int        `json:"peer_user_id"`
+	PeerNickname  string     `json:"peer_nickname"`
+	PeerAvatarURL string     `json:"peer_avatar_url"`
+	LastMessageAt *time.Time `json:"last_message_at,omitempty"`
+}
+
+// UserSearchHit is one result row of WsActionSearchUsers.
+type UserSearchHit struct {
+	UserID    int    `json:"user_id"`
+	Nickname  string `json:"nickname"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// WsOpenDMRequest is the payload for WsActionOpenDM.
+type WsOpenDMRequest struct {
+	PeerUserID int `json:"peer_user_id"`
+}
+
+// WsCloseDMRequest is the payload for WsActionCloseDM.
+type WsCloseDMRequest struct {
+	ChannelID int64 `json:"channel_id"`
+}
+
+// WsListDMsResponse is the response data for WsActionListDMs and the payload
+// of the dm_list event.
+type WsListDMsResponse struct {
+	Channels []DMChannel `json:"channels"`
+}
+
+// WsCloseDMResponse is the payload of the dm_closed event, confirming the
+// close to its initiator.
+type WsCloseDMResponse struct {
+	ChannelID int64 `json:"channel_id"`
+}
+
+// WsSearchUsersRequest is the payload for WsActionSearchUsers.
+type WsSearchUsersRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+// WsSearchUsersResponse is the response data for WsActionSearchUsers and the
+// payload of the user_search event.
+type WsSearchUsersResponse struct {
+	Users []UserSearchHit `json:"users"`
 }

@@ -60,7 +60,9 @@ message, voice-participant, and SFU-session-mapping mutation goes through it.
   [`deployment.md`](deployment.md) for the nginx config that depends on this).
 - **Per-action rate limiting** via `middleware.TokenBucket`, keyed by user ID:
   `create_server` and `create_channel` at 5/min (burst 5), `send_message` at
-  1/s (burst 1), `mark_read` at 2/s (burst 10).
+  1/s (burst 1), `mark_read` at 2/s (burst 10), `search_users` at 3/s (burst
+  10, sized for an incremental type-to-search UI rather than one-shot
+  searches).
 - **Hub ↔ embed is wired both ways.** The hub queues a link-preview fetch job
   on `embed.Service` when a message contains a candidate URL; conversely,
   `embedService.SetBroadcaster(hub)` lets the embed worker pool push a
@@ -92,6 +94,54 @@ flowchart TB
 Branches F and G run off `Hub.Run` entirely — they never block the loop, and
 neither can hold up the ack the sender already received for their own
 `send_message` command.
+
+## Direct messages
+
+A DM is not a separate concept at the storage/hub level: it's an ordinary
+`channels` row with `server_id NULL` and `type = 'dm'`, paired with a
+`dm_channels` row naming its two participants (`sql/schema/024_direct_messages.sql`).
+Every mechanic that already hangs off `channel_id` — messages, attachments,
+replies, mentions, unread tracking, full-text search, link previews — works
+for a DM channel with zero changes; only channel *discovery* and *membership*
+needed new code:
+
+- **`CanUserAccessChannel` and `ListChannelMemberUserIDs`** (both in
+  `internal/storage/postgresql/websocket.go`) each gained a `UNION ALL`
+  branch reading `dm_channels` instead of `server_members` — this single
+  change is what makes a DM channel get real-time delivery, typing
+  indicators, edits, and access control for free, since nothing else in the
+  hub distinguishes a DM channel's `channel_id` from a server channel's.
+- **Visibility is per-user, not per-channel**: a `dm_visibility` row
+  (`channel_id, user_id, hidden_at`) controls whether each side currently
+  sees the conversation in their DM list. `OpenDMChannel` creates the row
+  for the initiator only; the peer's row (and a re-reveal after either side
+  closes it) is created by `RevealDMChannel`, called from `sendMessage`
+  after every message saved into a DM channel — this is *also* what makes a
+  closed conversation come back on a new incoming message, and how the DM
+  list's ordering/last-message-time stays live, since the same call
+  broadcasts `dm_opened` to both participants.
+- **Pair uniqueness** (`OpenDMChannel`) is enforced by a real UNIQUE index on
+  `dm_channels(user_a, user_b)` (with `user_a < user_b` normalized at the
+  query layer), not just an application-level check — two concurrent
+  `open_dm` calls for the same new pair race on `INSERT ... ON CONFLICT DO
+  NOTHING`, and whichever loses discards the `channels` row it speculatively
+  created and returns the winner's channel instead.
+- **The shared-server requirement only gates creation**, never access to an
+  existing DM (`ErrNoSharedServer`): once a DM channel exists, either side
+  keeps access to it even if they later leave every server they had in
+  common — access is membership in the DM, checked the same way as any other
+  channel.
+- **Invariants that must never regress** (each has a test in
+  `internal/storage/postgresql/dm_test.go` or
+  `internal/service/server/hub_dm_test.go`): `GetServerChannels` and
+  server-scoped `SearchMessages` never return a DM channel/message;
+  `DeleteChannel`'s owner-check joins `channels` to `servers`, so a DM row
+  (`server_id IS NULL`) fails that join and comes back "not found" rather
+  than deletable; `join_voice_channel`'s existing "channel must be
+  `ChannelTypeVoice`" check rejects a DM channel with no DM-specific code
+  needed, since its `Type` is `"dm"`.
+
+See `docs/dm-plan.md` for the full design rationale and decision log.
 
 ## Storage layer
 
@@ -153,6 +203,20 @@ Config (`link_preview:` block, enabled by default) is documented in full in
   is muted (with an optional `muted_until` expiry), whether the user is in a
   Do Not Disturb window (`dnd_until`), and whether message previews should be
   hidden from the push payload.
+- **DM channels break the level cascade's usual fallback.** The cascade is
+  channel → server → global (`ResolveNotificationTargets` in
+  `internal/storage/postgresql/notifications.go`), but a DM channel has no
+  `server_notification_settings` row to fall back to — without a dedicated
+  branch, the resolution would skip straight to the user's *global*
+  `default_level`, so a global `'mentions'` setting would silently mute every
+  DM. Instead, a DM (`channels.server_id IS NULL`) resolves to a channel
+  override if one exists, otherwise always `'all'`, never the global
+  default. The frontend mirrors this exactly in `resolveLevel`
+  (`frontend/src/services/notifications/rules.ts`) — the two must never
+  diverge, or a background tab and a push notification would disagree about
+  whether to notify for the same message. Per-channel mute still works
+  unchanged for DMs either way, since it's keyed by `channel_id` like any
+  other channel.
 - **Aggregation**: ordinary messages are folded into a **~10-second** window
   per `(user, channel)` (`aggregationDelay` in `internal/service/push/sender.go`)
   so a burst of messages collapses into a single push instead of one per

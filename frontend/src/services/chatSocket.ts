@@ -1,5 +1,6 @@
 import type {
   ChannelUnread,
+  DMChannel,
   JoinVoiceResponse,
   LinkPreview,
   Message,
@@ -15,6 +16,7 @@ import type {
   SfuSessionClosedEvent,
   SfuSlotDecl,
   SfuTrackEvent,
+  UserSearchHit,
   VoiceChannelParticipants,
   VoiceParticipant,
   VoiceUserEvent,
@@ -142,6 +144,22 @@ type GetUnreadAck = {
   channels?: Array<{ channel_id?: number; server_id?: number; unread_count?: number }>;
 };
 
+type RawDMChannel = {
+  channel_id?: unknown;
+  peer_user_id?: unknown;
+  peer_nickname?: unknown;
+  peer_avatar_url?: unknown;
+  last_message_at?: unknown;
+};
+
+type DMListAck = {
+  channels?: RawDMChannel[];
+};
+
+type UserSearchAck = {
+  users?: Array<{ user_id?: unknown; nickname?: unknown; avatar_url?: unknown }>;
+};
+
 // ── Internal queue types ─────────────────────────────────────────────────────
 
 type PendingCommand = {
@@ -150,6 +168,10 @@ type PendingCommand = {
   resolve: (data: unknown) => void;
   reject: (error: Error) => void;
   timeoutId: number;
+  // Only set for action "open_dm" — see the dm_opened branch in onmessage
+  // for why this command's own reply must be told apart from an unrelated
+  // dm_opened broadcast arriving while it's in flight.
+  openDMPeerUserId?: number;
 };
 
 type QueuedCommand = {
@@ -173,6 +195,13 @@ type SfuSessionClosedListener = (event: SfuSessionClosedEvent) => void;
 type TypingListener = (event: TypingEvent, isTyping: boolean) => void;
 type ReconnectPhase = "lost" | "restored";
 type ReconnectListener = (phase: ReconnectPhase) => void;
+// dm_opened is dual-purpose (docs/dm-plan.md §4.5): it's both the direct
+// reply to our own open_dm command and an unsolicited broadcast whenever a
+// message reveals/re-reveals a DM channel (new conversation, or an incoming
+// message after either side closed it). Every dm_opened event reaches this
+// listener; open_dm's own promise resolves separately (see the peer-id
+// guard in the onmessage handler below).
+type DMOpenedListener = (dm: DMChannel) => void;
 
 export type MessageEmbedsEvent = {
   channel_id: number;
@@ -390,6 +419,25 @@ function toMessage(raw: unknown): Message | null {
   };
 }
 
+function toDMChannel(raw: unknown): DMChannel | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const candidate = raw as RawDMChannel;
+  if (typeof candidate.channel_id !== "number" || typeof candidate.peer_user_id !== "number") {
+    return null;
+  }
+
+  return {
+    channel_id: candidate.channel_id,
+    peer_user_id: candidate.peer_user_id,
+    peer_nickname: typeof candidate.peer_nickname === "string" ? candidate.peer_nickname : "",
+    peer_avatar_url: typeof candidate.peer_avatar_url === "string" ? candidate.peer_avatar_url : undefined,
+    last_message_at: typeof candidate.last_message_at === "string" ? candidate.last_message_at : undefined,
+  };
+}
+
 // ── ChatSocket class ─────────────────────────────────────────────────────────
 
 export class ChatSocket {
@@ -453,6 +501,8 @@ export class ChatSocket {
 
   private readonly typingListeners = new Set<TypingListener>();
 
+  private readonly dmOpenedListeners = new Set<DMOpenedListener>();
+
   private flushQueue(): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN || this.pending || !this.queue.length) {
       return;
@@ -489,6 +539,9 @@ export class ChatSocket {
         next.reject(error);
       },
       timeoutId,
+      openDMPeerUserId: next.action === "open_dm" && typeof next.payload.peer_user_id === "number"
+        ? next.payload.peer_user_id
+        : undefined,
     };
 
     this.socket.send(
@@ -725,6 +778,50 @@ export class ChatSocket {
           return;
         }
 
+        if (parsed.event === "dm_opened") {
+          const dm = toDMChannel(parsed.data);
+          if (dm) {
+            this.dmOpenedListeners.forEach((listener) => listener(dm));
+          }
+          // Only resolve our own open_dm command if this is genuinely its
+          // reply (matched by peer id — see PendingCommand.openDMPeerUserId's
+          // comment); otherwise this is an unrelated broadcast and must not
+          // touch the pending command.
+          if (dm && this.pending && this.pending.action === "open_dm" && dm.peer_user_id === this.pending.openDMPeerUserId) {
+            this.pending.resolve(parsed.data);
+            this.pending = null;
+            this.flushQueue();
+          }
+          return;
+        }
+
+        if (parsed.event === "dm_list") {
+          if (this.pending && this.pending.action === "list_dms") {
+            this.pending.resolve(parsed.data);
+            this.pending = null;
+            this.flushQueue();
+          }
+          return;
+        }
+
+        if (parsed.event === "dm_closed") {
+          if (this.pending && this.pending.action === "close_dm") {
+            this.pending.resolve(parsed.data);
+            this.pending = null;
+            this.flushQueue();
+          }
+          return;
+        }
+
+        if (parsed.event === "user_search") {
+          if (this.pending && this.pending.action === "search_users") {
+            this.pending.resolve(parsed.data);
+            this.pending = null;
+            this.flushQueue();
+          }
+          return;
+        }
+
         // sfu_offer/sfu_answer are pushed by the SERVER here (a
         // renegotiation offer, or the answer to our own initial offer) —
         // distinct from the "ack" our own sfu_offer/sfu_answer *commands*
@@ -943,6 +1040,11 @@ export class ChatSocket {
   onTyping(listener: TypingListener): () => void {
     this.typingListeners.add(listener);
     return () => this.typingListeners.delete(listener);
+  }
+
+  onDMOpened(listener: DMOpenedListener): () => void {
+    this.dmOpenedListeners.add(listener);
+    return () => this.dmOpenedListeners.delete(listener);
   }
 
   async createChannel(
@@ -1414,5 +1516,48 @@ export class ChatSocket {
       nickname: typeof payload.nickname === "string" ? payload.nickname : undefined,
       avatar_url: typeof payload.avatar_url === "string" ? payload.avatar_url : "",
     };
+  }
+
+  // Returns the existing DM channel with peerUserId, creating one if none
+  // exists yet. Rejects with an error whose message is "no_shared_server"
+  // when the two users share no server and no DM channel already exists
+  // between them (docs/dm-plan.md decision #9).
+  async openDM(peerUserId: number): Promise<DMChannel> {
+    const payload = await this.sendCommand<unknown>("open_dm", { peer_user_id: peerUserId });
+    const dm = toDMChannel(payload);
+    if (!dm) {
+      throw new Error("Invalid open_dm response");
+    }
+    return dm;
+  }
+
+  // Hides the conversation for the current user only — the peer's own
+  // visibility and the message history are untouched (decision #5).
+  async closeDM(channelId: number): Promise<void> {
+    await this.sendCommand("close_dm", { channel_id: channelId });
+  }
+
+  async listDMs(): Promise<DMChannel[]> {
+    const payload = await this.sendCommand<DMListAck>("list_dms", {});
+    if (!Array.isArray(payload?.channels)) {
+      return [];
+    }
+    return payload.channels.map((item) => toDMChannel(item)).filter((item): item is DMChannel => item !== null);
+  }
+
+  // Restricted server-side to users who share at least one server with the
+  // caller (decision #3).
+  async searchUsers(query: string, limit = 20): Promise<UserSearchHit[]> {
+    const payload = await this.sendCommand<UserSearchAck>("search_users", { query, limit });
+    if (!Array.isArray(payload?.users)) {
+      return [];
+    }
+    return payload.users
+      .filter((user) => typeof user.user_id === "number" && typeof user.nickname === "string")
+      .map((user) => ({
+        user_id: user.user_id as number,
+        nickname: user.nickname as string,
+        avatar_url: typeof user.avatar_url === "string" ? user.avatar_url : undefined,
+      }));
   }
 }

@@ -67,6 +67,13 @@ type Hub struct {
 	createChannelLimiter *middleware.TokenBucket
 	sendMessageLimiter   *middleware.TokenBucket
 	markReadLimiter      *middleware.TokenBucket
+	// searchUsersLimiter bounds search_users specifically: unlike
+	// search_messages/search_servers (which run off Run() and have no
+	// limiter of their own), this one backs an incremental "type to search"
+	// UI (docs/dm-plan.md §4.5/§5.4) that fires on every keystroke, so it
+	// needs a burst allowance well above the once-per-explicit-search
+	// limiters above.
+	searchUsersLimiter *middleware.TokenBucket
 	voiceParticipants    map[int64]map[int]struct{}
 	userVoiceChannel     map[int]int64
 	voiceStatusByUser    map[int]voiceStatus
@@ -150,6 +157,7 @@ func NewHub(storage types.ServerStorage, s3Client types.S3ClientStorage, log *sl
 		createChannelLimiter: middleware.NewTokenBucket(5.0/60.0, 5.0),
 		sendMessageLimiter:   middleware.NewTokenBucket(1.0, 1.0),
 		markReadLimiter:      middleware.NewTokenBucket(2.0, 10.0),
+		searchUsersLimiter:   middleware.NewTokenBucket(3.0, 10.0),
 		voiceParticipants:    make(map[int64]map[int]struct{}),
 		jwtSecret:            jwtSecret,
 		userVoiceChannel:     make(map[int]int64),
@@ -845,6 +853,18 @@ func (h *Hub) handleCommand(req wsCommandRequest) {
 		// mid-search can't race this goroutine into a send-on-closed-channel
 		// panic.
 		go h.searchMessages(req, ctx)
+	case types.WsActionOpenDM:
+		h.openDM(req, ctx)
+	case types.WsActionCloseDM:
+		h.closeDM(req, ctx)
+	case types.WsActionListDMs:
+		h.listDMs(req, ctx)
+	case types.WsActionSearchUsers:
+		// Same latency profile as searchMessages above (ILIKE scan, arbitrary
+		// input) but with its own rate limiter, not a fresh goroutine per call
+		// — see searchUsersLimiter's doc comment. Dispatched via go for the
+		// same don't-block-Run() reason as searchMessages.
+		go h.searchUsers(req, ctx)
 
 	default:
 		h.pushError(req.client, "unknown action")
@@ -1569,12 +1589,59 @@ func (h *Hub) sendMessage(req wsCommandRequest, ctx context.Context) {
 		msg.Content = ""
 	}
 
+	// A DM channel becomes visible to its non-initiating side (and to a side
+	// that previously closed it) exactly here, on the first and every
+	// subsequent message — see decision #5 in docs/dm-plan.md and
+	// RevealDMChannel's doc comment.
+	if isDM, err := h.storage.IsDMChannel(ctx, payload.ChannelID); err != nil {
+		h.log.Error("failed to check if channel is a dm channel", "channel_id", payload.ChannelID, sl.Err(err))
+	} else if isDM {
+		if err := h.storage.RevealDMChannel(ctx, payload.ChannelID); err != nil {
+			h.log.Error("failed to reveal dm channel", "channel_id", payload.ChannelID, sl.Err(err))
+		} else {
+			h.broadcastDMOpened(ctx, payload.ChannelID, recipientUserIDs, msg.CreatedAt)
+		}
+	}
+
 	event := &types.WsEvent{Event: types.WsEventMessage, Data: msg}
 	h.pushToUsers(recipientUserIDs, event)
 	h.enqueuePush(ctx, payload.ChannelID, recipientUserIDs, msg, replyTo)
 	h.enqueueEmbeds(payload.ChannelID, recipientUserIDs, msg)
 
 	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventAck})
+}
+
+// broadcastDMOpened sends both participants of a DM channel a dm_opened
+// event carrying their own view of it (each sees the other as the peer) —
+// the client upserts this into its DM list idempotently, which is what
+// makes an incoming message reveal a closed or brand-new conversation
+// without a reload (docs/dm-plan.md §4.5/§5.3). participantUserIDs comes
+// from ListChannelMemberUserIDs and for a DM channel is always exactly the
+// two dm_channels participants.
+func (h *Hub) broadcastDMOpened(ctx context.Context, channelID int64, participantUserIDs []int, lastMessageAt time.Time) {
+	if len(participantUserIDs) != 2 {
+		h.log.Error("dm channel does not have exactly two participants", "channel_id", channelID, "count", len(participantUserIDs))
+		return
+	}
+
+	for i, userID := range participantUserIDs {
+		peerID := participantUserIDs[1-i]
+		peer, err := h.storage.GetUserByID(ctx, peerID)
+		if err != nil || peer == nil {
+			continue
+		}
+		lm := lastMessageAt
+		h.pushToUsers([]int{userID}, &types.WsEvent{
+			Event: types.WsEventDMOpened,
+			Data: types.DMChannel{
+				ChannelID:     channelID,
+				PeerUserID:    peerID,
+				PeerNickname:  peer.Nickname,
+				PeerAvatarURL: utils.AvatarURLFromKey(peer.AvatarKey, h.s3Host),
+				LastMessageAt: &lm,
+			},
+		})
+	}
 }
 
 // enqueueEmbeds отдаёт сообщение конвейеру превью. Как и push, это
@@ -2563,6 +2630,152 @@ func (h *Hub) searchServers(req wsCommandRequest, ctx context.Context) {
 	h.pushEvent(req.client, &types.WsEvent{
 		Event: types.WsEventAck,
 		Data:  types.WsSearchServersResponse{Servers: servers},
+	})
+}
+
+// openDM implements types.WsActionOpenDM: it returns the existing DM
+// channel for (userID, peer_user_id), creating one if none exists yet, and
+// notifies only the initiator — the peer only learns about the
+// conversation once the first message actually arrives (decision #5 in
+// docs/dm-plan.md; see the reveal step in sendMessage).
+func (h *Hub) openDM(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsOpenDMRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid open_dm payload")
+		return
+	}
+	if payload.PeerUserID <= 0 || payload.PeerUserID == req.client.UserID {
+		h.pushError(req.client, "peer_user_id must reference a different user")
+		return
+	}
+
+	peer, err := h.storage.GetUserByID(ctx, payload.PeerUserID)
+	if err != nil {
+		h.pushError(req.client, "failed to resolve peer user")
+		return
+	}
+	if peer == nil || peer.IsDeleted {
+		h.pushError(req.client, "user not found")
+		return
+	}
+
+	channelID, _, err := h.storage.OpenDMChannel(ctx, req.client.UserID, payload.PeerUserID)
+	if err != nil {
+		if errors.Is(err, types.ErrNoSharedServer) {
+			h.pushError(req.client, "no_shared_server")
+			return
+		}
+		h.pushError(req.client, "failed to open dm")
+		return
+	}
+
+	// Looked up via ListDMChannels rather than built from payload/peer alone
+	// so a reopen of an existing conversation carries its real
+	// LastMessageAt instead of nil.
+	channels, err := h.storage.ListDMChannels(ctx, req.client.UserID, h.s3Host)
+	if err != nil {
+		h.pushError(req.client, "failed to load dm channel")
+		return
+	}
+	dm := types.DMChannel{
+		ChannelID:     channelID,
+		PeerUserID:    payload.PeerUserID,
+		PeerNickname:  peer.Nickname,
+		PeerAvatarURL: utils.AvatarURLFromKey(peer.AvatarKey, h.s3Host),
+	}
+	for _, c := range channels {
+		if c.ChannelID == channelID {
+			dm = c
+			break
+		}
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{Event: types.WsEventDMOpened, Data: dm})
+}
+
+// closeDM implements types.WsActionCloseDM: it hides the conversation for
+// the requester only (decision #5) — the peer's own visibility, and the
+// message history, are untouched.
+func (h *Hub) closeDM(req wsCommandRequest, ctx context.Context) {
+	var payload types.WsCloseDMRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid close_dm payload")
+		return
+	}
+	if payload.ChannelID <= 0 {
+		h.pushError(req.client, "channel_id is required")
+		return
+	}
+
+	canAccess, err := h.storage.CanUserAccessChannel(ctx, req.client.UserID, payload.ChannelID)
+	if err != nil {
+		h.pushError(req.client, "failed to check channel access")
+		return
+	}
+	if !canAccess {
+		h.pushError(req.client, "access denied")
+		return
+	}
+
+	if err := h.storage.HideDMChannel(ctx, req.client.UserID, payload.ChannelID); err != nil {
+		h.pushError(req.client, "failed to close dm")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventDMClosed,
+		Data:  types.WsCloseDMResponse{ChannelID: payload.ChannelID},
+	})
+}
+
+// listDMs implements types.WsActionListDMs. Online status is deliberately
+// left out of the response — the client already gets that from
+// get_users_online (decision #10).
+func (h *Hub) listDMs(req wsCommandRequest, ctx context.Context) {
+	channels, err := h.storage.ListDMChannels(ctx, req.client.UserID, h.s3Host)
+	if err != nil {
+		h.pushError(req.client, "failed to list dms")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventDMList,
+		Data:  types.WsListDMsResponse{Channels: channels},
+	})
+}
+
+// searchUsers implements types.WsActionSearchUsers, restricted to users who
+// share at least one server with the requester (decision #3).
+func (h *Hub) searchUsers(req wsCommandRequest, ctx context.Context) {
+	if !h.searchUsersLimiter.Allow(strconv.Itoa(req.client.UserID)) {
+		h.pushError(req.client, "rate limit exceeded for search_users")
+		return
+	}
+
+	var payload types.WsSearchUsersRequest
+	if err := json.Unmarshal(req.command.Payload, &payload); err != nil {
+		h.pushError(req.client, "invalid search_users payload")
+		return
+	}
+
+	payload.Query = strings.TrimSpace(payload.Query)
+	if payload.Query == "" {
+		h.pushEvent(req.client, &types.WsEvent{
+			Event: types.WsEventUserSearch,
+			Data:  types.WsSearchUsersResponse{Users: []types.UserSearchHit{}},
+		})
+		return
+	}
+
+	users, err := h.storage.SearchUsers(ctx, req.client.UserID, payload.Query, payload.Limit, h.s3Host)
+	if err != nil {
+		h.pushError(req.client, "failed to search users")
+		return
+	}
+
+	h.pushEvent(req.client, &types.WsEvent{
+		Event: types.WsEventUserSearch,
+		Data:  types.WsSearchUsersResponse{Users: users},
 	})
 }
 
