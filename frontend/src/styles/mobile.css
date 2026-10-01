@@ -663,7 +663,7 @@
         flex: 1 0 100%;
     }
 
-    .message-attach-btn { order: 10; }
+    .message-form .message-attach-btn { order: 10; }
 
     .message-input-wrap {
         order: 11;
@@ -672,17 +672,17 @@
         width: auto;
     }
 
-    .message-voice-btn,
-    .message-send-btn { order: 12; }
+    .message-form .message-voice-btn,
+    .message-form .message-send-btn { order: 12; }
 
     .message-form:not(.has-content) .message-send-btn,
     .message-form.has-content .message-voice-btn {
         display: none;
     }
 
-    .message-attach-btn,
-    .message-voice-btn,
-    .message-send-btn {
+    .message-form .message-attach-btn,
+    .message-form .message-voice-btn,
+    .message-form .message-send-btn {
         flex: 0 0 var(--tap-min);
         width: var(--tap-min);
         height: var(--tap-min);
@@ -693,7 +693,7 @@
         border-radius: 50%;
     }
 
-    .message-send-btn svg { width: 22px; height: 22px; }
+    .message-form .message-send-btn svg { width: 22px; height: 22px; }
 
     textarea.message-input {
         min-height: var(--tap-min);
@@ -708,5 +708,48 @@
 
     .jump-latest-btn {
         z-index: var(--z-sticky);
+    }
+}
+
+/* ---- Image viewer: allow native pinch-zoom ---------------------- */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    .image-viewer-image {
+        touch-action: pinch-zoom;
+        max-width: 100vw;
+        max-height: 100dvh;
+    }
+}
+
+/* ================================================================
+   STAGE 4 — voice on phones
+   ================================================================ */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    /* Active call lives in the mini bar / call screen, not in the chat column */
+    .voice-panel.voice-panel-incall {
+        display: none;
+    }
+
+    /* Not connected yet: a single big "Join" card */
+    .voice-panel:not(.voice-panel-incall) {
+        margin: 0 0 8px;
+        padding: 12px;
+    }
+
+    .voice-panel:not(.voice-panel-incall) .voice-controls {
+        justify-content: center;
+    }
+
+    .voice-panel:not(.voice-panel-incall) .message-send-btn {
+        width: 100%;
+        height: 52px;
+        border-radius: var(--radius-lg);
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    .voice-volume-popover {
+        left: 0;
+        right: 0;
+        max-width: 100%;
     }
 }

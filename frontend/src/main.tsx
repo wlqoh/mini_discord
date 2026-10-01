@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './styles/sheet.css'
+import './styles/call.css'
 import App from './App.tsx'
 import './styles/mobile.css' // must stay last: mobile overrides win the cascade
 import { LayoutDebugOverlay } from './components/dev/LayoutDebugOverlay.tsx'

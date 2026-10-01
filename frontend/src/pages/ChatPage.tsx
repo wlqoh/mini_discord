@@ -9,6 +9,9 @@ import {useLongPress} from "../hooks/useLongPress";
 import type {MenuPoint} from "../hooks/useNotificationContextMenu";
 import Sheet from "../components/Sheet.tsx";
 import OnlineUsersList from "../components/OnlineUsersList.tsx";
+import VolumeSlider from "../components/VolumeSlider.tsx";
+import VoiceMiniBar from "../components/VoiceMiniBar.tsx";
+import CallScreen from "../components/CallScreen.tsx";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
 import type { ImageViewerState, ViewerImage } from "../components/ImageViewerModal.tsx";
@@ -117,6 +120,8 @@ export default function ChatPage() {
     const isTouch = useIsTouch();
     const isMobileDevice = isPhone && isTouch;
     const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+    const [isCallScreenOpen, setIsCallScreenOpen] = useState(false);
+    const callAutoOpenedRef = useRef(false);
     const layoutRef = useRef<HTMLDivElement | null>(null);
     const autoOpenedDrawerRef = useRef(false);
 
@@ -602,6 +607,143 @@ export default function ChatPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- firstId/lastId are read fresh from activeMessages each run; length is the correct change signal
     }, [activeMessages.length, servers.selectedChannelId]);
 
+    const inCallControls = (
+        <>
+            <button className="message-send-btn" onClick={() => void voice.handleLeaveVoice()}>
+                Leave
+            </button>
+            <button className="micam-btn" onClick={voice.toggleMicrophone} disabled={voice.isDeafened}>
+                {voice.isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
+                    <MicOff size={18} aria-hidden="true" color="#B80606"/>}
+            </button>
+            <button
+                className="micam-btn"
+                onClick={() => void voice.toggleCamera()}
+                disabled={voice.isCameraStarting || voice.isSwitchingCamera || !voice.localStream}
+                title={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
+                aria-label={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
+            >
+                {voice.isCameraStarting ? <Loader2 size={18} className="micam-spinner" aria-hidden="true"/>
+                    : voice.isCameraEnabled ? <Camera size={18} aria-hidden="true"/>
+                    : <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
+            </button>
+            {isMobileDevice ? (
+                <button
+                    className="micam-btn"
+                    onClick={() => void voice.switchCameraFacingMode()}
+                    disabled={voice.isSwitchingCamera || voice.isCameraStarting || !voice.isCameraEnabled}
+                    title="Switch camera"
+                    aria-label="Switch camera"
+                >
+                    <RefreshCw size={18} aria-hidden="true"/>
+                </button>
+            ) : (
+                <button
+                    className="micam-btn"
+                    onClick={() => void voice.toggleScreenShare()}
+                    disabled={!voice.localStream || voice.isTogglingScreenShare || voice.isSwitchingCamera || voice.isCameraStarting}
+                    title={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                    aria-label={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
+                >
+                    {voice.isScreenSharing ? <MonitorOff size={18} aria-hidden="true"/> :
+                        <Monitor size={18} aria-hidden="true"/>}
+                </button>
+            )}
+            <button className="micam-btn" onClick={voice.toggleDeafen}>
+                {voice.isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
+                    <Volume2 size={18} aria-hidden="true"/>}
+            </button>
+            <button
+                className="micam-btn"
+                onClick={voice.toggleNoiseSuppression}
+                title={`Noise suppression: ${voice.noiseSuppressionMode}`}
+                aria-label={`Noise suppression: ${voice.noiseSuppressionMode}`}
+            >
+                <AudioLines
+                    size={18}
+                    aria-hidden="true"
+                    color={voice.noiseSuppressionMode === "off" ? "#B80606" : voice.noiseSuppressionMode === "browser" ? "#8a8f98" : undefined}
+                />
+            </button>
+            {voice.connectionQuality ? (
+                <ConnectionQualityIcon
+                    quality={voice.connectionQuality}
+                    size={16}
+                    className="voice-quality-badge"
+                />
+            ) : null}
+            {isVoiceChannel && !isInSelectedVoiceChannel && (
+                <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
+                    Switch
+                </button>
+            )}
+        </>
+    );
+
+    function renderVideoGrid(interactive: boolean) {
+        return (
+            <div className="video-grid">
+                {(voice.localScreenStream || voice.localStream) && (
+                    <VideoTile
+                        stream={voice.localScreenStream ?? voice.localStream}
+                        label={voice.localScreenStream ? "You (screen)" : "You"}
+                        muted
+                        micEnabled={voice.isMicEnabled}
+                        deafened={voice.isDeafened}
+                    />
+                )}
+                {voice.voiceParticipantsInChannel
+                    .filter((p) => p.user_id !== currentUserId)
+                    .map((participant) => {
+                        const remoteItem = voice.remoteStreams.find((r) => r.userId === participant.user_id);
+                        const stream = remoteItem?.stream ?? null;
+                        const label = remoteItem?.label ?? getParticipantDisplayName(participant);
+                        const userVolume = voice.voiceVolumeByUserId[participant.user_id] ?? 1;
+                        const effectiveVolume = voice.isDeafened ? 0 : userVolume;
+                        return (
+                            <div
+                                key={participant.user_id}
+                                className="video-tile-hit"
+                                onClick={interactive ? () => voice.setActiveVolumeUserId(participant.user_id) : undefined}
+                            >
+                                <VideoTile
+                                    stream={stream}
+                                    label={label}
+                                    muted={voice.isDeafened}
+                                    volume={effectiveVolume}
+                                    micEnabled={participant.mic_enabled}
+                                    deafened={participant.deafened}
+                                    quality={voice.qualityByUserId[participant.user_id] ?? null}
+                                    isDetached={voice.detachedUserIds.has(participant.user_id)}
+                                    isSpeaking={voice.activeSpeakerUserIds.has(participant.user_id)}
+                                />
+                            </div>
+                        );
+                    })}
+            </div>
+        );
+    }
+
+    const voiceChannelName = Object.values(servers.channelsByServer).flat().find((c) => c.id === voice.voiceChannelId)?.name ?? "Голосовой канал";
+    const hasCallVideo = voice.isCameraEnabled || voice.remoteStreams.some((r) => (r.stream?.getVideoTracks().length ?? 0) > 0);
+    const activeVolumeParticipant = voice.activeVolumeUserId !== null
+        ? voice.voiceParticipantsInChannel.find((p) => p.user_id === voice.activeVolumeUserId) ?? null
+        : null;
+
+    useBackDismiss(isInVoiceCall && isCallScreenOpen, () => setIsCallScreenOpen(false), isPhone);
+
+    // Leaving the call (or the phone layout) closes the full-screen call UI; a new call with
+    // video opens it once.
+    useEffect(() => {
+        if (!isInVoiceCall) {
+            setIsCallScreenOpen(false);
+            callAutoOpenedRef.current = false;
+        } else if (isPhone && hasCallVideo && !callAutoOpenedRef.current) {
+            callAutoOpenedRef.current = true;
+            setIsCallScreenOpen(true);
+        }
+    }, [isInVoiceCall, isPhone, hasCallVideo]);
+
     useVisualViewport(isPhone);
     useBackDismiss(isChannelsDrawerOpen, () => setIsChannelsDrawerOpen(false), isPhone);
     useSwipe(layoutRef, {
@@ -911,33 +1053,12 @@ export default function ChatPage() {
                                                     {participant.deafened ? <VolumeOff size={14} aria-hidden="true" /> : null}
                                                 </span>
                                             </div>
-                                            {voice.activeVolumeUserId === participant.user_id && (
+                                            {!isPhone && voice.activeVolumeUserId === participant.user_id && (
                                                 <div className="voice-volume-popover" onClick={(e) => e.stopPropagation()}>
-                                                    <div className="voice-volume-slider-wrap">
-                                                        <input
-                                                            type="range"
-                                                            min="0"
-                                                            max="2"
-                                                            step="0.01"
-                                                            value={voice.voiceVolumeByUserId[participant.user_id] ?? 1}
-                                                            onChange={(e) => {
-                                                                const raw = Number(e.target.value);
-                                                                const next = Number.isFinite(raw) ? Math.max(0, Math.min(2, raw)) : 1;
-                                                                voice.setVoiceVolumeByUserId((prev) => ({
-                                                                    ...prev,
-                                                                    [participant.user_id]: next,
-                                                                }));
-                                                            }}
-                                                        />
-                                                        <div className="voice-volume-ticks" aria-hidden="true">
-                                                            <span>0%</span>
-                                                            <span>100%</span>
-                                                            <span>200%</span>
-                                                        </div>
-                                                    </div>
-                                                    <span className="voice-volume-value">
-                                                        {Math.round((voice.voiceVolumeByUserId[participant.user_id] ?? 1) * 100)}%
-                                                    </span>
+                                                    <VolumeSlider
+                                                        value={voice.voiceVolumeByUserId[participant.user_id] ?? 1}
+                                                        onChange={(next) => voice.setVoiceVolumeByUserId((prev) => ({...prev, [participant.user_id]: next}))}
+                                                    />
                                                 </div>
                                             )}
                                         </li>
@@ -1046,79 +1167,10 @@ export default function ChatPage() {
                         </div>
                     </div>
                     {(isInVoiceCall || isVoiceChannel) && (
-                        <div className="voice-panel">
+                        <div className={`voice-panel${isInVoiceCall ? " voice-panel-incall" : ""}`}>
                             <div className="voice-controls">
                                 {isInVoiceCall ? (
-                                    <>
-                                        <button className="message-send-btn" onClick={() => void voice.handleLeaveVoice()}>
-                                            Leave
-                                        </button>
-                                        <button className="micam-btn" onClick={voice.toggleMicrophone} disabled={voice.isDeafened}>
-                                            {voice.isMicEnabled ? <Mic size={18} aria-hidden="true"/> :
-                                                <MicOff size={18} aria-hidden="true" color="#B80606"/>}
-                                        </button>
-                                        <button
-                                            className="micam-btn"
-                                            onClick={() => void voice.toggleCamera()}
-                                            disabled={voice.isCameraStarting || voice.isSwitchingCamera || !voice.localStream}
-                                            title={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
-                                            aria-label={voice.isCameraEnabled ? "Turn camera off" : "Turn camera on"}
-                                        >
-                                            {voice.isCameraStarting ? <Loader2 size={18} className="micam-spinner" aria-hidden="true"/>
-                                                : voice.isCameraEnabled ? <Camera size={18} aria-hidden="true"/>
-                                                : <CameraOff size={18} aria-hidden="true" color="#B80606"/>}
-                                        </button>
-                                        {isMobileDevice ? (
-                                            <button
-                                                className="micam-btn"
-                                                onClick={() => void voice.switchCameraFacingMode()}
-                                                disabled={voice.isSwitchingCamera || voice.isCameraStarting || !voice.isCameraEnabled}
-                                                title="Switch camera"
-                                                aria-label="Switch camera"
-                                            >
-                                                <RefreshCw size={18} aria-hidden="true"/>
-                                            </button>
-                                        ) : (
-                                            <button
-                                                className="micam-btn"
-                                                onClick={() => void voice.toggleScreenShare()}
-                                                disabled={!voice.localStream || voice.isTogglingScreenShare || voice.isSwitchingCamera || voice.isCameraStarting}
-                                                title={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
-                                                aria-label={voice.isScreenSharing ? "Stop screen sharing" : "Share screen"}
-                                            >
-                                                {voice.isScreenSharing ? <MonitorOff size={18} aria-hidden="true"/> :
-                                                    <Monitor size={18} aria-hidden="true"/>}
-                                            </button>
-                                        )}
-                                        <button className="micam-btn" onClick={voice.toggleDeafen}>
-                                            {voice.isDeafened ? <VolumeOff size={18} aria-hidden="true" color="#B80606"/> :
-                                                <Volume2 size={18} aria-hidden="true"/>}
-                                        </button>
-                                        <button
-                                            className="micam-btn"
-                                            onClick={voice.toggleNoiseSuppression}
-                                            title={`Noise suppression: ${voice.noiseSuppressionMode}`}
-                                            aria-label={`Noise suppression: ${voice.noiseSuppressionMode}`}
-                                        >
-                                            <AudioLines
-                                                size={18}
-                                                aria-hidden="true"
-                                                color={voice.noiseSuppressionMode === "off" ? "#B80606" : voice.noiseSuppressionMode === "browser" ? "#8a8f98" : undefined}
-                                            />
-                                        </button>
-                                        {voice.connectionQuality ? (
-                                            <ConnectionQualityIcon
-                                                quality={voice.connectionQuality}
-                                                size={16}
-                                                className="voice-quality-badge"
-                                            />
-                                        ) : null}
-                                        {isVoiceChannel && !isInSelectedVoiceChannel && (
-                                            <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
-                                                Switch
-                                            </button>
-                                        )}
-                                    </>
+                                    inCallControls
                                 ) : (
                                     <button className="message-send-btn" onClick={() => void voice.handleJoinVoice(servers.selectedChannelId)}>
                                         Join
@@ -1142,42 +1194,7 @@ export default function ChatPage() {
                                     )}
                                 </div>
                             )}
-                            {isInVoiceCall && (
-                            <div className="video-grid">
-                                {(voice.localScreenStream || voice.localStream) && (
-                                    <VideoTile
-                                        stream={voice.localScreenStream ?? voice.localStream}
-                                        label={voice.localScreenStream ? "You (screen)" : "You"}
-                                        muted
-                                        micEnabled={voice.isMicEnabled}
-                                        deafened={voice.isDeafened}
-                                    />
-                                )}
-                                {voice.voiceParticipantsInChannel
-                                    .filter((p) => p.user_id !== currentUserId)
-                                    .map((participant) => {
-                                        const remoteItem = voice.remoteStreams.find((r) => r.userId === participant.user_id);
-                                        const stream = remoteItem?.stream ?? null;
-                                        const label = remoteItem?.label ?? getParticipantDisplayName(participant);
-                                        const userVolume = voice.voiceVolumeByUserId[participant.user_id] ?? 1;
-                                        const effectiveVolume = voice.isDeafened ? 0 : userVolume;
-                                        return (
-                                            <VideoTile
-                                                key={participant.user_id}
-                                                stream={stream}
-                                                label={label}
-                                                muted={voice.isDeafened}
-                                                volume={effectiveVolume}
-                                                micEnabled={participant.mic_enabled}
-                                                deafened={participant.deafened}
-                                                quality={voice.qualityByUserId[participant.user_id] ?? null}
-                                                isDetached={voice.detachedUserIds.has(participant.user_id)}
-                                                isSpeaking={voice.activeSpeakerUserIds.has(participant.user_id)}
-                                            />
-                                        );
-                                    })}
-                            </div>
-                            )}
+                            {isInVoiceCall && !isPhone ? renderVideoGrid(false) : null}
                         </div>
                     )}
                     {error ? <div className="messages-empty">{error}</div> : null}
@@ -1189,6 +1206,17 @@ export default function ChatPage() {
                     onClick={() => void handleJumpToLatest()}
                 />
                 </div>
+                {isPhone && isInVoiceCall && !isCallScreenOpen ? (
+                    <VoiceMiniBar
+                        channelName={voiceChannelName}
+                        quality={voice.connectionQuality}
+                        isMicEnabled={voice.isMicEnabled}
+                        isDeafened={voice.isDeafened}
+                        onToggleMic={voice.toggleMicrophone}
+                        onLeave={() => void voice.handleLeaveVoice()}
+                        onExpand={() => setIsCallScreenOpen(true)}
+                    />
+                ) : null}
                 {shouldHideMessageInput ? null : (
                     <>
                         <TypingIndicator
@@ -1238,8 +1266,7 @@ export default function ChatPage() {
             />
 
             {profile.isProfileModalOpen && (
-                <div className={`modal-overlay ${closingModal === "profile" ? "closing" : ""}`} onClick={() => closeModalWithAnim("profile", () => profile.setIsProfileModalOpen(false))}>
-                    <div className="modal-card profile-modal-card" onClick={(e) => e.stopPropagation()}>
+                <Sheet open onClose={() => closeModalWithAnim("profile", () => profile.setIsProfileModalOpen(false))} isClosing={closingModal === "profile"} title="Profile" className="profile-modal-card">
                         <h3 className="modal-title">Profile</h3>
                         <div className="profile-modal-list">
                             {profile.isProfileLoading ? (
@@ -1470,8 +1497,7 @@ export default function ChatPage() {
                                 Close
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Sheet>
             )}
 
             {imageViewer && (
@@ -1484,8 +1510,7 @@ export default function ChatPage() {
             )}
 
             {servers.isCreateServerModalOpen && (
-                <div className={`modal-overlay ${closingModal === "createServer" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createServer", () => servers.setIsCreateServerModalOpen(false))}>
-                    <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <Sheet open onClose={() => closeModalWithAnim("createServer", () => servers.setIsCreateServerModalOpen(false))} isClosing={closingModal === "createServer"} title="Create server">
                         <h3 className="modal-title">Create server</h3>
 
                         <input
@@ -1514,13 +1539,11 @@ export default function ChatPage() {
                                 {servers.isCreatingServer ? "Creating..." : "Create"}
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Sheet>
             )}
 
             {servers.isJoinModalOpen && (
-                <div className={`modal-overlay ${closingModal === "join" ? "closing" : ""}`} onClick={() => closeModalWithAnim("join", () => servers.setIsJoinModalOpen(false))}>
-                    <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <Sheet open onClose={() => closeModalWithAnim("join", () => servers.setIsJoinModalOpen(false))} isClosing={closingModal === "join"} title="Join server">
                         <h3 className="modal-title">Join server</h3>
 
                         <input
@@ -1560,8 +1583,7 @@ export default function ChatPage() {
                                 Close
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Sheet>
             )}
 
             {isUserSearchModalOpen && (
@@ -1579,8 +1601,7 @@ export default function ChatPage() {
             )}
 
             {servers.isCreateChannelModalOpen && (
-                <div className={`modal-overlay ${closingModal === "createChannel" ? "closing" : ""}`} onClick={() => closeModalWithAnim("createChannel", () => servers.setIsCreateChannelModalOpen(false))}>
-                    <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+                <Sheet open onClose={() => closeModalWithAnim("createChannel", () => servers.setIsCreateChannelModalOpen(false))} isClosing={closingModal === "createChannel"} title="Create channel">
                         <h3 className="modal-title">Create channel</h3>
 
                         <input
@@ -1617,8 +1638,7 @@ export default function ChatPage() {
                                 {servers.isCreatingChannel ? "Creating..." : "Create"}
                             </button>
                         </div>
-                    </div>
-                </div>
+                </Sheet>
             )}
 
             {isNotificationSettingsOpen && (
@@ -1645,6 +1665,44 @@ export default function ChatPage() {
                 />
             )}
 
+            {isPhone && isInVoiceCall ? (
+                <CallScreen
+                    open={isCallScreenOpen}
+                    channelName={voiceChannelName}
+                    quality={voice.connectionQuality}
+                    onCollapse={() => setIsCallScreenOpen(false)}
+                    grid={renderVideoGrid(true)}
+                    controls={
+                        <>
+                            {inCallControls}
+                            <button className="micam-btn" type="button" onClick={() => setIsVoiceSettingsOpen(true)} aria-label="Voice settings">
+                                <Settings size={18} aria-hidden="true"/>
+                            </button>
+                        </>
+                    }
+                    statusBanner={voice.callStatus !== "connected" ? (
+                        <div className={`voice-call-status-banner${voice.callStatus === "lost" ? " voice-call-status-banner-lost" : ""}`}>
+                            <span className="voice-call-status-banner-text">
+                                {voice.callStatus === "reconnecting" ? "Reconnecting to the call…" : "Connection to the call was lost."}
+                            </span>
+                        </div>
+                    ) : null}
+                />
+            ) : null}
+            <Sheet
+                open={isPhone && activeVolumeParticipant !== null}
+                onClose={() => voice.setActiveVolumeUserId(null)}
+                title={activeVolumeParticipant ? `Громкость: ${getParticipantDisplayName(activeVolumeParticipant)}` : undefined}
+            >
+                {activeVolumeParticipant ? (
+                    <div className="voice-volume-popover voice-volume-sheet">
+                        <VolumeSlider
+                            value={voice.voiceVolumeByUserId[activeVolumeParticipant.user_id] ?? 1}
+                            onChange={(next) => voice.setVoiceVolumeByUserId((prev) => ({...prev, [activeVolumeParticipant.user_id]: next}))}
+                        />
+                    </div>
+                ) : null}
+            </Sheet>
             {isMoreMenuOpen && (
                 <ContextMenu
                     x={0}

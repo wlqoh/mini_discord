@@ -38,7 +38,8 @@ export default function Sheet({ open, onClose, title, variant = "modal", anchor,
     useEffect(() => {
         if (!open) return;
         const previous = document.activeElement as HTMLElement | null;
-        panelRef.current?.focus({ preventScroll: true });
+        const panel = panelRef.current;
+        if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") onClose();
         };

@@ -1,0 +1,250 @@
+/* ================================================================
+   PHONE CALL UI — mini bar + full-screen call (see CallScreen.tsx)
+   ================================================================ */
+.voice-minibar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 48px;
+    padding: 0 8px;
+    padding-left: max(8px, var(--safe-left));
+    padding-right: max(8px, var(--safe-right));
+    background: rgb(20, 38, 28);
+    border-top: 1px solid rgba(80, 200, 120, 0.35);
+    color: var(--text-1);
+    position: relative;
+    z-index: var(--z-callbar);
+}
+
+[data-theme="light"] .voice-minibar {
+    background: rgb(224, 244, 232);
+}
+
+.voice-minibar-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 48px;
+    padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+}
+
+.voice-minibar-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #46c37b;
+    flex-shrink: 0;
+}
+
+.voice-minibar-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.voice-minibar-time {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
+    font-weight: 500;
+}
+
+.voice-minibar-btn {
+    flex: 0 0 var(--tap-min);
+    width: var(--tap-min);
+    height: var(--tap-min);
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-1);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.voice-minibar-btn.leave {
+    background: #d33b3b;
+    color: #fff;
+}
+
+.voice-minibar-btn:disabled { opacity: 0.4; }
+
+html.keyboard-open .voice-minibar { display: none; }
+
+/* ---- Full-screen call --------------------------------------- */
+.call-screen {
+    display: none;
+}
+
+.call-screen.open {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: 0;
+    height: var(--app-height);
+    z-index: var(--z-screen);
+    background: rgb(8, 9, 12);
+    color: var(--text-1);
+    padding-top: var(--safe-top);
+}
+
+[data-theme="light"] .call-screen.open {
+    background: rgb(240, 241, 245);
+}
+
+.call-screen[hidden] { display: none; }
+
+.call-screen-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--header-h);
+    padding: 0 8px;
+    padding-left: max(8px, var(--safe-left));
+    padding-right: max(12px, var(--safe-right));
+}
+
+.call-screen-collapse {
+    width: var(--tap-min);
+    height: var(--tap-min);
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-1);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.call-screen-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 16px;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.call-screen-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px;
+    padding-left: max(8px, var(--safe-left));
+    padding-right: max(8px, var(--safe-right));
+}
+
+.call-screen-grid .video-grid {
+    margin: 0;
+    min-height: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: minmax(140px, 1fr);
+    gap: 8px;
+}
+
+/* 1 participant fills the stage; 2 stack in a column */
+.call-screen-grid .video-grid:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
+.call-screen-grid .video-grid:has(> :nth-child(2):last-child) { grid-template-columns: minmax(0, 1fr); }
+
+.call-screen-grid .video-tile-hit,
+.call-screen-grid .video-grid > .video-tile {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+}
+
+.call-screen-grid .video-tile-hit > * { flex: 1 1 auto; min-width: 0; }
+
+.call-controls {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    padding: 12px 12px;
+    padding-bottom: max(12px, var(--safe-bottom));
+    background: rgba(255, 255, 255, 0.04);
+    border-top: 1px solid var(--glass-border);
+}
+
+.call-controls .micam-btn,
+.call-controls .message-send-btn {
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+    min-height: 56px;
+    padding: 0;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.call-controls .message-send-btn {
+    order: 99;
+    background: #d33b3b;
+    border-color: #d33b3b;
+    color: #fff;
+    font-size: 0; /* "Leave" label hidden; red circle is the affordance */
+    position: relative;
+}
+
+.call-controls .message-send-btn::before {
+    content: "";
+    width: 22px;
+    height: 22px;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91'/><line x1='22' y1='2' x2='2' y2='22'/></svg>") center / contain no-repeat;
+    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91'/><line x1='22' y1='2' x2='2' y2='22'/></svg>") center / contain no-repeat;
+}
+
+.voice-volume-sheet {
+    position: static;
+    width: 100%;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 8px 0 16px;
+}
+
+/* Landscape phones: video as a horizontal strip, controls in a side column */
+@media (orientation: landscape) and (max-height: 500px) {
+    .call-screen.open { flex-direction: row; flex-wrap: wrap; }
+    .call-screen-header { flex: 1 0 100%; min-height: 40px; }
+    .call-screen-grid { flex: 1 1 0; }
+    .call-screen-grid .video-grid {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        min-height: 0;
+        height: 100%;
+    }
+    .call-screen-grid .video-tile-hit,
+    .call-screen-grid .video-grid > .video-tile { flex: 0 0 min(60vw, 280px); scroll-snap-align: start; }
+    .call-controls {
+        flex: 0 0 auto;
+        flex-direction: column;
+        flex-wrap: nowrap;
+        overflow-y: auto;
+        border-top: none;
+        border-left: 1px solid var(--glass-border);
+        padding-right: max(12px, var(--safe-right));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .call-screen.open { animation: none; }
+}

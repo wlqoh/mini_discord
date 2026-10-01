@@ -1,3 +1,4 @@
+import Sheet from "./Sheet.tsx";
 import { useState } from "react";
 import type { NoiseSuppressionMode } from "../services/voiceClient.ts";
 import { loadNoiseSuppressionMode } from "../services/voiceSettings.ts";
@@ -27,8 +28,7 @@ export default function VoiceSettingsModal({ onClose, effectiveMode, onSetMode }
     }
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <Sheet open onClose={onClose} title="Voice">
                 <h3 className="modal-title">Voice</h3>
 
                 <div className="notification-settings-section">
@@ -60,7 +60,6 @@ export default function VoiceSettingsModal({ onClose, effectiveMode, onSetMode }
                 <div className="modal-actions">
                     <button className="modal-btn modal-btn-primary" type="button" onClick={onClose}>Close</button>
                 </div>
-            </div>
-        </div>
+        </Sheet>
     );
 }
