@@ -1,8 +1,10 @@
 import { useCallback, useState } from "react";
-import type React from "react";
 import type { NotificationLevel, NotificationSettings } from "../types/notifications.ts";
 import type { ContextMenuItem } from "../components/ContextMenu.tsx";
 import type { ScopedSettingPatch } from "../services/notificationsApi.ts";
+
+/** Minimal event shape so both right-click and touch long-press can open the menus. */
+export type MenuPoint = { clientX: number; clientY: number; preventDefault?: () => void };
 
 type ContextMenuState = { x: number; y: number; items: ContextMenuItem[] } | null;
 
@@ -56,8 +58,8 @@ export function useNotificationContextMenu(
     const closeMenu = useCallback(() => setMenu(null), []);
 
     const openServerMenu = useCallback(
-        (e: React.MouseEvent, serverId: number) => {
-            e.preventDefault();
+        (e: MenuPoint, serverId: number) => {
+            e.preventDefault?.();
             const override = settings?.servers.find((s) => s.server_id === serverId);
             const items = buildLevelItems(override, (patch) => void updateServer(serverId, patch));
             setMenu({ x: e.clientX, y: e.clientY, items });
@@ -66,8 +68,8 @@ export function useNotificationContextMenu(
     );
 
     const openChannelMenu = useCallback(
-        (e: React.MouseEvent, channelId: number, extraItems?: ContextMenuItem[]) => {
-            e.preventDefault();
+        (e: MenuPoint, channelId: number, extraItems?: ContextMenuItem[]) => {
+            e.preventDefault?.();
             const override = settings?.channels.find((c) => c.channel_id === channelId);
             const items = buildLevelItems(override, (patch) => void updateChannel(channelId, patch));
             setMenu({

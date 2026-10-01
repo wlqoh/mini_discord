@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef } from "react";
 import type React from "react";
 import { Check } from "lucide-react";
+import Sheet from "./Sheet.tsx";
+import { useIsMobile } from "../hooks/useIsMobile.ts";
 
 export type ContextMenuItem =
     | {
@@ -19,13 +21,16 @@ type Props = {
     y: number;
     items: ContextMenuItem[];
     onClose: () => void;
+    /** Heading shown on the phone bottom sheet. */
+    title?: string;
 };
 
 const MENU_WIDTH = 230;
 const ITEM_HEIGHT = 34;
 
 /** Generic right-click / "more actions" menu — positions itself at (x, y) and clamps to the viewport. */
-export default function ContextMenu({ x, y, items, onClose }: Props) {
+export default function ContextMenu({ x, y, items, onClose, title }: Props) {
+    const isMobile = useIsMobile();
     const menuRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
@@ -49,6 +54,37 @@ export default function ContextMenu({ x, y, items, onClose }: Props) {
         const top = Math.max(8, Math.min(y, window.innerHeight - estimatedHeight - 8));
         return { left, top, width: MENU_WIDTH };
     }, [x, y, items.length]);
+
+    if (isMobile) {
+        return (
+            <Sheet open onClose={onClose} title={title}>
+                <div className="sheet-menu" role="menu">
+                    {items.map((item, index) =>
+                        item.type === "separator" ? (
+                            <div key={index} className="sheet-menu-separator" role="separator" />
+                        ) : (
+                            <button
+                                key={index}
+                                type="button"
+                                className={`sheet-menu-item ${item.danger ? "danger" : ""}`}
+                                disabled={item.disabled}
+                                onClick={() => {
+                                    onClose();
+                                    item.onClick();
+                                }}
+                                role="menuitem"
+                            >
+                                <span className="sheet-menu-item-icon">
+                                    {item.active ? <Check size={18} aria-hidden="true" /> : item.icon}
+                                </span>
+                                <span>{item.label}</span>
+                            </button>
+                        ),
+                    )}
+                </div>
+            </Sheet>
+        );
+    }
 
     return (
         <div className="context-menu" style={style} ref={menuRef} role="menu">

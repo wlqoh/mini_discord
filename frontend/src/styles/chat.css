@@ -3898,3 +3898,19 @@ body,
 img, video {
     max-width: 100%;
 }
+
+/* ================================================================
+   DESKTOP DEFAULTS FOR MOBILE-ONLY STRUCTURE (see mobile.css)
+   ================================================================ */
+.mobile-drawer { display: contents; }
+.chat-header-mobile,
+.chat-more-btn,
+.drawer-user { display: none; }
+
+textarea.message-input {
+    display: block;
+    resize: none;
+    line-height: 1.4;
+    max-height: 132px;
+    overflow-y: auto;
+}

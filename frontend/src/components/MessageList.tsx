@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { CornerDownLeft, CornerUpLeft, Paperclip, Pencil, Trash2 } from "lucide-react";
+import { Copy, CornerDownLeft, CornerUpLeft, Paperclip, Pencil, Trash2 } from "lucide-react";
 import type { Attachment, Message, ReplyPreview, ServerMember } from "../types/chat.ts";
 import MediaPlayer from "./MediaPlayer";
 import VideoPlayer from "./VideoPlayer";
@@ -7,6 +7,9 @@ import LinkPreviewCard from "./LinkPreviewCard.tsx";
 import type { ViewerImage } from "./ImageViewerModal.tsx";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu.tsx";
 import { useToast } from "./Toast.tsx";
+import Sheet from "./Sheet.tsx";
+import { useIsTouch } from "../hooks/useIsMobile.ts";
+import { useLongPress } from "../hooks/useLongPress.ts";
 import { guessFormatFromContentType } from "../types/media";
 import type { Track } from "../types/media";
 import { memberDisplayName } from "../services/mentions.ts";
@@ -438,6 +441,20 @@ export default function MessageList({
 }: Props) {
     const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
     const [menu, setMenu] = useState<{ x: number; y: number; message: Message } | null>(null);
+    const [sheetDeleteTarget, setSheetDeleteTarget] = useState<Message | null>(null);
+    const isTouch = useIsTouch();
+    const { showToast: showMessageToast } = useToast();
+    const longPress = useLongPress(
+        (point, target) => {
+            const el = target as HTMLElement | null;
+            if (!el || el.closest("a, img, video, audio, input, textarea, .message-edit")) return;
+            const row = el.closest<HTMLElement>("[id^='message-']");
+            const id = row ? Number(row.id.replace("message-", "")) : NaN;
+            const message = messages.find((m) => m.id === id);
+            if (message) setMenu({ x: point.x, y: point.y, message });
+        },
+        { enabled: isTouch },
+    );
     const [editingId, setEditingId] = useState<number | null>(null);
     const membersById = useMemo(() => new Map(serverMembers.map((member) => [member.user_id, member])), [serverMembers]);
     // Messages present at mount (or already seen) never re-animate as "new" —
@@ -489,6 +506,19 @@ export default function MessageList({
             { label: "Ответить", icon: <CornerDownLeft size={14} />, onClick: () => onReply?.(msg) },
         ];
 
+        if (msg.content) {
+            items.push({
+                label: "Копировать текст",
+                icon: <Copy size={14} />,
+                onClick: () => {
+                    navigator.clipboard?.writeText(msg.content).then(
+                        () => showMessageToast("success", "Скопировано"),
+                        () => showMessageToast("error", "Не удалось скопировать"),
+                    );
+                },
+            });
+        }
+
         // Пункт скрыт, а не задизейблен: 15 минут прошло — действия просто нет.
         if (canEditMessage(msg, currentUserId) && onEditMessage) {
             items.push({
@@ -507,7 +537,7 @@ export default function MessageList({
                 label: "Удалить",
                 icon: <Trash2 size={14} />,
                 danger: true,
-                onClick: () => setConfirmDeleteId(msg.id),
+                onClick: () => (isTouch ? setSheetDeleteTarget(msg) : setConfirmDeleteId(msg.id)),
             });
         }
 
@@ -533,7 +563,7 @@ export default function MessageList({
     if (!messages.length) return <div className="messages-empty">No messages</div>;
 
     return (
-        <div className="messages-list">
+        <div className="messages-list" {...longPress}>
             {hasMoreOlder && !loadOlderError && <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />}
 
             {isLoadingOlder && (
@@ -719,8 +749,27 @@ export default function MessageList({
                     y={menu.y}
                     items={buildMenuItems(menu.message)}
                     onClose={() => setMenu(null)}
+                    title="Сообщение"
                 />
             )}
+
+            <Sheet open={sheetDeleteTarget !== null} onClose={() => setSheetDeleteTarget(null)} title="Удалить сообщение?">
+                <div className="sheet-confirm-actions">
+                    <button
+                        type="button"
+                        className="modal-btn modal-btn-danger"
+                        onClick={() => {
+                            if (sheetDeleteTarget) onDeleteMessage?.(sheetDeleteTarget.id, sheetDeleteTarget.channel_id);
+                            setSheetDeleteTarget(null);
+                        }}
+                    >
+                        Удалить
+                    </button>
+                    <button type="button" className="modal-btn modal-btn-secondary" onClick={() => setSheetDeleteTarget(null)}>
+                        Отмена
+                    </button>
+                </div>
+            </Sheet>
         </div>
     );
 }

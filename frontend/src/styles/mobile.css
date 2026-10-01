@@ -11,45 +11,12 @@
         background-attachment: scroll;
     }
 
-    .chat-layout {
-        grid-template-columns: 60px 0 1fr;
-    }
-
-    .chat-layout.channels-sidebar-hidden {
-        grid-template-columns: 60px 0 1fr;
-    }
-
     /* Hamburger visible on mobile */
     .channels-hamburger-btn {
         display: flex;
     }
 
     /* Channels sidebar becomes fixed drawer */
-    .channels-sidebar {
-        position: fixed;
-        left: 60px;
-        top: 0;
-        bottom: 0;
-        width: min(85vw, 280px);
-        z-index: var(--z-drawer);
-        transform: translateX(calc(-100% - 60px));
-        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
-        border-right: 1px solid var(--glass-border);
-        opacity: 1;
-        pointer-events: none;
-    }
-
-    .channels-sidebar.hidden {
-        transform: translateX(calc(-100% - 60px));
-        border-right: none;
-        pointer-events: none;
-    }
-
-    .channels-sidebar.drawer-open {
-        transform: translateX(0);
-        pointer-events: auto;
-    }
-
     /* No room for a 4th grid column on phones — the search panel becomes a
        full-screen overlay instead, same z-index tier as the channels drawer
        (only one of the two is ever open at a time in practice). */
@@ -61,27 +28,7 @@
     }
 
     /* Drawer overlay */
-    .channels-drawer-overlay {
-        display: block;
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.52);
-        z-index: var(--z-drawer-overlay);
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.26s ease;
-    }
-
-    .channels-drawer-overlay.active {
-        opacity: 1;
-        pointer-events: auto;
-    }
-
     /* Servers rail: safe-area on left side */
-    .servers-sidebar {
-        padding-left: calc(env(safe-area-inset-left));
-    }
-
     /* Message layout */
     .message-row.own {
         justify-content: flex-end;
@@ -112,21 +59,6 @@
     }
 
     /* Input bar */
-    .message-form {
-        grid-template-columns: 1fr auto auto auto;
-    }
-
-    .message-actions-wrap {
-        grid-column: 1 / -1;
-    }
-
-    .online-users-panel {
-        left: 0;
-        right: auto;
-        width: 100%;
-        max-height: 40vh;
-    }
-
     /* ---- Touch targets >=44px -------------------------------- */
     .channels-add-btn {
         min-width: 44px;
@@ -263,18 +195,6 @@
     }
 
     /* ---- Reduce backdrop-filter on sidebars for battery ------ */
-    .servers-sidebar {
-        -webkit-backdrop-filter: blur(8px);
-        backdrop-filter: blur(8px);
-        background: rgba(7, 8, 10, 0.88);
-    }
-
-    .channels-sidebar {
-        -webkit-backdrop-filter: blur(8px);
-        backdrop-filter: blur(8px);
-        background: rgba(7, 8, 10, 0.94);
-    }
-
     /* from src/styles/chat.css */
     .image-viewer-nav.prev {
         left: 8px;
@@ -285,18 +205,6 @@
     }
 
     /* from src/styles/chat.css */
-    [data-theme="light"] .channels-sidebar {
-        background: rgba(243, 244, 247, 0.97);
-    }
-
-    [data-theme="light"] .servers-sidebar {
-        background: rgba(255, 255, 255, 0.94);
-    }
-
-    [data-theme="light"] .chat-header-block {
-        background: rgba(243, 244, 247, 0.96);
-    }
-
     /* from src/styles/chat.css */
     .notification-permission-banner {
         flex-wrap: wrap;
@@ -319,25 +227,6 @@
 
 @media (max-width: 480px) {
     /* from src/styles/chat.css */
-    .servers-sidebar {
-        width: 52px;
-        -webkit-backdrop-filter: none;
-        backdrop-filter: none;
-        background: rgba(7, 8, 10, 0.96);
-    }
-
-    .chat-layout {
-        grid-template-columns: 52px 0 1fr;
-    }
-
-    .chat-layout.channels-sidebar-hidden {
-        grid-template-columns: 52px 0 1fr;
-    }
-
-    .channels-sidebar {
-        left: 52px;
-    }
-
     .server-add-btn,
     .server-dot {
         width: 40px;
@@ -359,11 +248,6 @@
     .jump-latest-btn {
         right: 14px;
         bottom: 12px;
-    }
-
-    .message-form {
-        padding: 8px 10px;
-        padding-bottom: calc(8px + env(safe-area-inset-bottom));
     }
 
     /* from src/index.css */
@@ -438,15 +322,6 @@
         overflow-x: auto;
     }
 
-    .chat-header-block {
-        padding-top: calc(8px + env(safe-area-inset-top));
-        padding-left: calc(16px + env(safe-area-inset-left));
-        padding-right: calc(16px + env(safe-area-inset-right));
-    }
-
-    .message-form {
-        padding-bottom: calc(8px + env(safe-area-inset-bottom));
-    }
 }
 
 /* ================================================================
@@ -499,14 +374,339 @@
     .channels-list,
     .chat-content,
     .channels-sidebar,
-    .servers-sidebar {
-        overscroll-behavior: contain;
-    }
-
     /* Auth pages */
     .auth-container {
         padding: 16px;
         padding-left: max(16px, var(--safe-left));
         padding-right: max(16px, var(--safe-right));
+    }
+}
+
+/* ================================================================
+   STAGE 2 — layout: drawer, one-line header, keyboard, composer
+   ================================================================ */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    html,
+    body {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: var(--app-height);
+        overflow: hidden;
+    }
+
+    #root {
+        height: 100%;
+    }
+
+    /* ---- Grid: chat is the only in-flow column ---------------- */
+    .chat-layout,
+    .chat-layout.channels-sidebar-hidden,
+    .chat-layout.search-panel-open,
+    .chat-layout.channels-sidebar-hidden.search-panel-open {
+        grid-template-columns: minmax(0, 1fr);
+        height: var(--app-height);
+        transition: none;
+    }
+
+    /* ---- Drawer: servers rail + channels in one panel --------- */
+    .channels-drawer-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-drawer-overlay);
+        background: rgba(0, 0, 0, 0.55);
+        -webkit-backdrop-filter: blur(4px);
+        backdrop-filter: blur(4px);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.26s ease, visibility 0s 0.26s;
+    }
+
+    .channels-drawer-overlay.active {
+        opacity: 1;
+        visibility: visible;
+        transition: opacity 0.26s ease, visibility 0s;
+    }
+
+    .mobile-drawer {
+        display: flex;
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: min(88vw, 360px);
+        z-index: var(--z-drawer);
+        background: rgb(10, 11, 14);
+        border-right: 1px solid var(--glass-border);
+        transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s 0.26s;
+        padding-left: var(--safe-left);
+    }
+
+    .mobile-drawer.open {
+        transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1), visibility 0s;
+    }
+
+    [data-theme="light"] .mobile-drawer {
+        background: rgb(246, 247, 250);
+    }
+
+    .mobile-drawer .servers-sidebar {
+        position: static;
+        flex: 0 0 64px;
+        width: 64px;
+        padding-left: 0;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: rgba(0, 0, 0, 0.28);
+    }
+
+    [data-theme="light"] .mobile-drawer .servers-sidebar {
+        background: rgba(15, 17, 21, 0.05);
+    }
+
+    .mobile-drawer .channels-sidebar,
+    .mobile-drawer .channels-sidebar.hidden {
+        position: static;
+        flex: 1 1 auto;
+        min-width: 0;
+        width: auto;
+        transform: none;
+        opacity: 1;
+        pointer-events: auto;
+        border-right: none;
+        grid-template-rows: auto 1fr auto;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: transparent;
+    }
+
+    /* The desktop collapse toggles make no sense in the drawer */
+    .mobile-drawer .channels-header .actions > button:first-child,
+    .servers-sidebar-footer {
+        display: none;
+    }
+
+    .drawer-user {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 56px;
+        padding: 8px 12px;
+        padding-bottom: calc(8px + var(--safe-bottom));
+        border: none;
+        border-top: 1px solid var(--glass-border);
+        background: rgba(255, 255, 255, 0.03);
+        color: var(--text-1);
+        font-family: inherit;
+        font-size: 15px;
+        font-weight: 600;
+        text-align: left;
+    }
+
+    .drawer-user-avatar {
+        flex: 0 0 36px;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        overflow: hidden;
+        display: grid;
+        place-items: center;
+        background: var(--glass-2);
+        border: 1px solid var(--glass-border);
+        font-size: 14px;
+    }
+
+    .drawer-user-avatar img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+
+    .drawer-user-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .drawer-user svg { color: var(--text-2); flex-shrink: 0; }
+
+    /* ---- Header: one 48px line -------------------------------- */
+    .chat-hamburger-visible,
+    .channels-hamburger-btn {
+        display: flex;
+    }
+
+    .chat-header-block {
+        margin: 0 -12px 8px;
+        padding: 0 8px;
+        padding-top: var(--safe-top);
+        padding-left: max(8px, var(--safe-left));
+        padding-right: max(8px, var(--safe-right));
+        min-height: calc(var(--header-h) + var(--safe-top));
+        display: flex;
+        align-items: center;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: rgb(10, 11, 14);
+    }
+
+    [data-theme="light"] .chat-header-block {
+        background: rgb(246, 247, 250);
+    }
+
+    .chat-header-row {
+        width: 100%;
+        min-height: var(--header-h);
+        gap: 4px;
+    }
+
+    .chat-header,
+    .chat-subheader,
+    .profile-open-btn {
+        display: none;
+    }
+
+    .chat-header-left { gap: 4px; }
+
+    .chat-header-mobile {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        line-height: 1.2;
+    }
+
+    .chat-header-mobile-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--text-1);
+        letter-spacing: -0.02em;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .chat-header-mobile-sub {
+        font-size: 12px;
+        color: var(--text-3);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .channels-hamburger-btn,
+    .channel-search-btn,
+    .chat-more-btn {
+        width: var(--tap-min);
+        height: var(--tap-min);
+        flex: 0 0 var(--tap-min);
+        border: none;
+        background: transparent;
+        color: var(--text-2);
+        border-radius: 50%;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .chat-more-btn {
+        display: flex;
+    }
+
+    .chat-header-actions { gap: 0; }
+
+    /* ---- Chat column ------------------------------------------ */
+    .chat-content {
+        padding: 0 12px 8px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .chat-main {
+        height: 100%;
+        min-height: 0;
+    }
+
+    /* ---- Composer: one compact row ---------------------------- */
+    .message-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 6px;
+        padding: 6px 8px;
+        padding-bottom: max(6px, var(--safe-bottom));
+        padding-left: max(8px, var(--safe-left));
+        padding-right: max(8px, var(--safe-right));
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: rgb(10, 11, 14);
+    }
+
+    [data-theme="light"] .message-form {
+        background: rgb(246, 247, 250);
+    }
+
+    html.keyboard-open .message-form {
+        padding-bottom: 6px;
+    }
+
+    .message-form > .drag-drop-hint,
+    .message-form > .reply-draft,
+    .message-form > .upload-progress-wrap,
+    .message-form > .message-length-counter,
+    .message-form > .message-attachments-preview,
+    .message-form > .voice-recording-bar {
+        flex: 1 0 100%;
+    }
+
+    .message-attach-btn { order: 10; }
+
+    .message-input-wrap {
+        order: 11;
+        flex: 1 1 0;
+        min-width: 0;
+        width: auto;
+    }
+
+    .message-voice-btn,
+    .message-send-btn { order: 12; }
+
+    .message-form:not(.has-content) .message-send-btn,
+    .message-form.has-content .message-voice-btn {
+        display: none;
+    }
+
+    .message-attach-btn,
+    .message-voice-btn,
+    .message-send-btn {
+        flex: 0 0 var(--tap-min);
+        width: var(--tap-min);
+        height: var(--tap-min);
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+    }
+
+    .message-send-btn svg { width: 22px; height: 22px; }
+
+    textarea.message-input {
+        min-height: var(--tap-min);
+        padding: 10px 14px;
+        border-radius: 22px;
+    }
+
+    /* "Online" toggle + panel moved to the ⋮ menu */
+    .message-actions-wrap {
+        display: none;
+    }
+
+    .jump-latest-btn {
+        z-index: var(--z-sticky);
     }
 }

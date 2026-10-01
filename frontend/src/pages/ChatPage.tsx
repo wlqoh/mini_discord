@@ -1,8 +1,14 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
-import type React from "react";
 import {useNavigate} from "react-router-dom";
-import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2, AudioLines, MessageCircle} from "lucide-react";
+import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, EllipsisVertical, Settings, Bell, Loader2, AudioLines, MessageCircle} from "lucide-react";
 import {useIsMobile, useIsTouch} from "../hooks/useIsMobile";
+import {useVisualViewport} from "../hooks/useVisualViewport";
+import {useSwipe} from "../hooks/useSwipe";
+import {useBackDismiss} from "../hooks/useBackDismiss";
+import {useLongPress} from "../hooks/useLongPress";
+import type {MenuPoint} from "../hooks/useNotificationContextMenu";
+import Sheet from "../components/Sheet.tsx";
+import OnlineUsersList from "../components/OnlineUsersList.tsx";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
 import type { ImageViewerState, ViewerImage } from "../components/ImageViewerModal.tsx";
@@ -110,6 +116,9 @@ export default function ChatPage() {
     const isPhone = useIsMobile();
     const isTouch = useIsTouch();
     const isMobileDevice = isPhone && isTouch;
+    const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+    const layoutRef = useRef<HTMLDivElement | null>(null);
+    const autoOpenedDrawerRef = useRef(false);
 
     // Shared messagesByChannel state (used by both useServers and useMessages)
     const [messagesByChannel, setMessagesByChannel] = useState<MessagesByChannel>({});
@@ -399,7 +408,7 @@ export default function ChatPage() {
         void handleMessageUser(user.user_id);
     }
 
-    function openDMContextMenu(e: React.MouseEvent, dm: { channel_id: number }): void {
+    function openDMContextMenu(e: MenuPoint, dm: { channel_id: number }): void {
         notificationMenu.openChannelMenu(e, dm.channel_id, [
             {
                 label: "Close conversation",
@@ -593,14 +602,64 @@ export default function ChatPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps -- firstId/lastId are read fresh from activeMessages each run; length is the correct change signal
     }, [activeMessages.length, servers.selectedChannelId]);
 
+    useVisualViewport(isPhone);
+    useBackDismiss(isChannelsDrawerOpen, () => setIsChannelsDrawerOpen(false), isPhone);
+    useSwipe(layoutRef, {
+        enabled: isPhone && !isSearchPanelOpen,
+        onSwipeRight: () => setIsChannelsDrawerOpen(true),
+        onSwipeLeft: () => setIsChannelsDrawerOpen(false),
+    });
+
+    // First visit on a phone with nothing selected: show the navigation drawer.
+    useEffect(() => {
+        if (isPhone && servers.selectedChannelId <= 0 && !autoOpenedDrawerRef.current) {
+            autoOpenedDrawerRef.current = true;
+            setIsChannelsDrawerOpen(true);
+        }
+    }, [isPhone, servers.selectedChannelId]);
+
+    // Leaving phone mode must not leave a stale open drawer behind.
+    useEffect(() => {
+        if (!isPhone) {
+            setIsChannelsDrawerOpen(false);
+            setIsMoreMenuOpen(false);
+        }
+    }, [isPhone]);
+
+    // Long-press on server dots / channel rows / DM rows opens the same notification menus
+    // as desktop right-click (iOS Safari never fires contextmenu).
+    const navLongPress = useLongPress(
+        (point, target) => {
+            const el = target as HTMLElement | null;
+            const at = {clientX: point.x, clientY: point.y};
+            const serverEl = el?.closest<HTMLElement>("[data-server-id]");
+            if (serverEl) { notificationMenu.openServerMenu(at, Number(serverEl.dataset.serverId)); return; }
+            const dmEl = el?.closest<HTMLElement>("[data-dm-id]");
+            if (dmEl) { openDMContextMenu(at, {channel_id: Number(dmEl.dataset.dmId)}); return; }
+            const chEl = el?.closest<HTMLElement>("[data-channel-id]");
+            if (chEl) notificationMenu.openChannelMenu(at, Number(chEl.dataset.channelId));
+        },
+        {enabled: isTouch},
+    );
+
     return (
-        <div className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""} ${isSearchPanelOpen ? "search-panel-open" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
+        <div ref={layoutRef} className={`chat-layout ${isChannelsSidebarHidden ? "channels-sidebar-hidden" : ""} ${isSearchPanelOpen ? "search-panel-open" : ""}`} onClick={() => { if (isChannelsDrawerOpen) setIsChannelsDrawerOpen(false); }}>
             {showPermissionBanner && notificationPermission === "default" ? (
                 <NotificationPermissionBanner
                     onEnable={() => void handlePermissionBannerEnable()}
                     onDismiss={handlePermissionBannerDismiss}
                 />
             ) : null}
+            <div
+                className={`channels-drawer-overlay ${isChannelsDrawerOpen ? "active" : ""}`}
+                onClick={() => setIsChannelsDrawerOpen(false)}
+                aria-hidden="true"
+            />
+            <div
+                className={`mobile-drawer ${isChannelsDrawerOpen ? "open" : ""}`}
+                onClick={(e) => e.stopPropagation()}
+                {...navLongPress}
+            >
             <aside className="servers-sidebar">
                 <button
                     className="server-add-btn"
@@ -650,6 +709,7 @@ export default function ChatPage() {
                         return (
                             <li key={server.id} className="server-item">
                                 <button
+                                    data-server-id={server.id}
                                     className={`server-dot ${activeView === "server" && servers.selectedServerId === server.id ? "active" : ""}`}
                                     onClick={() => { setActiveView("server"); void servers.handleSelectServer(server.id); }}
                                     onContextMenu={(e) => notificationMenu.openServerMenu(e, server.id)}
@@ -686,11 +746,6 @@ export default function ChatPage() {
                 </div>
             </aside>
 
-            <div
-                className={`channels-drawer-overlay ${isChannelsDrawerOpen ? "active" : ""}`}
-                onClick={() => setIsChannelsDrawerOpen(false)}
-                aria-hidden="true"
-            />
             <aside className={`channels-sidebar ${isChannelsSidebarHidden ? "hidden" : ""} ${isChannelsDrawerOpen ? "drawer-open" : ""}`} onClick={(e) => e.stopPropagation()}>
                 <div className="channels-header">
                     <span>{activeView === "dm" ? "Direct Messages" : `Server ${currentServer?.name ?? "-"}`}</span>
@@ -768,6 +823,7 @@ export default function ChatPage() {
                         <li key={channel.id} className="channel-item">
                             <div className="channel-row-wrap">
                                 <button
+                                    data-channel-id={channel.id}
                                     className={`channel-row ${servers.selectedChannelId === channel.id ? "active" : ""} ${channelUnread > 0 ? "has-unread" : ""} ${isChannelSilenced ? "muted" : ""}`}
                                     onClick={() => { servers.setSelectedChannelId(channel.id); if (isPhone) setIsChannelsDrawerOpen(false); }}
                                     onContextMenu={(e) => notificationMenu.openChannelMenu(e, channel.id)}
@@ -893,7 +949,20 @@ export default function ChatPage() {
                     })}
                 </ul>
                 )}
+                <button
+                    className="drawer-user"
+                    type="button"
+                    onClick={() => { setIsChannelsDrawerOpen(false); profile.openSelfProfile(); }}
+                    aria-label="Open profile"
+                >
+                    <span className="drawer-user-avatar">
+                        {avatarUrl ? <img src={avatarUrl} alt="" onError={() => setAvatarUrl("")}/> : userInitial}
+                    </span>
+                    <span className="drawer-user-name">{currentUserProfile?.nickname || "Profile"}</span>
+                    <Settings size={18} aria-hidden="true"/>
+                </button>
             </aside>
+            </div>
 
             <section className="chat-main">
                 <div className="chat-content-wrap">
@@ -916,6 +985,18 @@ export default function ChatPage() {
                                             ? `Сервер ${currentServer.name}`
                                             : "Server"}
                                 </span>
+                                <span className="chat-header-mobile">
+                                    <span className="chat-header-mobile-title">
+                                        {activeView === "dm"
+                                            ? currentDMPeer?.peer_nickname || "Direct Messages"
+                                            : currentChannel
+                                                ? `# ${currentChannel.name}`
+                                                : "Канал не выбран"}
+                                    </span>
+                                    <span className="chat-header-mobile-sub">
+                                        {activeView === "dm" ? "Личные сообщения" : currentServer?.name ?? ""}
+                                    </span>
+                                </span>
                             </div>
                             <div className="chat-header-actions">
                                 <button
@@ -927,6 +1008,14 @@ export default function ChatPage() {
                                     disabled={servers.selectedChannelId <= 0}
                                 >
                                     <Search size={18} aria-hidden="true" />
+                                </button>
+                                <button
+                                    className="chat-more-btn"
+                                    type="button"
+                                    onClick={() => setIsMoreMenuOpen(true)}
+                                    aria-label="Меню"
+                                >
+                                    <EllipsisVertical size={20} aria-hidden="true"/>
                                 </button>
                                 <button
                                     className="profile-open-btn"
@@ -1556,6 +1645,39 @@ export default function ChatPage() {
                 />
             )}
 
+            {isMoreMenuOpen && (
+                <ContextMenu
+                    x={0}
+                    y={0}
+                    title="Меню"
+                    onClose={() => setIsMoreMenuOpen(false)}
+                    items={[
+                        {label: "Участники онлайн", onClick: () => servers.setIsOnlinePanelOpen(true)},
+                        ...(servers.selectedChannelId > 0
+                            ? [{
+                                label: "Уведомления канала",
+                                onClick: () => notificationMenu.openChannelMenu({clientX: 0, clientY: 0}, servers.selectedChannelId),
+                            }]
+                            : []),
+                        {label: "Настройки уведомлений", onClick: () => setIsNotificationSettingsOpen(true)},
+                        {label: "Настройки голоса", onClick: () => setIsVoiceSettingsOpen(true)},
+                        {type: "separator"},
+                        {label: "Профиль", onClick: () => profile.openSelfProfile()},
+                    ]}
+                />
+            )}
+            <Sheet
+                open={isPhone && servers.isOnlinePanelOpen}
+                onClose={() => servers.setIsOnlinePanelOpen(false)}
+                title="Участники онлайн"
+            >
+                <OnlineUsersList
+                    users={servers.onlineUsers}
+                    isLoading={servers.isOnlineUsersLoading}
+                    avatarByName={onlineUserAvatarByName}
+                    onOpenProfile={(userId) => { servers.setIsOnlinePanelOpen(false); profile.openUserProfile(userId); }}
+                />
+            </Sheet>
             {notificationMenu.menu && (
                 <ContextMenu
                     x={notificationMenu.menu.x}

@@ -1,0 +1,150 @@
+/* ================================================================
+   SHEET — bottom sheet on phones, popover on desktop
+   (the desktop modal reuses .modal-overlay / .modal-card from chat.css)
+   ================================================================ */
+@keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+}
+
+@keyframes sheet-fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.sheet-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-sheet-overlay);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: sheet-fade 0.16s ease-out both;
+}
+
+.sheet-panel {
+    z-index: var(--z-sheet);
+    width: 100%;
+    max-width: 560px;
+    max-height: 90vh;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
+    background: rgba(12, 13, 17, 0.98);
+    border: 1px solid var(--glass-border-hi, var(--glass-border));
+    border-bottom: none;
+    border-radius: 20px 20px 0 0;
+    box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.45);
+    padding-bottom: var(--safe-bottom);
+    outline: none;
+    animation: sheet-up 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    transition: transform 0.2s ease;
+    will-change: transform;
+}
+
+[data-theme="light"] .sheet-panel {
+    background: rgba(250, 250, 252, 0.99);
+}
+
+.sheet-grab {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px 6px;
+    touch-action: none;
+    cursor: grab;
+}
+
+.sheet-grabber {
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--glass-border-hi, var(--text-3));
+    opacity: 0.8;
+}
+
+.sheet-title {
+    align-self: flex-start;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-1);
+    letter-spacing: -0.02em;
+    padding-top: 4px;
+}
+
+.sheet-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Modal content inside a sheet loses its own card chrome */
+.sheet-panel .modal-title { display: none; }
+
+/* ---- Menu rows (ContextMenu on phones) ----------------------- */
+.sheet-menu {
+    display: flex;
+    flex-direction: column;
+    padding: 0 8px 8px;
+}
+
+.sheet-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 52px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text-1);
+    font-family: inherit;
+    font-size: 16px;
+    text-align: left;
+}
+
+.sheet-menu-item:active:not(:disabled) { background: var(--glass-2); }
+.sheet-menu-item:disabled { opacity: 0.4; }
+.sheet-menu-item.danger { color: var(--error-text); }
+.sheet-menu-item-icon { width: 22px; display: inline-flex; justify-content: center; flex-shrink: 0; }
+.sheet-menu-separator { height: 1px; margin: 4px 12px; background: var(--glass-border); }
+
+/* ---- Desktop popover ----------------------------------------- */
+.sheet-popover-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-sheet-overlay);
+}
+
+.sheet-popover {
+    position: fixed;
+    z-index: var(--z-sheet);
+    background: rgba(9, 10, 13, 0.96);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border-hi, var(--glass-border));
+    border-radius: var(--radius-lg, 12px);
+    box-shadow: var(--shadow-xl, 0 12px 40px rgba(0, 0, 0, 0.5));
+    padding: 12px;
+    outline: none;
+}
+
+[data-theme="light"] .sheet-popover {
+    background: rgba(255, 255, 255, 0.97);
+}
+
+body.scroll-locked { overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+    .sheet-overlay, .sheet-panel { animation: none; transition: none; }
+}
