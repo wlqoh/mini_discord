@@ -2589,15 +2589,7 @@ body {
 /* ---- Landscape phones ---------------------------------------- */
 
 /* ---- Hover-none: make delete/reply always visible ------------ */
-@media (hover: none) {
-    .message-delete-btn {
-        opacity: 1;
-    }
-
-    .message-reply-btn {
-        opacity: 1;
-    }
-}
+/* Touch devices: reply/delete live in the long-press sheet (see mobile.css). */
 
 /* ---- Active feedback for all interactive controls ------------ */
 button:active:not(:disabled) {

@@ -5,6 +5,8 @@ import type { SearchFilters, SearchHit, SearchScope, ServerMember } from "../typ
 import { memberDisplayName } from "../services/mentions.ts";
 import { renderHeadline } from "../services/searchHighlight.tsx";
 import { formatMessageTimestamp } from "../services/formatTimestamp.ts";
+import { useIsMobile } from "../hooks/useIsMobile.ts";
+import { useBackDismiss } from "../hooks/useBackDismiss.ts";
 
 type Props = {
     isOpen: boolean;
@@ -51,6 +53,8 @@ export default function SearchPanel({
     const sentinelRef = useRef<HTMLDivElement | null>(null);
     const resultsRef = useRef<HTMLDivElement | null>(null);
     const [activeHitId, setActiveHitId] = useState<number | null>(null);
+    const isMobile = useIsMobile();
+    useBackDismiss(isOpen, onClose, isMobile);
 
     useEffect(() => {
         if (isOpen) inputRef.current?.focus();

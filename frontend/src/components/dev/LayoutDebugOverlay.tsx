@@ -88,7 +88,8 @@ export function LayoutDebugOverlay() {
                 const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
                 if (cx >= 0 && cy >= 0 && cx <= vw && cy <= window.innerHeight) {
                     const top = document.elementFromPoint(cx, cy);
-                    if (top && top !== el && !el.contains(top) && !top.contains(el)) {
+                    const coveredByOverlay = top?.closest("[data-layout-debug-ui], .channels-drawer-overlay, .sheet-overlay, .modal-overlay, .call-screen, .search-panel");
+                    if (top && !coveredByOverlay && top !== el && !el.contains(top) && !top.contains(el)) {
                         covered++;
                         outline(el, "purple");
                         console.warn("[layout] covered:", describe(el), "by", describe(top), el);
@@ -122,7 +123,7 @@ export function LayoutDebugOverlay() {
         <div
             data-layout-debug-ui
             style={{
-                position: "fixed", left: 4, bottom: 4, zIndex: 9999, font: "11px monospace",
+                position: "fixed", right: 4, bottom: 96, zIndex: 9999, font: "11px monospace",
                 background: "rgba(0,0,0,.85)", color: "#fff", padding: "4px 8px", borderRadius: 6,
                 display: "flex", gap: 8, alignItems: "center",
             }}

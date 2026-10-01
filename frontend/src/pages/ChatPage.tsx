@@ -1262,7 +1262,7 @@ export default function ChatPage() {
                 onSubmit={() => void messageSearch.submit()}
                 onLoadMore={() => void messageSearch.loadMore()}
                 serverMembers={serverMembers.members}
-                onScrollToMessage={(messageId, channelId) => void scrollToMessage(messageId, channelId)}
+                onScrollToMessage={(messageId, channelId) => { if (isPhone) setIsSearchPanelOpen(false); void scrollToMessage(messageId, channelId); }}
             />
 
             {profile.isProfileModalOpen && (

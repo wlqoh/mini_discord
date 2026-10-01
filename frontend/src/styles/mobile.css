@@ -348,12 +348,28 @@
     /* Every control gets a >=44px hit area */
     button,
     [role="button"],
-    select,
-    input[type="checkbox"],
-    input[type="radio"] {
+    select {
         min-height: var(--tap-min);
         min-width: var(--tap-min);
         touch-action: manipulation;
+    }
+
+    /* Checkboxes/radios keep their size; the wrapping label provides the 44px hit area */
+    input[type="checkbox"],
+    input[type="radio"] {
+        width: 22px;
+        height: 22px;
+        min-width: 0;
+        min-height: 0;
+        flex-shrink: 0;
+    }
+
+    label:has(> input[type="checkbox"]),
+    label:has(> input[type="radio"]) {
+        min-height: var(--tap-min);
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
     }
 
     /* Dense custom players: keep the look, enlarge the hit area only */
@@ -751,5 +767,131 @@
         left: 0;
         right: 0;
         max-width: 100%;
+    }
+}
+
+/* ================================================================
+   STAGE 5 — search, touch affordances, performance
+   ================================================================ */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    /* Search: full-screen page above the chat, honours the keyboard */
+    .search-panel {
+        height: var(--app-height);
+        padding-top: var(--safe-top);
+        padding-left: var(--safe-left);
+        padding-right: var(--safe-right);
+        background: rgb(10, 11, 14);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+
+    [data-theme="light"] .search-panel {
+        background: rgb(246, 247, 250);
+    }
+
+    .search-panel-results {
+        padding-bottom: var(--safe-bottom);
+        overscroll-behavior: contain;
+    }
+
+    /* Toasts: top of the screen, clear of composer and keyboard */
+    .toast-container {
+        top: calc(8px + var(--safe-top));
+        bottom: auto;
+        right: 8px;
+        left: 8px;
+        width: auto;
+        max-width: none;
+    }
+
+    .notification-permission-banner {
+        left: 8px;
+        right: 8px;
+        max-width: none;
+        top: calc(8px + var(--safe-top));
+    }
+
+    /* ---- Performance: no permanently-visible blur, no ambient animation ---- */
+    .typing-indicator {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: rgb(10, 11, 14);
+    }
+
+    [data-theme="light"] .typing-indicator {
+        background: rgb(246, 247, 250);
+    }
+
+    .jump-latest-btn {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+
+    .auth-container::before,
+    .auth-container::after {
+        animation: none;
+    }
+
+    body {
+        background-image: none;
+    }
+
+    /* Press feedback by colour, not by scaling things inside scrolling lists */
+    .messages-list button:active:not(:disabled),
+    .channels-list button:active:not(:disabled),
+    .servers-list button:active:not(:disabled) {
+        transform: none;
+    }
+}
+
+/* ---- Touch-only (no hover) ------------------------------------- */
+@media (hover: none) {
+    /* Reply/delete move into the long-press sheet */
+    .message-reply-btn,
+    .message-delete-btn,
+    .message-actions-inline,
+    .message-delete-confirm {
+        display: none;
+    }
+
+    /* Long-press targets: no OS callout / text selection while pressing */
+    .messages-list,
+    .mobile-drawer {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    /* ...but message text can still be selected inside the editor */
+    .message-edit,
+    .message-edit * {
+        -webkit-user-select: text;
+        user-select: text;
+    }
+
+    .message-edit-hint {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .mobile-drawer,
+    .channels-drawer-overlay {
+        transition: none;
+    }
+}
+
+/* Inline text buttons: keep the line height, enlarge only the hit area */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    .message-author {
+        min-height: 0;
+        min-width: 0;
+        position: relative;
+    }
+
+    .message-author::after {
+        content: "";
+        position: absolute;
+        inset: -10px -8px;
     }
 }
