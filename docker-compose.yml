@@ -4,12 +4,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: murad
-      POSTGRES_PASSWORD: "123"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: postgres
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U murad -d postgres"]
       interval: 5s
@@ -22,7 +22,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      PGPASSWORD: "123"
+      PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./sql/init:/migrations:ro
     command: >
@@ -44,6 +44,17 @@ services:
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/15_messages_search.sql &&
       psql -h db -U murad -d postgres -v ON_ERROR_STOP=1 -f /migrations/16_direct_messages.sql
       "
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    network_mode: host
+    command: >
+      -n --realm=turn.hyorward.tech --listening-port=3478
+      --external-ip=${SFU_PUBLIC_IP}
+      --use-auth-secret --static-auth-secret=${TURN_STATIC_AUTH_SECRET}
+      --min-port=49160 --max-port=49200 --fingerprint
+      --no-multicast-peers --no-tls
 
   backend:
     build:
@@ -72,7 +83,7 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
       # SFU media (RTP/RTCP over one shared UDP-muxed port — decision #7).
       # Must stay in sync with SFU_UDP_PORT above.
       - "${SFU_UDP_PORT:-7881}:${SFU_UDP_PORT:-7881}/udp"
