@@ -1,0 +1,512 @@
+/* ================================================================
+   MOBILE — every phone-specific rule lives in this file.
+   Imported last (main.tsx) so it wins over chat.css / index.css.
+   The media query below MUST stay in sync with MOBILE_QUERY in
+   src/hooks/useIsMobile.ts.
+   ================================================================ */
+
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    /* from src/styles/chat.css */
+    body {
+        background-attachment: scroll;
+    }
+
+    .chat-layout {
+        grid-template-columns: 60px 0 1fr;
+    }
+
+    .chat-layout.channels-sidebar-hidden {
+        grid-template-columns: 60px 0 1fr;
+    }
+
+    /* Hamburger visible on mobile */
+    .channels-hamburger-btn {
+        display: flex;
+    }
+
+    /* Channels sidebar becomes fixed drawer */
+    .channels-sidebar {
+        position: fixed;
+        left: 60px;
+        top: 0;
+        bottom: 0;
+        width: min(85vw, 280px);
+        z-index: var(--z-drawer);
+        transform: translateX(calc(-100% - 60px));
+        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+        border-right: 1px solid var(--glass-border);
+        opacity: 1;
+        pointer-events: none;
+    }
+
+    .channels-sidebar.hidden {
+        transform: translateX(calc(-100% - 60px));
+        border-right: none;
+        pointer-events: none;
+    }
+
+    .channels-sidebar.drawer-open {
+        transform: translateX(0);
+        pointer-events: auto;
+    }
+
+    /* No room for a 4th grid column on phones — the search panel becomes a
+       full-screen overlay instead, same z-index tier as the channels drawer
+       (only one of the two is ever open at a time in practice). */
+    .search-panel {
+        position: fixed;
+        inset: 0;
+        z-index: var(--z-screen);
+        border-left: none;
+    }
+
+    /* Drawer overlay */
+    .channels-drawer-overlay {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.52);
+        z-index: var(--z-drawer-overlay);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.26s ease;
+    }
+
+    .channels-drawer-overlay.active {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* Servers rail: safe-area on left side */
+    .servers-sidebar {
+        padding-left: calc(env(safe-area-inset-left));
+    }
+
+    /* Message layout */
+    .message-row.own {
+        justify-content: flex-end;
+    }
+
+    .message-row.other {
+        justify-content: flex-start;
+    }
+
+    .message-row.own .message-item {
+        order: 1;
+    }
+
+    .message-row.own .message-avatar-wrap {
+        order: 2;
+    }
+
+    .message-row.other .message-avatar-wrap {
+        order: 1;
+    }
+
+    .message-row.other .message-item {
+        order: 2;
+    }
+
+    .message-item {
+        max-width: min(86%, 760px);
+    }
+
+    /* Input bar */
+    .message-form {
+        grid-template-columns: 1fr auto auto auto;
+    }
+
+    .message-actions-wrap {
+        grid-column: 1 / -1;
+    }
+
+    .online-users-panel {
+        left: 0;
+        right: auto;
+        width: 100%;
+        max-height: 40vh;
+    }
+
+    /* ---- Touch targets >=44px -------------------------------- */
+    .channels-add-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .channels-delete-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .video-fullscreen-btn {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+    }
+
+    .message-avatar-wrap {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+    }
+
+    .profile-open-btn {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+    }
+
+    .channel-search-btn {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+        flex: 0 0 44px;
+    }
+
+    .voice-member-avatar-wrap {
+        min-width: 44px;
+        min-height: 44px;
+        width: 44px;
+        height: 44px;
+    }
+
+    .micam-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .cq.voice-quality-badge {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .message-voice-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .message-attach-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    .message-send-btn {
+        min-width: 44px;
+        min-height: 44px;
+    }
+
+    /* ---- Typography on mobile -------------------------------- */
+    .message-timestamp {
+        font-size: 12px;
+    }
+
+    .message-edit-hint {
+        display: none;
+    }
+
+    .link-preview {
+        max-width: 100%;
+        padding: 8px 10px;
+    }
+
+    .link-preview-thumb {
+        width: 56px;
+        height: 56px;
+    }
+
+    .voice-member-name {
+        font-size: 12px;
+    }
+
+    /* ---- Voice member layout with enlarged avatar ------------ */
+    .voice-member-item {
+        grid-template-columns: 44px 1fr;
+    }
+
+    .voice-member-avatar-fallback {
+        font-size: 14px;
+    }
+
+    /* ---- Video grid on phones -------------------------------- */
+    .video-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .video-tile {
+        min-height: 120px;
+    }
+
+    .video-el {
+        min-height: 120px;
+    }
+
+    /* ---- Modal on mobile ------------------------------------- */
+    .modal-overlay {
+        align-items: flex-end;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .modal-card {
+        max-height: 92vh;
+        max-height: 92dvh;
+        overflow-y: auto;
+        width: 94vw;
+        border-radius: var(--radius-xl) var(--radius-xl) var(--radius-md) var(--radius-md);
+        margin-bottom: 8px;
+        padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    }
+
+    /* ---- Reduce backdrop-filter on sidebars for battery ------ */
+    .servers-sidebar {
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        background: rgba(7, 8, 10, 0.88);
+    }
+
+    .channels-sidebar {
+        -webkit-backdrop-filter: blur(8px);
+        backdrop-filter: blur(8px);
+        background: rgba(7, 8, 10, 0.94);
+    }
+
+    /* from src/styles/chat.css */
+    .image-viewer-nav.prev {
+        left: 8px;
+    }
+
+    .image-viewer-nav.next {
+        right: 8px;
+    }
+
+    /* from src/styles/chat.css */
+    [data-theme="light"] .channels-sidebar {
+        background: rgba(243, 244, 247, 0.97);
+    }
+
+    [data-theme="light"] .servers-sidebar {
+        background: rgba(255, 255, 255, 0.94);
+    }
+
+    [data-theme="light"] .chat-header-block {
+        background: rgba(243, 244, 247, 0.96);
+    }
+
+    /* from src/styles/chat.css */
+    .notification-permission-banner {
+        flex-wrap: wrap;
+        top: 8px;
+    }
+
+    /* from src/index.css */
+    .auth-container::before {
+        width: 280px;
+        height: 280px;
+        filter: blur(40px);
+    }
+
+    .auth-container::after {
+        width: 220px;
+        height: 220px;
+        filter: blur(44px);
+    }
+}
+
+@media (max-width: 480px) {
+    /* from src/styles/chat.css */
+    .servers-sidebar {
+        width: 52px;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: rgba(7, 8, 10, 0.96);
+    }
+
+    .chat-layout {
+        grid-template-columns: 52px 0 1fr;
+    }
+
+    .chat-layout.channels-sidebar-hidden {
+        grid-template-columns: 52px 0 1fr;
+    }
+
+    .channels-sidebar {
+        left: 52px;
+    }
+
+    .server-add-btn,
+    .server-dot {
+        width: 40px;
+        height: 40px;
+    }
+
+    .video-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .message-item {
+        max-width: 92%;
+    }
+
+    .chat-content {
+        padding: 0 12px 14px;
+    }
+
+    .jump-latest-btn {
+        right: 14px;
+        bottom: 12px;
+    }
+
+    .message-form {
+        padding: 8px 10px;
+        padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    }
+
+    /* from src/index.css */
+    .auth-container::before,
+    .auth-container::after {
+        display: none;
+    }
+
+    .auth-card {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        background: var(--auth-bg);
+        border-color: var(--glass-border);
+    }
+
+    /* from src/styles/mediaPlayer.css */
+    .media-player {
+        max-width: 100%;
+    }
+
+    .media-player-icon-btn {
+        width: 34px;
+        height: 34px;
+    }
+
+    .media-player-play-btn {
+        width: 46px;
+        height: 46px;
+    }
+
+    .media-player-progress {
+        padding: 12px 0;
+    }
+
+    /* from src/styles/videoPlayer.css */
+    .video-player {
+        max-width: 100%;
+    }
+
+    .video-player-icon-btn {
+        width: 32px;
+        height: 32px;
+    }
+
+    .video-player-volume-slider {
+        width: 44px;
+    }
+
+    .video-player-speed {
+        display: none;
+    }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+    /* from src/styles/chat.css */
+    .video-grid {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        gap: 8px;
+        scroll-snap-type: x mandatory;
+    }
+
+    .video-tile {
+        flex: 0 0 200px;
+        min-height: 112px;
+        scroll-snap-align: start;
+    }
+
+    .voice-controls {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+    }
+
+    .chat-header-block {
+        padding-top: calc(8px + env(safe-area-inset-top));
+        padding-left: calc(16px + env(safe-area-inset-left));
+        padding-right: calc(16px + env(safe-area-inset-right));
+    }
+
+    .message-form {
+        padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    }
+}
+
+/* ================================================================
+   STAGE 1 — foundation: tap targets, iOS zoom, touch niceties
+   ================================================================ */
+@media (max-width: 768px), (max-height: 500px) and (pointer: coarse) {
+    html,
+    body {
+        overflow-x: hidden;
+        overscroll-behavior-y: none;
+    }
+
+    * {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    /* iOS Safari zooms the page when a focused field has font-size < 16px */
+    input,
+    textarea,
+    select {
+        font-size: 16px;
+    }
+
+    /* Every control gets a >=44px hit area */
+    button,
+    [role="button"],
+    select,
+    input[type="checkbox"],
+    input[type="radio"] {
+        min-height: var(--tap-min);
+        min-width: var(--tap-min);
+        touch-action: manipulation;
+    }
+
+    /* Dense custom players: keep the look, enlarge the hit area only */
+    .media-player button,
+    .video-player button {
+        position: relative;
+        min-height: 0;
+        min-width: 0;
+    }
+
+    .media-player button::after,
+    .video-player button::after {
+        content: "";
+        position: absolute;
+        inset: -6px;
+    }
+
+    .channels-list,
+    .chat-content,
+    .channels-sidebar,
+    .servers-sidebar {
+        overscroll-behavior: contain;
+    }
+
+    /* Auth pages */
+    .auth-container {
+        padding: 16px;
+        padding-left: max(16px, var(--safe-left));
+        padding-right: max(16px, var(--safe-right));
+    }
+}

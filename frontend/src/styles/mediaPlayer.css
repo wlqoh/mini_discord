@@ -479,25 +479,6 @@
 }
 
 /* ---- Responsive / touch ---------------------------------------------- */
-@media (max-width: 480px) {
-    .media-player {
-        max-width: 100%;
-    }
-
-    .media-player-icon-btn {
-        width: 34px;
-        height: 34px;
-    }
-
-    .media-player-play-btn {
-        width: 46px;
-        height: 46px;
-    }
-
-    .media-player-progress {
-        padding: 12px 0;
-    }
-}
 
 /* ---- Embedded in a chat message attachment -------------------------- */
 .message-attachment.audio-attachment {

@@ -2,7 +2,7 @@ import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from
 import type React from "react";
 import {useNavigate} from "react-router-dom";
 import {Search, Trash2, Mic, MicOff, Camera, CameraOff, Monitor, MonitorOff, RefreshCw, PanelLeftClose, PanelLeftOpen, Volume2, VolumeOff, Hash, Sun, Moon, Menu, Bell, Loader2, AudioLines, MessageCircle} from "lucide-react";
-import {useMediaQuery} from "../hooks/useMediaQuery";
+import {useIsMobile, useIsTouch} from "../hooks/useIsMobile";
 import MessageList from "../components/MessageList.tsx";
 import ImageViewerModal from "../components/ImageViewerModal.tsx";
 import type { ImageViewerState, ViewerImage } from "../components/ImageViewerModal.tsx";
@@ -107,8 +107,9 @@ export default function ChatPage() {
     const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false);
     const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
     const [showPermissionBanner, setShowPermissionBanner] = useState(false);
-    const isMobileDevice = useMediaQuery("(max-width: 1024px) and (pointer: coarse)");
-    const isPhone = useMediaQuery("(max-width: 768px)");
+    const isPhone = useIsMobile();
+    const isTouch = useIsTouch();
+    const isMobileDevice = isPhone && isTouch;
 
     // Shared messagesByChannel state (used by both useServers and useMessages)
     const [messagesByChannel, setMessagesByChannel] = useState<MessagesByChannel>({});

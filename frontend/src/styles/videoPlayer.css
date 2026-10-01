@@ -247,24 +247,6 @@
 }
 
 /* ---- Responsive / touch ------------------------------------------- */
-@media (max-width: 480px) {
-    .video-player {
-        max-width: 100%;
-    }
-
-    .video-player-icon-btn {
-        width: 32px;
-        height: 32px;
-    }
-
-    .video-player-volume-slider {
-        width: 44px;
-    }
-
-    .video-player-speed {
-        display: none;
-    }
-}
 
 /* ---- Embedded in a chat message attachment -------------------------- */
 .message-attachment.video-attachment {
