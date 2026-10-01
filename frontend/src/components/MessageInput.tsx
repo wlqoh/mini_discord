@@ -4,6 +4,8 @@ import { uploadAttachment } from "../services/avatarApi.ts";
 import type { Message, OnlineUser, ServerMember } from "../types/chat.ts";
 import { useToast } from "./Toast.tsx";
 import MentionAutocomplete from "./MentionAutocomplete.tsx";
+import OnlineUsersList from "./OnlineUsersList.tsx";
+import { useIsMobile, useIsTouch } from "../hooks/useIsMobile.ts";
 import { computeMentionResults, detectMentionQuery, type MentionMatch } from "../services/mentions.ts";
 import {
     MAX_MESSAGE_CONTENT_LEN,
@@ -79,7 +81,9 @@ export default function MessageInput({
     const [isDragOver, setIsDragOver] = useState(false);
     const isUploading = uploadProgress !== null;
     const fileInputRef = useRef<HTMLInputElement | null>(null);
-    const messageInputRef = useRef<HTMLInputElement | null>(null);
+    const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+    const isMobile = useIsMobile();
+    const isTouch = useIsTouch();
     const dragCounterRef = useRef(0);
 
     const [mentionMatch, setMentionMatch] = useState<MentionMatch | null>(null);
@@ -121,8 +125,16 @@ export default function MessageInput({
         insertMentionToken("@everyone");
     }
 
-    function handleMessageInputKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-        if (!mentionMatch || !mentionResults || mentionResults.total === 0) return;
+    function handleMessageInputKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+        if (!mentionMatch || !mentionResults || mentionResults.total === 0) {
+            // Desktop: Enter sends, Shift+Enter adds a line. Touch keyboards: Enter is a newline,
+            // sending is the ➤ button.
+            if (e.key === "Enter" && !e.shiftKey && !isTouch && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+            }
+            return;
+        }
 
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -287,22 +299,6 @@ export default function MessageInput({
         }
     }
 
-    function getInitials(user: OnlineUser): string {
-        const nickname = user.nickname?.trim() ?? "";
-        if (nickname) {
-            const initials = nickname
-                .split(/\s+/)
-                .filter(Boolean)
-                .map((part) => part[0] ?? "")
-                .join("")
-                .slice(0, 2)
-                .toUpperCase();
-            return initials || nickname[0]?.toUpperCase() || "U";
-        }
-        const initials = `${user.first_name?.[0] ?? ""}${user.last_name?.[0] ?? ""}`.toUpperCase();
-        return initials || "U";
-    }
-
     function addFiles(files: File[]) {
         const newFiles: PendingFile[] = [];
 
@@ -339,7 +335,7 @@ export default function MessageInput({
         e.target.value = "";
     }
 
-    function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
         const items = e.clipboardData?.items;
         if (!items) return;
 
@@ -470,9 +466,16 @@ export default function MessageInput({
     const isTooLong = isMessageContentTooLong(text);
     const canSend = !disabled && !isUploading && !isRecording && !isTooLong && (text.trim().length > 0 || pendingFiles.length > 0);
 
+    useEffect(() => {
+        const el = messageInputRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+    }, [text, isRecording]);
+
     return (
         <form
-            className={`message-form${isDragOver ? " drag-over" : ""}`}
+            className={`message-form${isDragOver ? " drag-over" : ""}${text.trim() || pendingFiles.length > 0 ? " has-content" : ""}`}
             onSubmit={handleSubmit}
             onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
@@ -551,9 +554,10 @@ export default function MessageInput({
             {!isRecording && (
                 <>
                     <div className="message-input-wrap">
-                        <input
+                        <textarea
                             ref={messageInputRef}
                             className="message-input"
+                            rows={1}
                             placeholder="Write a message"
                             value={text}
                             onChange={(e) => {
@@ -566,7 +570,7 @@ export default function MessageInput({
                             onPaste={handlePaste}
                             disabled={disabled || isUploading}
                             inputMode="text"
-                            enterKeyHint="send"
+                            enterKeyHint={isTouch ? "enter" : "send"}
                             autoCapitalize="sentences"
                             autoComplete="off"
                         />
@@ -623,76 +627,14 @@ export default function MessageInput({
                     Online
                 </button>
 
-                {isOnlinePanelOpen ? (
+                {isOnlinePanelOpen && !isMobile ? (
                     <aside className="online-users-panel" aria-label="Online users">
-                        <div className="online-users-panel-title">Online users</div>
-                        {isOnlineUsersLoading ? (
-                            <div className="skeleton-users-list">
-                                {[65, 80, 50].map((w, i) => (
-                                    <div key={i} className="skeleton-user-item">
-                                        <div className="skeleton skeleton-user-avatar" />
-                                        <div className="skeleton-user-lines">
-                                            <div className="skeleton skeleton-user-name" style={{ width: `${w}%` }} />
-                                            <div className="skeleton skeleton-user-email" style={{ width: `${Math.round(w * 0.7)}%` }} />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : null}
-                        {!isOnlineUsersLoading && onlineUsers.length === 0 ? (
-                            <div className="online-users-empty">No users online</div>
-                        ) : null}
-                        {!isOnlineUsersLoading && onlineUsers.length > 0 ? (
-                            <ul className="online-users-list">
-                                {onlineUsers.map((user, index) => {
-                                    const nickname = user.nickname?.trim() || "";
-                                    const displayName = nickname || "User";
-                                    const initials = getInitials(user);
-                                    const avatarKey = displayName.toLowerCase();
-                                    const directAvatarUrl = user.avatar_url?.trim() || "";
-                                    const avatarUrl = directAvatarUrl || (onlineUserAvatarByName[avatarKey] ?? "");
-                                    const userId = user.user_id;
-                                    const canOpenProfile = typeof userId === "number";
-                                    const fallbackKey = displayName || `user-${index}`;
-                                    return (
-                                        <li
-                                            key={userId ?? fallbackKey}
-                                            className="online-users-item"
-                                            role={canOpenProfile ? "button" : undefined}
-                                            tabIndex={canOpenProfile ? 0 : undefined}
-                                            onClick={() => (canOpenProfile ? onOpenProfile?.(userId as number) : undefined)}
-                                            onKeyDown={(event) => {
-                                                if (!canOpenProfile) return;
-                                                if (event.key === "Enter" || event.key === " ") {
-                                                    event.preventDefault();
-                                                    onOpenProfile?.(userId as number);
-                                                }
-                                            }}
-                                        >
-                                            <div className="online-users-meta">
-                                                <div className="online-users-name">{displayName}</div>
-                                            </div>
-                                            <div className="online-users-avatar-wrap" aria-hidden="true">
-                                                {avatarUrl ? (
-                                                    <img
-                                                        className="online-users-avatar-img"
-                                                        src={avatarUrl}
-                                                        alt=""
-                                                        loading="lazy"
-                                                        onError={(event) => {
-                                                            event.currentTarget.style.display = "none";
-                                                            event.currentTarget.nextElementSibling?.classList.add("show");
-                                                        }}
-                                                    />
-                                                ) : null}
-                                                <div className={`online-users-avatar-fallback ${avatarUrl ? "" : "show"}`}>{initials}</div>
-                                                <span className="online-users-status" />
-                                            </div>
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                        ) : null}
+                        <OnlineUsersList
+                            users={onlineUsers}
+                            isLoading={isOnlineUsersLoading}
+                            avatarByName={onlineUserAvatarByName}
+                            onOpenProfile={onOpenProfile}
+                        />
                     </aside>
                 ) : null}
             </div>

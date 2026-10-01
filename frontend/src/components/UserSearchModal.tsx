@@ -1,3 +1,4 @@
+import Sheet from "./Sheet.tsx";
 import { useEffect, useRef, useState } from "react";
 import type { UserSearchHit } from "../types/chat";
 
@@ -71,8 +72,7 @@ export default function UserSearchModal({ onClose, searchUsers, onSelectUser }: 
     } = useUserSearchResults(query, searchUsers);
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <Sheet open onClose={onClose} title="New message">
                 <h3 className="modal-title">New message</h3>
 
                 <input
@@ -117,7 +117,6 @@ export default function UserSearchModal({ onClose, searchUsers, onSelectUser }: 
                         Close
                     </button>
                 </div>
-            </div>
-        </div>
+        </Sheet>
     );
 }

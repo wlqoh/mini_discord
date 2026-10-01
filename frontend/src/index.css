@@ -24,6 +24,28 @@
     --error-bg:             rgba(224, 37, 53, 0.10);
     --error-border:         rgba(224, 37, 53, 0.35);
     --error-text:           #ff8090;
+
+    /* Mobile layout tokens (see docs/mobile-ui-plan.md) */
+    --tap-min:              44px;
+    --app-height:           100dvh;   /* overwritten by useVisualViewport */
+    --keyboard-inset:       0px;      /* overwritten by useVisualViewport */
+    --safe-top:             env(safe-area-inset-top, 0px);
+    --safe-bottom:          env(safe-area-inset-bottom, 0px);
+    --safe-left:            env(safe-area-inset-left, 0px);
+    --safe-right:           env(safe-area-inset-right, 0px);
+    --header-h:             48px;
+
+    /* Single z-index scale — use these instead of literals */
+    --z-base:               0;
+    --z-sticky:             10;
+    --z-callbar:            50;
+    --z-drawer-overlay:     100;
+    --z-drawer:             110;
+    --z-screen:             200;
+    --z-sheet-overlay:      300;
+    --z-sheet:              310;
+    --z-toast:              400;
+    --z-devtools:           9999;
 }
 
 [data-theme="light"] {
@@ -278,33 +300,7 @@ button, .submit-button {
 }
 
 /* ---- Reduce expensive blobs on small phones ------------------------ */
-@media (max-width: 768px) {
-    .auth-container::before {
-        width: 280px;
-        height: 280px;
-        filter: blur(40px);
-    }
 
-    .auth-container::after {
-        width: 220px;
-        height: 220px;
-        filter: blur(44px);
-    }
-}
-
-@media (max-width: 480px) {
-    .auth-container::before,
-    .auth-container::after {
-        display: none;
-    }
-
-    .auth-card {
-        -webkit-backdrop-filter: none;
-        backdrop-filter: none;
-        background: var(--auth-bg);
-        border-color: var(--glass-border);
-    }
-}
 
 /* ---- H: Auth card entrance ----------------------------------------- */
 @keyframes auth-card-in {

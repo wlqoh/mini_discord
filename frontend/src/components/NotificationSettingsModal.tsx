@@ -1,3 +1,4 @@
+import Sheet from "./Sheet.tsx";
 import { useState } from "react";
 import { Bell, BellOff, Volume2, VolumeX } from "lucide-react";
 import type { ChannelsByServer, Server } from "../types/chat.ts";
@@ -100,8 +101,7 @@ export default function NotificationSettingsModal({
     const dndLabel = formatDND(settings?.dnd_until ?? null);
 
     return (
-        <div className="modal-overlay" onClick={onClose}>
-            <div className="modal-card notification-settings-modal" onClick={(e) => e.stopPropagation()}>
+        <Sheet open onClose={onClose} title="Notifications" className="notification-settings-modal">
                 <h3 className="modal-title">Notifications</h3>
 
                 {error ? <div className="profile-avatar-error">{error}</div> : null}
@@ -251,7 +251,6 @@ export default function NotificationSettingsModal({
                 <div className="modal-actions">
                     <button className="modal-btn modal-btn-primary" type="button" onClick={onClose}>Close</button>
                 </div>
-            </div>
-        </div>
+        </Sheet>
     );
 }

@@ -136,3 +136,16 @@ payload struct) requires manually mirroring the change in
 `frontend/src/services/chatSocket.ts` and `frontend/src/types/chat.ts` —
 there is no codegen linking the two. See
 [`architecture.md`](architecture.md#boundaries-that-must-be-preserved).
+
+## Mobile layout
+
+Phone layout is one switch: `MOBILE_QUERY` in `hooks/useIsMobile.ts`, mirrored by the
+`@media` queries in `styles/mobile.css` (keep them in sync). All phone-specific CSS
+lives in `mobile.css` (imported last in `main.tsx`); tokens (`--tap-min`, `--app-height`,
+safe-area, the `--z-*` scale) are in `index.css`.
+
+- `Sheet` — modal/popover on desktop, bottom sheet on phones (used by every modal and `ContextMenu`).
+- `useBackDismiss` — system back closes the topmost overlay; `useLongPress` — touch replacement for right-click;
+  `useSwipe` — drawer gestures; `useVisualViewport` — keyboard-aware `--app-height`.
+- `VoiceMiniBar` / `CallScreen` — phone call UI. `CallScreen` stays mounted while in a call (tiles own remote audio).
+- Dev diagnostics: open the app with `?debugLayout=1` (overflow / small tap targets / covered buttons).

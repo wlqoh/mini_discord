@@ -114,7 +114,7 @@ body {
    ================================================================ */
 .chat-layout {
     display: grid;
-    grid-template-columns: 72px 256px 1fr;
+    grid-template-columns: 72px 256px minmax(0, 1fr);
     height: 100vh;
     height: 100dvh;
     background: transparent;
@@ -123,15 +123,15 @@ body {
 }
 
 .chat-layout.channels-sidebar-hidden {
-    grid-template-columns: 72px 0 1fr;
+    grid-template-columns: 72px 0 minmax(0, 1fr);
 }
 
 .chat-layout.search-panel-open {
-    grid-template-columns: 72px 256px 1fr 340px;
+    grid-template-columns: 72px 256px minmax(0, 1fr) 340px;
 }
 
 .chat-layout.channels-sidebar-hidden.search-panel-open {
-    grid-template-columns: 72px 0 1fr 340px;
+    grid-template-columns: 72px 0 minmax(0, 1fr) 340px;
 }
 
 /* ================================================================
@@ -547,7 +547,7 @@ body {
 
 .voice-member-item {
     display: grid;
-    grid-template-columns: 22px 1fr;
+    grid-template-columns: 22px minmax(0, 1fr);
     grid-template-rows: auto auto;
     gap: 0 8px;
     align-items: center;
@@ -762,7 +762,7 @@ body {
 .chat-header-block {
     position: sticky;
     top: 0;
-    z-index: 10;
+    z-index: var(--z-sticky);
     margin: 0 -20px 16px;
     padding: 12px 20px 10px;
     padding-top: calc(12px + env(safe-area-inset-top));
@@ -1934,7 +1934,7 @@ body {
     backdrop-filter: blur(18px);
     position: sticky;
     bottom: 0;
-    z-index: 5;
+    z-index: var(--z-sticky);
 }
 
 .typing-indicator {
@@ -2045,7 +2045,7 @@ body {
     list-style: none;
     margin: 0;
     padding: 6px;
-    z-index: 30;
+    z-index: var(--z-sticky);
     -webkit-backdrop-filter: blur(18px);
     backdrop-filter: blur(18px);
 }
@@ -2411,7 +2411,7 @@ body {
     backdrop-filter: blur(22px);
     box-shadow: var(--shadow-xl), 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
     padding: 10px;
-    z-index: 25;
+    z-index: var(--z-sticky);
     scrollbar-width: thin;
     scrollbar-color: var(--glass-border) transparent;
     overscroll-behavior: contain;
@@ -2566,385 +2566,30 @@ body {
 /* ---- Tablet breakpoint: 1024px ------------------------------- */
 @media (max-width: 1024px) {
     .chat-layout {
-        grid-template-columns: 64px 220px 1fr;
+        grid-template-columns: 64px 220px minmax(0, 1fr);
     }
 
     .chat-layout.channels-sidebar-hidden {
-        grid-template-columns: 64px 0 1fr;
+        grid-template-columns: 64px 0 minmax(0, 1fr);
     }
 
     .chat-layout.search-panel-open {
-        grid-template-columns: 64px 220px 1fr 300px;
+        grid-template-columns: 64px 220px minmax(0, 1fr) 300px;
     }
 
     .chat-layout.channels-sidebar-hidden.search-panel-open {
-        grid-template-columns: 64px 0 1fr 300px;
+        grid-template-columns: 64px 0 minmax(0, 1fr) 300px;
     }
 }
 
 /* ---- Phone breakpoint: 768px --------------------------------- */
-@media (max-width: 768px) {
-    body {
-        background-attachment: scroll;
-    }
-
-    .chat-layout {
-        grid-template-columns: 60px 0 1fr;
-    }
-
-    .chat-layout.channels-sidebar-hidden {
-        grid-template-columns: 60px 0 1fr;
-    }
-
-    /* Hamburger visible on mobile */
-    .channels-hamburger-btn {
-        display: flex;
-    }
-
-    /* Channels sidebar becomes fixed drawer */
-    .channels-sidebar {
-        position: fixed;
-        left: 60px;
-        top: 0;
-        bottom: 0;
-        width: min(85vw, 280px);
-        z-index: 200;
-        transform: translateX(calc(-100% - 60px));
-        transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
-        border-right: 1px solid var(--glass-border);
-        opacity: 1;
-        pointer-events: none;
-    }
-
-    .channels-sidebar.hidden {
-        transform: translateX(calc(-100% - 60px));
-        border-right: none;
-        pointer-events: none;
-    }
-
-    .channels-sidebar.drawer-open {
-        transform: translateX(0);
-        pointer-events: auto;
-    }
-
-    /* No room for a 4th grid column on phones — the search panel becomes a
-       full-screen overlay instead, same z-index tier as the channels drawer
-       (only one of the two is ever open at a time in practice). */
-    .search-panel {
-        position: fixed;
-        inset: 0;
-        z-index: 220;
-        border-left: none;
-    }
-
-    /* Drawer overlay */
-    .channels-drawer-overlay {
-        display: block;
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.52);
-        z-index: 199;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.26s ease;
-    }
-
-    .channels-drawer-overlay.active {
-        opacity: 1;
-        pointer-events: auto;
-    }
-
-    /* Servers rail: safe-area on left side */
-    .servers-sidebar {
-        padding-left: calc(env(safe-area-inset-left));
-    }
-
-    /* Message layout */
-    .message-row.own {
-        justify-content: flex-end;
-    }
-
-    .message-row.other {
-        justify-content: flex-start;
-    }
-
-    .message-row.own .message-item {
-        order: 1;
-    }
-
-    .message-row.own .message-avatar-wrap {
-        order: 2;
-    }
-
-    .message-row.other .message-avatar-wrap {
-        order: 1;
-    }
-
-    .message-row.other .message-item {
-        order: 2;
-    }
-
-    .message-item {
-        max-width: min(86%, 760px);
-    }
-
-    /* Input bar */
-    .message-form {
-        grid-template-columns: 1fr auto auto auto;
-    }
-
-    .message-actions-wrap {
-        grid-column: 1 / -1;
-    }
-
-    .online-users-panel {
-        left: 0;
-        right: auto;
-        width: 100%;
-        max-height: 40vh;
-    }
-
-    /* ---- Touch targets >=44px -------------------------------- */
-    .channels-add-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .channels-delete-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .video-fullscreen-btn {
-        min-width: 44px;
-        min-height: 44px;
-        width: 44px;
-        height: 44px;
-    }
-
-    .message-avatar-wrap {
-        min-width: 44px;
-        min-height: 44px;
-        width: 44px;
-        height: 44px;
-        flex: 0 0 44px;
-    }
-
-    .profile-open-btn {
-        min-width: 44px;
-        min-height: 44px;
-        width: 44px;
-        height: 44px;
-        flex: 0 0 44px;
-    }
-
-    .channel-search-btn {
-        min-width: 44px;
-        min-height: 44px;
-        width: 44px;
-        height: 44px;
-        flex: 0 0 44px;
-    }
-
-    .voice-member-avatar-wrap {
-        min-width: 44px;
-        min-height: 44px;
-        width: 44px;
-        height: 44px;
-    }
-
-    .micam-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .cq.voice-quality-badge {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .message-voice-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .message-attach-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    .message-send-btn {
-        min-width: 44px;
-        min-height: 44px;
-    }
-
-    /* ---- Typography on mobile -------------------------------- */
-    .message-timestamp {
-        font-size: 12px;
-    }
-
-    .message-edit-hint {
-        display: none;
-    }
-
-    .link-preview {
-        max-width: 100%;
-        padding: 8px 10px;
-    }
-
-    .link-preview-thumb {
-        width: 56px;
-        height: 56px;
-    }
-
-    .voice-member-name {
-        font-size: 12px;
-    }
-
-    /* ---- Voice member layout with enlarged avatar ------------ */
-    .voice-member-item {
-        grid-template-columns: 44px 1fr;
-    }
-
-    .voice-member-avatar-fallback {
-        font-size: 14px;
-    }
-
-    /* ---- Video grid on phones -------------------------------- */
-    .video-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .video-tile {
-        min-height: 120px;
-    }
-
-    .video-el {
-        min-height: 120px;
-    }
-
-    /* ---- Modal on mobile ------------------------------------- */
-    .modal-overlay {
-        align-items: flex-end;
-        padding-bottom: env(safe-area-inset-bottom);
-    }
-
-    .modal-card {
-        max-height: 92vh;
-        max-height: 92dvh;
-        overflow-y: auto;
-        width: 94vw;
-        border-radius: var(--radius-xl) var(--radius-xl) var(--radius-md) var(--radius-md);
-        margin-bottom: 8px;
-        padding-bottom: calc(20px + env(safe-area-inset-bottom));
-    }
-
-    /* ---- Reduce backdrop-filter on sidebars for battery ------ */
-    .servers-sidebar {
-        -webkit-backdrop-filter: blur(8px);
-        backdrop-filter: blur(8px);
-        background: rgba(7, 8, 10, 0.88);
-    }
-
-    .channels-sidebar {
-        -webkit-backdrop-filter: blur(8px);
-        backdrop-filter: blur(8px);
-        background: rgba(7, 8, 10, 0.94);
-    }
-}
 
 /* ---- Small phone: 480px -------------------------------------- */
-@media (max-width: 480px) {
-    .servers-sidebar {
-        width: 52px;
-        -webkit-backdrop-filter: none;
-        backdrop-filter: none;
-        background: rgba(7, 8, 10, 0.96);
-    }
-
-    .chat-layout {
-        grid-template-columns: 52px 0 1fr;
-    }
-
-    .chat-layout.channels-sidebar-hidden {
-        grid-template-columns: 52px 0 1fr;
-    }
-
-    .channels-sidebar {
-        left: 52px;
-    }
-
-    .server-add-btn,
-    .server-dot {
-        width: 40px;
-        height: 40px;
-    }
-
-    .video-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .message-item {
-        max-width: 92%;
-    }
-
-    .chat-content {
-        padding: 0 12px 14px;
-    }
-
-    .jump-latest-btn {
-        right: 14px;
-        bottom: 12px;
-    }
-
-    .message-form {
-        padding: 8px 10px;
-        padding-bottom: calc(8px + env(safe-area-inset-bottom));
-    }
-}
 
 /* ---- Landscape phones ---------------------------------------- */
-@media (max-width: 900px) and (orientation: landscape) {
-    .video-grid {
-        display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        gap: 8px;
-        scroll-snap-type: x mandatory;
-    }
-
-    .video-tile {
-        flex: 0 0 200px;
-        min-height: 112px;
-        scroll-snap-align: start;
-    }
-
-    .voice-controls {
-        flex-wrap: nowrap;
-        overflow-x: auto;
-    }
-
-    .chat-header-block {
-        padding-top: calc(8px + env(safe-area-inset-top));
-        padding-left: calc(16px + env(safe-area-inset-left));
-        padding-right: calc(16px + env(safe-area-inset-right));
-    }
-
-    .message-form {
-        padding-bottom: calc(8px + env(safe-area-inset-bottom));
-    }
-}
 
 /* ---- Hover-none: make delete/reply always visible ------------ */
-@media (hover: none) {
-    .message-delete-btn {
-        opacity: 1;
-    }
-
-    .message-reply-btn {
-        opacity: 1;
-    }
-}
+/* Touch devices: reply/delete live in the long-press sheet (see mobile.css). */
 
 /* ---- Active feedback for all interactive controls ------------ */
 button:active:not(:disabled) {
@@ -3009,7 +2654,7 @@ button:active:not(:disabled) {
     backdrop-filter: blur(5px);
     display: grid;
     place-items: center;
-    z-index: 1000;
+    z-index: var(--z-sheet-overlay);
 }
 
 .modal-card {
@@ -3159,7 +2804,7 @@ button:active:not(:disabled) {
 
 .profile-modal-row {
     display: grid;
-    grid-template-columns: 110px 1fr;
+    grid-template-columns: 110px minmax(0, 1fr);
     gap: 10px;
     align-items: center;
 }
@@ -3247,7 +2892,7 @@ button:active:not(:disabled) {
     backdrop-filter: blur(8px);
     display: grid;
     place-items: center;
-    z-index: 1100;
+    z-index: var(--z-screen);
     padding: 16px;
 }
 
@@ -3325,15 +2970,6 @@ button:active:not(:disabled) {
     font-size: 12px;
 }
 
-@media (max-width: 768px) {
-    .image-viewer-nav.prev {
-        left: 8px;
-    }
-
-    .image-viewer-nav.next {
-        right: 8px;
-    }
-}
 
 /* ================================================================
    MESSAGE ATTACHMENTS (rendered inside bubbles)
@@ -3592,19 +3228,6 @@ button:active:not(:disabled) {
     border-color: #d33b3b;
 }
 
-@media (max-width: 768px) {
-    [data-theme="light"] .channels-sidebar {
-        background: rgba(243, 244, 247, 0.97);
-    }
-
-    [data-theme="light"] .servers-sidebar {
-        background: rgba(255, 255, 255, 0.94);
-    }
-
-    [data-theme="light"] .chat-header-block {
-        background: rgba(243, 244, 247, 0.96);
-    }
-}
 
 /* ================================================================
    MICRO-ANIMATIONS
@@ -3780,7 +3403,7 @@ body,
     position: fixed;
     bottom: 1.5rem;
     right: 1.5rem;
-    z-index: 9999;
+    z-index: var(--z-toast);
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -3985,7 +3608,7 @@ body,
 
 .skeleton-profile-row {
     display: grid;
-    grid-template-columns: 110px 1fr;
+    grid-template-columns: 110px minmax(0, 1fr);
     gap: 10px;
     align-items: center;
 }
@@ -4002,7 +3625,7 @@ body,
 /* Context menu (right-click quick actions) */
 .context-menu {
     position: fixed;
-    z-index: 200;
+    z-index: var(--z-sheet);
     background: rgba(9, 10, 13, 0.95);
     -webkit-backdrop-filter: blur(24px);
     backdrop-filter: blur(24px);
@@ -4178,7 +3801,7 @@ body,
     top: 12px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 150;
+    z-index: var(--z-toast);
     display: flex;
     align-items: center;
     gap: 12px;
@@ -4222,9 +3845,64 @@ body,
     color: var(--text-1);
 }
 
-@media (max-width: 768px) {
-    .notification-permission-banner {
-        flex-wrap: wrap;
-        top: 8px;
-    }
+
+/* ================================================================
+   OVERFLOW GUARDS — long words / links / code must never widen the
+   chat column past the viewport (grid items default to min-width:auto).
+   ================================================================ */
+.chat-main {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-content,
+.chat-content-wrap,
+.messages-list,
+.message-row,
+.message-body {
+    min-width: 0;
+}
+
+.message-content,
+.message-reply-preview,
+.link-preview-title,
+.link-preview-desc {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.message-content pre,
+.message-content code {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.message-attachment,
+.message-attachment-img,
+.message-attachment video,
+.link-preview,
+.media-player,
+.video-player,
+.message-attachment.audio-attachment,
+.message-attachment.video-attachment {
+    max-width: 100%;
+}
+
+img, video {
+    max-width: 100%;
+}
+
+/* ================================================================
+   DESKTOP DEFAULTS FOR MOBILE-ONLY STRUCTURE (see mobile.css)
+   ================================================================ */
+.mobile-drawer { display: contents; }
+.chat-header-mobile,
+.chat-more-btn,
+.drawer-user { display: none; }
+
+textarea.message-input {
+    display: block;
+    resize: none;
+    line-height: 1.4;
+    max-height: 132px;
+    overflow-y: auto;
 }

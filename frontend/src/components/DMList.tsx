@@ -47,6 +47,7 @@ export default function DMList({ channels, selectedChannelId, onSelect, onContex
                 return (
                     <li key={dm.channel_id} className="channel-item dm-item">
                         <button
+                            data-dm-id={dm.channel_id}
                             className={`channel-row dm-row ${selectedChannelId === dm.channel_id ? "active" : ""} ${unreadCount > 0 ? "has-unread" : ""}`}
                             onClick={() => onSelect(dm.channel_id)}
                             onContextMenu={(e) => onContextMenu(e, dm)}

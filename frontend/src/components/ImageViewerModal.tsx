@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useIsMobile } from "../hooks/useIsMobile.ts";
+import { useBackDismiss } from "../hooks/useBackDismiss.ts";
 
 export type ViewerImage = { url: string; alt: string };
 export type ImageViewerState = { items: ViewerImage[]; index: number };
@@ -11,6 +13,8 @@ type Props = {
 };
 
 export default function ImageViewerModal({ state, isClosing, onClose, onIndexChange }: Props) {
+    const isMobile = useIsMobile();
+    useBackDismiss(true, onClose, isMobile);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const previouslyFocusedRef = useRef<Element | null>(null);
     const hasMany = state.items.length > 1;
